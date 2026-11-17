@@ -249,7 +249,7 @@ class Translator:
         for ins in insns.values():
             if ins.kind in (K_BRANCH, K_JUMP) and ins.target is not None and start <= ins.target < end:
                 targets.add(ins.target)
-        out = [f"void {name}(PsxCpu *c)", "{"]
+        out = [f"void {name}(PsxCpu *c)", "{", f"    TRACE(0x{start:08x}u);"]
         pc = start
         while pc < end:
             ins = insns[pc]
@@ -274,7 +274,8 @@ class Translator:
                 tgt = ins.target
                 inside = start <= tgt < end
                 link = ins.op in ("bltzal", "bgezal")
-                go = (f"goto L_{tgt:08x};" if inside and not link else
+                back = "POLL(c); " if tgt <= pc else ""
+                go = (f"{back}goto L_{tgt:08x};" if inside and not link else
                       (self.call(m.name, tgt, pc) if link else self.tail(m.name, tgt)))
                 if ins.op == "b":
                     out.append(f"    {dss}")
@@ -288,7 +289,7 @@ class Translator:
                 tgt = ins.target
                 out.append(f"    {dss}")
                 if start <= tgt < end and tgt not in self.starts[m.name]:
-                    out.append(f"    goto L_{tgt:08x};")
+                    out.append(f"    {'POLL(c); ' if tgt <= pc else ''}goto L_{tgt:08x};")
                 else:
                     out.append(f"    {self.tail(m.name, tgt)}")
             elif k == K_CALL:  # jal

@@ -102,3 +102,29 @@
 * `scripts/compile-generated.sh`: all modules compile with `psp-gcc -O2` without errors.
   Object sizes: resident 1.0 MB, ovl0 1.45 MB, ovl1 0.33 MB, ovl2 0.45 MB, ovl3 63 KB, ovl4 0.38 MB,
   ovl5 60 KB, boot 75 KB → ~3.8 MB of PSP code in total.
+
+## 2026-11-18 — Runtime: recompiled GT2 boots, reads the disc, switches overlays, runs its frame loop
+
+* `runtime/src/`: `main.c` (loads SCUS_944.88 data into PS1 RAM, CPU init), `core.c` (dispatcher, `setjmp`/
+  `longjmp` unwind & resume, overlay hook, interrupt delivery from `POLL()` points, watchdog log), `bios.c`
+  (A0/B0/C0 HLE, syscalls, COP0), `io.c` (I/O register file, IRQ controller, DMA incl. OTC + GPU linked list,
+  timers), `cdrom.c` (CD controller at register level backed by the user's `GT2.BIN`), `sio.c` (digital pad on
+  port 1 from the PSP buttons), `gpu.c` (GP0/GP1 parsing, VRAM transfers, presentation; no rasterizer yet),
+  `gte.c` (stub), `log.c` (`gt2log.txt` next to the EBOOT). `scripts/build.sh`, `scripts/run-ppsspp.ps1`.
+* Game files go next to the EBOOT: `SCUS_944.88`, `GT2.BIN` (the user's raw disc image).
+  PPSSPP runs portable from `tools/ppsspp` (memstick in `tools/ppsspp/memstick`).
+* Findings while bringing it up:
+  * `R3000` is predefined by psp-gcc → CPU struct is `PsxCpu`.
+  * The BIOS enters the `HookEntryInt` hook like `longjmp(hook, 1)`: `v0` must be 1, otherwise libetc's
+    dispatcher (`8008be74`, right after a `setjmp`) treats it as the initial return and skips the handler.
+  * `ReturnFromException` ends the whole interrupt (chains + hook); a `longjmp` out of an interrupt resets
+    the runtime's interrupt state.
+  * libcd reads the 12-byte sector header and the data with two separate `CdGetSector` DMAs; the request
+    register (BFRD) loads the buffered sector only when the data FIFO is empty (Mednafen semantics).
+  * GT2's pad driver talks to SIO0 directly from a `SysEnqIntRP(2)` VBlank handler (func1 `80087668`,
+    func2 `800876d0`).
+  * Library identification: VSync `8008c338`, libetc IRQ dispatcher `8008bee4`, CdGetSector DMA `8008a488`,
+    memory card state machine `8007eacc`, GPU DrawSync callback `8007d2d4`.
+* Result in PPSSPP: CRT → boot code (CD_init, SPU init, MDEC init, pad, memory card) → GT2.OVL read from the
+  disc by the game's own ISO9660 reader → gunzip → `longjmp` → **overlay 1 running its frame loop** (GPU DMA,
+  VSync, ~11 primitives/frame, display mode 368x480i). Screen still black: primitives are not rasterized yet.

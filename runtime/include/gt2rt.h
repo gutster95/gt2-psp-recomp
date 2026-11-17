@@ -172,3 +172,21 @@ void rt_jump(PsxCpu *c, uint32_t addr);      /* computed tail jump */
 void rt_syscall(PsxCpu *c, uint32_t pc);
 void rt_break(PsxCpu *c, uint32_t pc);
 void rt_invalid(PsxCpu *c, uint32_t pc, uint32_t word);
+
+/* ---- tracing --------------------------------------------------------------------------------------------- */
+
+#define TRACE_SIZE 256
+extern uint32_t g_trace[TRACE_SIZE];
+extern uint32_t g_trace_pos;
+#ifdef GT2_NO_TRACE
+#define TRACE(a) ((void)0)
+#else
+#define TRACE(a) (g_trace[g_trace_pos++ & (TRACE_SIZE - 1)] = (a))
+#endif
+
+/* ---- interrupt polling ----------------------------------------------------------------------------------- */
+
+/* Emitted at every backward branch: lets the runtime deliver interrupts inside busy-wait loops. */
+extern int32_t g_poll_budget;
+void rt_poll(PsxCpu *c);
+#define POLL(c) do { if (--g_poll_budget < 0) rt_poll(c); } while (0)
