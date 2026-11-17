@@ -86,6 +86,21 @@ def cmd_functions(args: argparse.Namespace) -> None:
     print(f"total {sum(len(m.funcs) for m in mods)} functions -> {out}")
 
 
+def cmd_recomp(args: argparse.Namespace) -> None:
+    from .program import build, to_json
+    from .recomp import generate
+    mods = build(Path(args.files))
+    out = Path(args.out)
+    st = generate(mods, out)
+    (out / "functions.json").write_text(to_json(mods))
+    print(f"functions: {st.funcs}  instructions: {st.insns}  dynamic calls: {st.dyn_calls}  "
+          f"dynamic jumps: {st.dyn_jumps}  branches in delay slots: {st.ds_branch}")
+    unk = sorted(st.unknown_targets)
+    print(f"static targets that are not function starts: {len(unk)}")
+    for mod, t in unk[:40]:
+        print(f"  {mod:9s} {t:08x}")
+
+
 def main() -> None:
     p = argparse.ArgumentParser(prog="gt2psp")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -100,6 +115,10 @@ def main() -> None:
     f.add_argument("--files", default="extracted/files")
     f.add_argument("--out", default="generated/functions.json")
     f.set_defaults(func=cmd_functions)
+    r = sub.add_parser("recomp", help="translate all modules to C")
+    r.add_argument("--files", default="extracted/files")
+    r.add_argument("--out", default="generated")
+    r.set_defaults(func=cmd_recomp)
     for name, fn, hlp in (("disasm", cmd_disasm, "disassemble main EXE or an overlay"),
                           ("analyze", cmd_analyze, "function discovery, BIOS stubs, I/O accesses")):
         c = sub.add_parser(name, help=hlp)

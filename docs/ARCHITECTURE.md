@@ -36,7 +36,16 @@ tools/             (ignored) local toolchain (pspdev inside a project-local WSL 
   module (runtime variable set by the HLE replacement of the overlay loader `0x8005dad8`).
 * The overlay loader itself is replaced by a runtime function (no gunzip of code needed — the code is already
   compiled in; the RAM image is still filled so data inside the overlay is correct).
-* `setjmp`/`longjmp` used by the overlay switch map onto C `setjmp`/`longjmp` in the runtime.
+* `setjmp`/`longjmp` (`0x8007ad58`/`0x8007ad90`) are replaced by the runtime (**unwind & resume**):
+  `hle_setjmp` writes the PS1 buffer like the original. `hle_longjmp` restores the registers from the PS1
+  buffer, sets `v0`, then C-`longjmp`s to the runtime's top-level loop, which "returns" to `r31`: it calls the
+  recompiled function starting at `r31`; when that returns (via `jr ra`), it continues at the new `r31`, until
+  the sentinel return address of the program entry is reached. This requires that every such return address is a
+  function start — the partitioner adds the return address of every `jal` whose callee can transitively reach
+  `setjmp` (*resume points*). Splitting a function is always safe: control crossing the split becomes a tail call
+  (compiled to a jump by GCC's sibling-call optimisation).
+* Switch jump tables are detected statically; `jr reg` compiles to a C `switch` over the table's labels with a
+  fallback to the dynamic dispatcher.
 
 ## Reference material
 

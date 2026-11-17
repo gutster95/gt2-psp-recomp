@@ -402,7 +402,8 @@ def _is_boundary_after(im: Image, a: int) -> bool:
     return b >= im.base and im.word(b) == 0x03E00008
 
 
-def partition(im: Image, text: list[tuple[int, int]], strong: set[int]) -> list[Region]:
+def partition(im: Image, text: list[tuple[int, int]], strong: set[int],
+              jtables: dict[int, list[int]] | None = None) -> list[Region]:
     """Split text ranges into functions in one linear sweep.
 
     Candidate starts are the beginning of each text range, every strong start, and every address following
@@ -431,5 +432,81 @@ def partition(im: Image, text: list[tuple[int, int]], strong: set[int]) -> list[
                 if ins.kind == K_JUMP and ins.target in strong:
                     continue  # tail call
                 reach = max(reach, ins.target + 4)
+            if jtables and pc in jtables:
+                fwd = [t for t in jtables[pc] if pc < t < e]
+                if fwd:
+                    reach = max(reach, max(fwd) + 4)
         regions.append(Region(fs, e, fs in strong))
     return regions
+
+
+def find_jump_tables(im: Image, text: list[tuple[int, int]], window: int = 16) -> dict[int, list[int]]:
+    """Detect switch jump tables: ``jr rX`` (X != ra) whose target was loaded with ``lw rX, off(rY)`` where rY is
+    ``base + (index << 2)`` and base comes from ``lui``/``addiu``. The entry count comes from a preceding
+    ``sltiu rZ, rI, N`` bound check if present; otherwise entries are read while they point into text.
+    Returns {jr pc: [targets]}.
+    """
+    def in_text(a: int) -> bool:
+        return any(s <= a < e for s, e in text)
+
+    out: dict[int, list[int]] = {}
+    for s, e in text:
+        for pc in range(s, e, 4):
+            ins = decode(im.word(pc), pc)
+            if ins.kind != K_JR or ins.rs == 31:
+                continue
+            lo = max(s, pc - 4 * window)
+            seq = [decode(im.word(a), a) for a in range(lo, pc)]
+            # find the lw that defines the jump register
+            lw = None
+            for k in range(len(seq) - 1, -1, -1):
+                q = seq[k]
+                if q.op == "lw" and q.rt == ins.rs:
+                    lw = (k, q)
+                    break
+            if lw is None:
+                continue
+            k, q = lw
+            # constants built in the window before the lw
+            consts: dict[int, int] = {}
+            bases = []
+            bound = None
+            for x in seq[:k]:
+                if x.op == "lui":
+                    consts[x.rt] = (x.imm << 16) & 0xFFFFFFFF
+                elif x.op == "addiu" and x.rs in consts:
+                    consts[x.rt] = (consts[x.rs] + x.imm) & 0xFFFFFFFF
+                    bases.append(consts[x.rt])
+                elif x.op == "sltiu":
+                    bound = x.imm
+            if q.rs in consts:
+                bases.append(consts[q.rs])  # lw directly from lui base: index added elsewhere
+            table = None
+            for b in reversed(bases):
+                t = (b + q.imm) & 0xFFFFFFFF
+                if im.contains(t) and not t & 3:
+                    table = t
+                    break
+            if table is None:
+                for b in consts.values():
+                    t = (b + q.imm) & 0xFFFFFFFF
+                    if im.contains(t) and not t & 3:
+                        table = t
+                        break
+            if table is None:
+                continue
+            ents = []
+            n = bound if bound is not None and 0 < bound <= 1024 else 1024
+            for i in range(n):
+                a = table + 4 * i
+                if not im.contains(a):
+                    break
+                v = im.word(a)
+                if not in_text(v) or v & 3:
+                    if bound is None:
+                        break
+                    continue
+                ents.append(v)
+            if ents:
+                out[pc] = ents
+    return out

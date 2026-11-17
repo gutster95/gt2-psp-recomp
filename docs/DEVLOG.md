@@ -81,3 +81,24 @@
   (resident 1313, boot 47, ovl0 935, ovl1 411, ovl2 427, ovl3 16, ovl4 460, ovl5 55). A handful of
   functions fall through into the next one (shared epilogues / second entry points) → recompiler must emit a
   tail call to the following function.
+
+## 2026-11-17 — Recompiler: whole program translates and compiles
+
+* `setjmp` = `0x8007ad58`, `longjmp` = `0x8007ad90` (12-word buffer: ra, sp, fp, s0-s7, gp).
+  The overlay switch `longjmp`s into the frame of `0x8005d9f0`, which has already *returned* at that point
+  (it only works on the PS1 because the stack memory is still intact) → see "Unwind & resume" in ARCHITECTURE.md.
+* Partitioning improvements:
+  * switch **jump tables** detected (`sltiu N` bound, `lui/addiu` base, `lw`, `jr`); their entries are code
+    labels, not function starts (before this, every `case` became a function: 3664 → ~2840 functions);
+  * text ranges are extended backwards to call targets just before them (code directly after rodata);
+  * *resume points* (return addresses of calls that can reach `setjmp`) and any branch target landing inside a
+    different function become extra function starts; iterated until stable.
+* `recomp.py`: MIPS → C (one C function per PS1 function, `goto` labels, statically resolved delay slots,
+  switch over jump-table labels for `jr reg`, tail calls, `rt_call`/`rt_call_ovl`/`rt_jump` for dynamic targets).
+  Result: **2853 functions, 162,676 instructions, 0 unresolved static targets**, 245 computed calls,
+  165 computed jumps. `python -m gt2psp recomp` → `generated/*.c` (~8 MB of C).
+* `runtime/include/gt2rt.h`: CPU struct (`PsxCpu` — `R3000` is a predefined macro in psp-gcc), inline memory
+  access (RAM mirrors, scratchpad fast path, I/O via functions), lwl/lwr/swl/swr, div semantics.
+* `scripts/compile-generated.sh`: all modules compile with `psp-gcc -O2` without errors.
+  Object sizes: resident 1.0 MB, ovl0 1.45 MB, ovl1 0.33 MB, ovl2 0.45 MB, ovl3 63 KB, ovl4 0.38 MB,
+  ovl5 60 KB, boot 75 KB → ~3.8 MB of PSP code in total.
