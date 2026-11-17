@@ -51,16 +51,16 @@ PowerShell `Set-Content -Encoding utf8` writes a BOM. CMake globs: build.sh re-r
 
 * Toolchain: WSL2 distro `GT2PSPDev` (`tools/wsl`), pspdev in `/opt/pspdev`, psp-gcc 15.2. PPSSPP 1.20.4
   portable in `tools/ppsspp` (memstick inside, no `installed.txt`).
-* **Milestone 1 reached**: legal notice and the GT2 title screen ("Start Game / Replay Theater") render in
-  PPSSPP from recompiled code (screenshot: `build/milestone1-title.png`).
-* Not implemented yet: GTE (stub — needed as soon as anything 3D runs), SPU audio, XA music, MDEC (movies),
-  memory card (reported absent), GE-accelerated rendering (software rasterizer only), analog pad.
+* **Milestone 1 reached**: legal notice and title screen render (`build/milestone1-title.png`).
+* **Beyond**: GTE implemented; with `input.txt` (start/cross) the game enters overlay 0 and renders the 3D
+  attract-mode race replay (`build/milestone2-race-replay.png`). ~6 fps: rasterizer 72 %, game code ~46 ms/frame.
+* Not implemented yet: SPU audio, XA music, MDEC (movies), memory card (reported absent), GE rendering,
+  analog pad / DualShock, real-time pacing (game runs in slow motion when frames take too long).
 
 ## Next steps
 
-1. Implement the GTE (all commands, flags) in `runtime/src/gte.c`; press Start on the title screen and follow
-   the log to the next blocker.
-2. SPU emulation + PSP audio output; XA-ADPCM decoding for MUSIC.DAT streams (cdrom.c filters them now).
-3. MDEC for the intro/replay movies.
-4. Performance: profile on PPSSPP; GE path for sprites/polygons; reduce POLL overhead.
-5. Memory card emulation backed by a file on the memory stick.
+1. GE renderer: draw PS1 primitives with the PSP GE (keep the software rasterizer as reference/fallback;
+   PS1 VRAM image must stay coherent for CPU readback, VRAM copies and texture uploads).
+2. Speed up generated code (registers in locals, sp-relative fast memory path, POLL budget) — see DEVLOG.
+3. SPU emulation + PSP audio; XA-ADPCM decoding of MUSIC.DAT streams (cdrom.c filters them now).
+4. MDEC for movies; memory card file on the memory stick; DualShock analog for steering.

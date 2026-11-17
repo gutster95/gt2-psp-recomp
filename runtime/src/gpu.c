@@ -251,9 +251,21 @@ void gpu_present(void)
         if (f) { fwrite(g_vram, 2, 1024 * 512, f); fclose(f); }
     }
     if (frame == 100 || frame == 1000 || frame == 2000) g_log_prims = 24;
-    if (++frame % 120 == 0)
-        logf_("gpu: frame %d prims/frame %u disp %u,%u mode %02x status %08x\n", frame,
-              (unsigned)(g_prims - g_prims_frame) / 1, (unsigned)g_disp_x, (unsigned)g_disp_y,
-              (unsigned)g_disp_mode, (unsigned)g_status);
+    if (++frame % 120 == 0) {
+        extern uint32_t g_gpu_lists;
+        extern uint64_t g_gpu_us;
+        static uint32_t last_lists, last_prims;
+        static uint64_t last_t, last_gpu;
+        uint64_t t = now_us();
+        uint32_t dt_ms = last_t ? (uint32_t)((t - last_t) / 1000) : 0;
+        logf_("gpu: vblank %d | last 120 vblanks took %u ms (raster %u ms), %u display lists, %u prims | "
+              "disp %u,%u mode %02x\n", frame, (unsigned)dt_ms, (unsigned)((g_gpu_us - last_gpu) / 1000),
+              (unsigned)(g_gpu_lists - last_lists), (unsigned)(g_prims - last_prims),
+              (unsigned)g_disp_x, (unsigned)g_disp_y, (unsigned)g_disp_mode);
+        last_lists = g_gpu_lists;
+        last_prims = g_prims;
+        last_gpu = g_gpu_us;
+        last_t = t;
+    }
     g_prims_frame = g_prims;
 }

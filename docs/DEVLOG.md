@@ -164,3 +164,18 @@
   pointing into code). Interrupt handlers now use a stack in the unused kernel RAM (`0x8000E000`).
 * Result: title screen → Start → overlay 0 (main game, entered at `80011f64`) → 320x240 double-buffered 3D:
   the attract-mode **race replay** (Shelby GT350 '66, lap/position/time HUD) renders correctly.
+
+## 2026-11-18 — Performance baseline (PPSSPP, PSP-paced CPU)
+
+Measured in the 3D race replay (320x240, ~1170 primitives per frame), `gpu:` log line every 120 vblanks:
+
+| per game frame                        | time     |
+|---------------------------------------|----------|
+| total                                 | ~165 ms (~6 fps) |
+| software rasterizer (display lists)   | ~118 ms (72 %) |
+| recompiled game code + runtime rest   | ~46 ms   |
+
+The emulated vblank clock advances from `POLL()`, so the game runs in slow motion rather than dropping frames.
+Conclusion: a GE-based renderer is the top priority for speed; the recompiled code itself also needs work
+(target < 33 ms) — candidates: keep CPU registers in locals instead of `c->r[]`, cheaper memory access for
+known-RAM bases (sp/gp), fewer POLL checks, `-O3`/profile-guided hot paths.

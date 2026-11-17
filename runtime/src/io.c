@@ -11,6 +11,8 @@ uint32_t g_i_stat, g_i_mask;
 static uint8_t g_io[0x3000] __attribute__((aligned(4)));
 static uint8_t g_seen[0x3000];
 uint32_t g_vblank_count;
+uint32_t g_gpu_lists;          /* GPU linked-list DMAs (~ game frames drawn) */
+uint64_t g_gpu_us;             /* time spent executing GPU display lists (rasterizer) */
 
 #define IO32(off) (*(uint32_t *)(g_io + (off)))
 #define IO16(off) (*(uint16_t *)(g_io + (off)))
@@ -59,6 +61,8 @@ static void dma_run(int ch)
     switch (ch) {
     case 2: /* GPU */
         if ((chcr & 0x600) == 0x400) {          /* linked list */
+            g_gpu_lists++;
+            uint64_t t0 = now_us();
             uint32_t a = madr, guard = 0;
             for (;;) {
                 uint32_t hdr = *(uint32_t *)(g_ram + a);
@@ -68,6 +72,7 @@ static void dma_run(int ch)
                 if ((hdr & 0x800000) || ++guard > 0x40000) break;
                 a = hdr & 0x1FFFFC;
             }
+            g_gpu_us += now_us() - t0;
         } else {                                /* block / sync mode */
             uint32_t words = (bcr & 0xFFFF) * ((bcr >> 16) ? (bcr >> 16) : 1);
             if (chcr & 1) {
