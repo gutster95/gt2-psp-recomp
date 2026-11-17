@@ -30,6 +30,7 @@ void bios_return_from_exception(PsxCpu *c) __attribute__((noreturn));
 
 /* io.c */
 extern uint32_t g_i_stat, g_i_mask;
+extern uint32_t g_vblank_count;   /* PS1 vblanks since start */
 void io_init(void);
 void io_vblank(void);
 

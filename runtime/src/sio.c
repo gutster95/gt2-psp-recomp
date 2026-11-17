@@ -1,5 +1,7 @@
 /* SIO0: controller and memory card port (0x1F801040-0x1F80104F), nocash psx-spx protocol.
  * Port 1: digital pad fed from the PSP buttons. Port 2 and memory cards: not connected (no /ACK). */
+#include <stdio.h>
+#include <string.h>
 #include <pspctrl.h>
 #include "rt.h"
 #include "sio.h"
@@ -12,10 +14,40 @@ static int g_step;             /* byte index within the current transfer */
 static int g_device;           /* 0 none, 1 pad, 2 memory card (absent) */
 static uint8_t g_btn_lo = 0xFF, g_btn_hi = 0xFF;
 
+/* Scripted input for testing: <basedir>/input.txt, lines "<vblank> <button> <duration-in-vblanks>".
+ * Buttons: start select up down left right cross circle square triangle l1 r1 l2 r2. */
+typedef struct { uint32_t at, len; uint16_t bits; } Inject;   /* bits: lo | hi << 8 (active high) */
+static Inject g_inject[64];
+static int g_ninject;
+
+static void load_inject(void)
+{
+    static const struct { const char *name; uint16_t bits; } names[] = {
+        {"select", 0x01}, {"start", 0x08}, {"up", 0x10}, {"right", 0x20}, {"down", 0x40}, {"left", 0x80},
+        {"l2", 0x100}, {"r2", 0x200}, {"l1", 0x400}, {"r1", 0x800}, {"triangle", 0x1000},
+        {"circle", 0x2000}, {"cross", 0x4000}, {"square", 0x8000},
+    };
+    char path[320], name[16];
+    snprintf(path, sizeof path, "%sinput.txt", g_basedir);
+    FILE *f = fopen(path, "r");
+    if (!f) return;
+    unsigned at, len;
+    while (g_ninject < 64 && fscanf(f, "%u %15s %u", &at, name, &len) == 3) {
+        for (unsigned i = 0; i < sizeof names / sizeof names[0]; i++)
+            if (!strcmp(name, names[i].name)) {
+                g_inject[g_ninject++] = (Inject){at, len, names[i].bits};
+                break;
+            }
+    }
+    fclose(f);
+    logf_("input.txt: %d scripted presses\n", g_ninject);
+}
+
 void sio_init(void)
 {
     sceCtrlSetSamplingCycle(0);
     sceCtrlSetSamplingMode(PSP_CTRL_MODE_DIGITAL);
+    load_inject();
 }
 
 /* PS1 digital pad bits (active low):
@@ -44,6 +76,11 @@ static void sample_buttons(void)
     if (d.Lx > 192) lo |= 0x20;
     if (d.Ly < 64) lo |= 0x10;
     if (d.Ly > 192) lo |= 0x40;
+    for (int i = 0; i < g_ninject; i++)
+        if (g_vblank_count >= g_inject[i].at && g_vblank_count < g_inject[i].at + g_inject[i].len) {
+            lo |= (uint8_t)g_inject[i].bits;
+            hi |= (uint8_t)(g_inject[i].bits >> 8);
+        }
     g_btn_lo = (uint8_t)~lo;
     g_btn_hi = (uint8_t)~hi;
 }

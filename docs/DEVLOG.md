@@ -148,3 +148,19 @@
   ("Start Game", "Replay Theater", Polyphony Digital logo) � all game logic is recompiled code.
 * Title screen frame: 1 clear rect, 4 textured 256x256 background sprites, 1 flat triangle (menu cursor),
   5 textured menu sprites with varying modulation (fade/highlight).
+
+## 2026-11-18 — GTE, scripted input, first 3D: attract-mode race replay renders
+
+* `runtime/src/gte.c`: full GTE (RTPS/RTPT with the UNR division table, NCLIP, OP, DPCS/DPCT, INTPL, MVMVA incl.
+  the garbage matrix, NCS/NCT/NCCS/NCCT/NCDS/NCDT, CC/CDP, SQR, DCPL, AVSZ3/4, GPF/GPL; register read/write
+  quirks, FLAG bits). Simplification: MAC1-3 overflow checked on the final sum only.
+* Scripted input for tests: `input.txt` next to the EBOOT, lines `<vblank> <button> <duration>`.
+* Partitioning: code pointers found in data or built with `lui`+`addiu/ori` become function entries if they
+  follow a function end, start a stack frame (`addiu sp, sp, -N` — second entry points such as `80068310`,
+  called through a pointer from ovl0), or are not inside a loop. Splitting inside loops turned loops into
+  tail-call chains and crashed. 2910 functions now.
+* Bug: SysEnqIntRP chain handlers ran with `sp = 0x801FFC00`, i.e. inside the game's own stack — the VBlank
+  pad handler overwrote C++ objects on the stack (crash in a virtual call `obj->vtable[3]` with a vtable
+  pointing into code). Interrupt handlers now use a stack in the unused kernel RAM (`0x8000E000`).
+* Result: title screen → Start → overlay 0 (main game, entered at `80011f64`) → 320x240 double-buffered 3D:
+  the attract-mode **race replay** (Shelby GT350 '66, lap/position/time HUD) renders correctly.

@@ -10,7 +10,7 @@ uint32_t g_i_stat, g_i_mask;
 /* indexed by address - 0x1F800000, so offsets below read like the hardware addresses */
 static uint8_t g_io[0x3000] __attribute__((aligned(4)));
 static uint8_t g_seen[0x3000];
-static uint32_t g_frame;
+uint32_t g_vblank_count;
 
 #define IO32(off) (*(uint32_t *)(g_io + (off)))
 #define IO16(off) (*(uint16_t *)(g_io + (off)))
@@ -32,7 +32,7 @@ void raise_irq(int bit) { g_i_stat |= 1u << bit; }
 
 void io_vblank(void)
 {
-    g_frame++;
+    g_vblank_count++;
     raise_irq(0);
     gpu_present();
 }
@@ -130,7 +130,7 @@ static uint32_t io_read(uint32_t a, int size)
     case 0x1070: v = g_i_stat; break;
     case 0x1074: v = g_i_mask; break;
     case 0x1810: v = gpu_read(); break;
-    case 0x1814: v = gpu_status() | ((g_frame & 1) << 31); break;
+    case 0x1814: v = gpu_status() | ((g_vblank_count & 1) << 31); break;
     case 0x1100: case 0x1110: case 0x1120: v = timer_count((off - 0x1100) >> 4); break;
     default:
         if (off == 0x1DAE) { v = IO16(0x1DAA) & 0x3F; break; }   /* SPUSTAT mirrors SPUCNT */

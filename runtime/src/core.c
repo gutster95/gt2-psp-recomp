@@ -124,6 +124,10 @@ uint64_t now_us(void)
     return t;
 }
 
+/* Stack for interrupt handlers called by the emulated BIOS exception handler: inside the 64 KB kernel RAM
+ * (0x80000000-0x8000FFFF), which the game does not use. */
+#define IRQ_STACK_TOP 0x8000E000u
+
 static uint64_t g_next_vblank;
 static int g_in_irq;
 static jmp_buf g_irq_jb;
@@ -146,7 +150,7 @@ static void call_irq_handlers(PsxCpu *c)
                 uint32_t next = mem_r32(e), f2 = mem_r32(e + 4), f1 = mem_r32(e + 8);
                 if (f1) {
                     c->r[31] = SENTINEL_RA;
-                    c->r[29] = 0x801FFC00u;
+                    c->r[29] = IRQ_STACK_TOP;   /* BIOS kernel stack, never the game's stack */
                     rt_call(c, f1);
                     if (c->r[2] && f2) { c->r[4] = c->r[2]; c->r[31] = SENTINEL_RA; rt_call(c, f2); }
                 }

@@ -150,6 +150,43 @@ def resume_points(mods: list["Module"]) -> dict[str, set[int]]:
     return out
 
 
+def _is_prologue(im: Image, a: int) -> bool:
+    """`addiu sp, sp, -N` at a: the start of a stack frame (second entry points into functions look like this)."""
+    ins = decode(im.word(a), a)
+    return ins.op == "addiu" and ins.rs == 29 and ins.rt == 29 and ins.imm < 0
+
+
+def _inside_loop(im: Image, a: int, hi: int, window: int = 0x2000) -> bool:
+    """Is there a backward branch from >= a to < a before the next `jr ra` (a split at a would cut a loop)?"""
+    pc = a
+    while pc < min(hi, a + window):
+        w = im.word(pc)
+        ins = decode(w, pc)
+        if ins.kind in (K_BRANCH, K_JUMP) and ins.target is not None and a - window <= ins.target < a:
+            return True
+        if w == 0x03E00008:
+            return False
+        pc += 4
+    return False
+
+
+def _code_constants(im: Image, text: list[tuple[int, int]]) -> set[int]:
+    """32-bit constants built with `lui rX, hi` followed (within 8 instructions) by `addiu/ori rY, rX, lo`."""
+    out = set()
+    for s, e in text:
+        lui: dict[int, tuple[int, int]] = {}
+        for a in range(s, e, 4):
+            ins = decode(im.word(a), a)
+            if ins.op == "lui":
+                lui[ins.rt] = (a, (ins.imm << 16) & 0xFFFFFFFF)
+            elif ins.op in ("addiu", "ori") and ins.rs in lui and a - lui[ins.rs][0] <= 32:
+                base = lui[ins.rs][1]
+                v = (base + ins.imm) & 0xFFFFFFFF if ins.op == "addiu" else base | ins.imm
+                if 0x80010000 <= v < 0x80200000 and not v & 3:
+                    out.add(v)
+    return out
+
+
 def _extend_to_targets(m: "Module", targets: set[int], max_gap: int = 0x400) -> None:
     """A call target just before a text range (block-granular detection started too late): extend the range
     backwards when every word from the target up to the range start decodes as a valid instruction."""
@@ -182,6 +219,12 @@ def _build(files: Path, extra: dict[str, set[int]]) -> list[Module]:
         _extend_to_targets(m, everyone if m.name == "resident" else jal[m.name] | jal["resident"])
     jal = {m.name: _jal_targets(m.image, m.text) for m in mods}
     everyone = set().union(*jal.values())
+    # address constants built in code: own module, plus resident targets from any module
+    consts: dict[str, set[int]] = {}
+    for m in mods:
+        cs = _code_constants(m.image, m.text)
+        consts.setdefault(m.name, set()).update(cs)
+        consts.setdefault("resident", set()).update(a for a in cs if a >= RESIDENT_TEXT[0])
 
     def in_text(m: Module, a: int) -> bool:
         return any(s <= a < e for s, e in m.text)
@@ -208,7 +251,12 @@ def _build(files: Path, extra: dict[str, set[int]]) -> list[Module]:
         strong |= m.resume
         m.jtables = find_jump_tables(m.image, m.text)
         case_labels = {t for ts in m.jtables.values() for t in ts}
-        fptrs = {p for p in ptrs - case_labels if p in strong or _ends_function(m.image, p, lo)}
+        # Every code pointer that is not a jump-table case label is a function entry (possibly a second entry
+        # into a function: splitting is always safe, control crossing the split becomes a tail call).
+        ptrs |= {p for p in consts.get(m.name, set()) if in_text(m, p)}
+        fptrs = {p for p in ptrs - case_labels
+                 if p in strong or _ends_function(m.image, p, lo) or _is_prologue(m.image, p)
+                 or not _inside_loop(m.image, p, hi)}
         m.labels = (ptrs - fptrs) | case_labels
         strong |= fptrs
         strong -= case_labels - {t for t in strong if t in jal[m.name] or t in m.resume}
