@@ -19,3 +19,28 @@
   | GT2.VOL       | 473    | 488,241,152 | game data volume                        |
   | MUSIC.DAT     | 238872 | 85,262,336  | XA Form 2 streamed music (kept raw)     |
   | FAULTY.PSX    | 280504 | 27,648,000  | filler / padding                        |
+
+## 2026-11-17 — WSL blocked, first binary analysis
+
+* `wsl --import` fails with `HCS_E_HYPERV_NOT_INSTALLED`: AMD SVM is disabled in the BIOS
+  (`VirtualizationFirmwareEnabled = False`, board ASUS ROG STRIX B550-F). User is enabling SVM Mode.
+* SCUS_944.88 (PS-X EXE): entry `pc = 0x8005d600`, text loaded at `0x80010000`, size `0x99000`
+  (ends `0x800a9000`), `gp`/`sp` not set in the header (SYSTEM.CNF: STACK = 801fff00, TCB 4, EVENT 10).
+* GT2.OVL layout: 12-word header = 6 × (offset, size) pairs, members 4-byte aligned. Each member is a
+  plain **gzip** stream (mtime Dec 1999) holding raw MIPS code without a header.
+
+  | # | packed  | unpacked | load addr (inferred) |
+  |---|---------|----------|----------------------|
+  | 0 | 0x23545 | 0x4d5f8  | 0x80010000           |
+  | 1 | 0xad2d  | 0x3c8c4  | 0x80010000           |
+  | 2 | 0xd08d  | 0x43544  | 0x80010000           |
+  | 3 | 0x144b  | 0x2cec   | 0x80010000           |
+  | 4 | 0x963d  | 0x42a74  | 0x80010000           |
+  | 5 | 0xe12   | 0x20e0   | 0x80010000           |
+
+  Load address inferred by voting (jal target − prologue offset): every overlay maps to `0x80010000`,
+  i.e. overlays overwrite the *start* of the main EXE's text. The low part of SCUS_944.88 is therefore
+  presumably boot/init code that is discarded once an overlay is loaded; the resident kernel lives
+  above the largest overlay end (≥ 0x8005d5f8). To verify: find the overlay loader in the main EXE.
+  Consequence for the recompiler: code at the same address exists in up to 7 variants → functions must be
+  keyed by (module, address) and indirect calls dispatched through the currently loaded module.
