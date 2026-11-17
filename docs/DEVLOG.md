@@ -44,3 +44,13 @@
   above the largest overlay end (≥ 0x8005d5f8). To verify: find the overlay loader in the main EXE.
   Consequence for the recompiler: code at the same address exists in up to 7 variants → functions must be
   keyed by (module, address) and indirect calls dispatched through the currently loaded module.
+
+## 2026-11-17 — Toolchain working
+
+* SVM enabled; `wsl --import GT2PSPDev tools/wsl ...` succeeded (WSL2).
+* `scripts/wsl-setup.sh` (run as root once) unpacks pspdev to `/opt/pspdev`, writes `/etc/profile.d/pspdev.sh`
+  and installs the host libraries the prebuilt toolchain needs (libmpc3, libmpfr6, libisl23, ... — without them
+  `cc1` fails with `libmpc.so.3: cannot open shared object file`). `psp-gcc (GCC) 15.2.0`.
+* `runtime/hello` + `scripts/build-hello.sh`: debug-screen hello world → `build/hello/EBOOT.PBP` (PRX-based).
+  Boots in PPSSPP 1.20.4 (portable, `tools/ppsspp`) and exits cleanly via `sceKernelExitGame()`.
+* Build from Windows: `wsl -d GT2PSPDev --cd "<proj>" -- bash scripts/build-hello.sh`.
