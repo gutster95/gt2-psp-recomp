@@ -47,6 +47,18 @@ tools/             (ignored) local toolchain (pspdev inside a project-local WSL 
 * Switch jump tables are detected statically; `jr reg` compiles to a C `switch` over the table's labels with a
   fallback to the dynamic dispatcher.
 
+## Runtime (implemented)
+
+* Hardware is emulated at register level where the libraries talk to it directly (interrupt controller, DMA,
+  timers, CD-ROM controller, SIO0 pad, GPU command stream); BIOS calls are HLE'd. This keeps the original
+  PsyQ library code (libcd, libetc, libgpu, libpad, libspu, libcard) running unmodified as recompiled code.
+* Interrupts are delivered at `POLL()` points (every backward branch, budgeted) and run the BIOS chains
+  (SysEnqIntRP) and the HookEntryInt hook on a saved copy of the CPU state.
+* GPU: software rasterizer into a 1024x512 VRAM image (exact PS1 VRAM semantics), presented by scaling the
+  display area to the PSP framebuffer. Planned: GE-accelerated rendering of the hot primitive types once the
+  game reaches 3D; the software path remains the reference.
+* Game data comes from the user's own disc image `GT2.BIN` next to the EBOOT (never distributed).
+
 ## Reference material
 
 * `Recomps/GT2-PC-Port-Mod-Kit-0.4.3.1` (local only, not in this repo): a PC port for disc v1.0 that ships

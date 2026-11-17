@@ -1,11 +1,13 @@
 /* PS1 GPU front end: command parsing, VRAM transfers, display registers, presentation.
  * Primitive rasterisation (to be mapped onto the PSP GE) is not implemented yet; primitives are counted. */
 #include <malloc.h>
+#include <stdio.h>
 #include <string.h>
 #include <pspdisplay.h>
 #include <pspge.h>
 #include "rt.h"
 #include "gpu.h"
+#include "raster.h"
 
 uint16_t *g_vram;
 
@@ -94,11 +96,54 @@ static void exec(void)
                 g_vram[((dy + j) & 511) * 1024 + ((dx + i) & 1023)] = g_vram[((sy + j) & 511) * 1024 + ((sx + i) & 1023)];
         return;
     }
-    if (op >= 0xE1 && op <= 0xE6) {
-        if (op == 0xE1) { g_draw_mode = c; g_status = (g_status & ~0x7FFu) | (c & 0x7FF); }
+    switch (op) {
+    case 0xE1:
+        g_draw_mode = c;
+        g_rs.texpage = c & 0xFFF;
+        g_status = (g_status & ~0x7FFu) | (c & 0x7FF);
+        return;
+    case 0xE2:
+        g_rs.tw_mask_x = c & 31; g_rs.tw_mask_y = (c >> 5) & 31;
+        g_rs.tw_off_x = (c >> 10) & 31; g_rs.tw_off_y = (c >> 15) & 31;
+        return;
+    case 0xE3: g_rs.clip_x0 = c & 0x3FF; g_rs.clip_y0 = (c >> 10) & 0x1FF; return;
+    case 0xE4: g_rs.clip_x1 = c & 0x3FF; g_rs.clip_y1 = (c >> 10) & 0x1FF; return;
+    case 0xE5: g_rs.off_x = ((int32_t)(c << 21)) >> 21; g_rs.off_y = ((int32_t)(c << 10)) >> 21; return;
+    case 0xE6:
+        g_rs.mask_set = (c & 1) ? 0x8000 : 0;
+        g_rs.mask_check = (c >> 1) & 1;
+        g_status = (g_status & ~0x1800u) | ((c & 3) << 11);
         return;
     }
-    if (op >= 0x20 && op < 0x80) g_prims++;
+    if (op >= 0x20 && op < 0x80) {
+        g_prims++;
+        if (op < 0x40) raster_polygon(g_fifo);
+        else if (op < 0x60) {
+            int gour = op & 0x10;
+            uint32_t c1 = gour ? g_fifo[2] : c;
+            uint32_t p1 = gour ? g_fifo[3] : g_fifo[2];
+            raster_line((int)(g_fifo[1] & 0xFFFF), (int)(g_fifo[1] >> 16), c & 0xFFFFFF,
+                        (int)(p1 & 0xFFFF), (int)(p1 >> 16), c1 & 0xFFFFFF, (op & 2) != 0);
+        } else raster_rect(g_fifo);
+    }
+}
+
+/* Polyline: vertices (and colours for gouraud) stream in until the terminator word. */
+static uint32_t g_pl_col, g_pl_xy, g_pl_pending_col;
+static int g_pl_gour, g_pl_have_xy, g_pl_expect_col;
+
+static void polyline_word(uint32_t v)
+{
+    if ((v & 0xF000F000u) == 0x50005000u && g_pl_have_xy) { g_polyline = 0; return; }
+    if (g_pl_gour && g_pl_expect_col) { g_pl_pending_col = v & 0xFFFFFF; g_pl_expect_col = 0; return; }
+    uint32_t col = g_pl_gour ? g_pl_pending_col : g_pl_col;
+    if (g_pl_have_xy)
+        raster_line((int)(g_pl_xy & 0xFFFF), (int)(g_pl_xy >> 16), g_pl_col, (int)(v & 0xFFFF), (int)(v >> 16),
+                    col, (g_fifo[0] >> 25) & 1);
+    g_pl_xy = v;
+    g_pl_col = col;
+    g_pl_have_xy = 1;
+    if (g_pl_gour) g_pl_expect_col = 1;
 }
 
 void gpu_gp0(uint32_t v)
@@ -110,13 +155,21 @@ void gpu_gp0(uint32_t v)
         return;
     }
     if (g_polyline) {
-        if ((v & 0xF000F000u) == 0x50005000u && g_fifo_n >= 3) { g_polyline = 0; g_fifo_n = 0; g_prims++; }
-        else g_fifo_n++;
+        polyline_word(v);
         return;
     }
     if (g_fifo_n == 0) {
         int n = cmd_len(v);
-        if (n < 0) { g_polyline = 1; g_fifo_n = 1; g_fifo[0] = v; return; }
+        if (n < 0) {
+            g_polyline = 1;
+            g_fifo[0] = v;
+            g_pl_gour = (v >> 28) & 1;
+            g_pl_col = g_pl_pending_col = v & 0xFFFFFF;
+            g_pl_have_xy = 0;
+            g_pl_expect_col = 0;
+            g_prims++;
+            return;
+        }
         g_fifo_need = n;
     }
     g_fifo[g_fifo_n++] = v;
@@ -170,19 +223,27 @@ void gpu_present(void)
     int w = (g_disp_mode & 0x40) ? 368 : hres[g_disp_mode & 3];
     int h = (g_disp_mode & 0x04) && (g_disp_mode & 0x20) ? 480 : 240;
     uint16_t *fb = (uint16_t *)(0x44000000u);       /* uncached VRAM, 512-pixel stride */
-    int ow = w < 480 ? w : 480, oh = h < 272 ? h : 272;
-    int ox = (480 - ow) / 2, oy = (272 - oh) / 2;
+    /* The PS1 picture is 4:3 whatever the resolution: scale it to 363x272, centred (nearest neighbour). */
+    const int ow = 363, oh = 272, ox = (480 - ow) / 2;
     int disabled = g_status & 0x800000u;
-    for (int y = 0; y < 272; y++) {
+    static int xmap[363];
+    for (int x = 0; x < ow; x++) xmap[x] = (g_disp_x + x * w / ow) & 1023;
+    for (int y = 0; y < oh; y++) {
         uint16_t *dst = fb + y * 512;
-        if (disabled || y < oy || y >= oy + oh) { memset(dst, 0, 480 * 2); continue; }
-        const uint16_t *src = g_vram + ((g_disp_y + y - oy) & 511) * 1024;
+        if (disabled) { memset(dst, 0, 480 * 2); continue; }
+        const uint16_t *src = g_vram + ((g_disp_y + y * h / oh) & 511) * 1024;
         memset(dst, 0, ox * 2);
-        for (int x = 0; x < ow; x++) dst[ox + x] = src[(g_disp_x + x) & 1023] | 0x8000;
+        for (int x = 0; x < ow; x++) dst[ox + x] = src[xmap[x]] | 0x8000;
         memset(dst + ox + ow, 0, (480 - ox - ow) * 2);
     }
     sceDisplaySetFrameBuf((void *)0x04000000, 512, PSP_DISPLAY_PIXEL_FORMAT_5551, PSP_DISPLAY_SETBUF_NEXTFRAME);
     static int frame;
+    if (frame == 300 || frame == 900 || frame == 1500) {   /* debug: raw VRAM snapshots */
+        char path[300];
+        snprintf(path, sizeof path, "%svram%d.bin", g_basedir, frame);
+        FILE *f = fopen(path, "wb");
+        if (f) { fwrite(g_vram, 2, 1024 * 512, f); fclose(f); }
+    }
     if (++frame % 120 == 0)
         logf_("gpu: frame %d prims/frame %u disp %u,%u mode %02x status %08x\n", frame,
               (unsigned)(g_prims - g_prims_frame) / 1, (unsigned)g_disp_x, (unsigned)g_disp_y,

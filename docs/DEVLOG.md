@@ -128,3 +128,15 @@
 * Result in PPSSPP: CRT → boot code (CD_init, SPU init, MDEC init, pad, memory card) → GT2.OVL read from the
   disc by the game's own ISO9660 reader → gunzip → `longjmp` → **overlay 1 running its frame loop** (GPU DMA,
   VSync, ~11 primitives/frame, display mode 368x480i). Screen still black: primitives are not rasterized yet.
+
+## 2026-11-18 — First picture: GT2's legal notice rendered by recompiled code
+
+* `runtime/src/raster.c`: software rasterizer into the emulated VRAM (triangles via edge functions with
+  incremental 16.16 attributes, quads as two triangles, sprites/rectangles, lines/polylines; 4/8/15-bit
+  textures with CLUT, texture window, modulation, 4 semi-transparency modes, mask bits; draw area/offset).
+* Presentation: the PS1 display area is scaled (nearest) to a 4:3 363x272 window centred on the PSP screen.
+* Debug: VRAM snapshots (`vram300/900/1500.bin`) + `scripts/vram2png.py`.
+* Result: the legal notice (640x480i, textured sprites over a dimmed photo) displays correctly in PPSSPP.
+* Performance: a software-rasterized 640x480 screen with several full-screen layers runs at only a few fps
+  on PSP-class CPU time (PPSSPP paces the emulated CPU). Decision: keep the software rasterizer as the
+  accurate reference; add fast paths / move hot primitives to the GE later (see ARCHITECTURE.md).
