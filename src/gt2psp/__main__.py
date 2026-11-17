@@ -31,6 +31,61 @@ def cmd_hash(args: argparse.Namespace) -> None:
     print(f"{sha1_file(disc.path)}  {disc.path.name}")
 
 
+def _space(args: argparse.Namespace):
+    from .analysis import Space
+    from .image import load_overlays, load_psx_exe
+    exe = load_psx_exe(Path(args.files) / "SCUS_944.88")
+    if args.ovl is None:
+        return exe, None, Space([exe])
+    ovl = load_overlays(Path(args.files) / "GT2.OVL")[args.ovl]
+    return exe, ovl, Space([ovl, exe])
+
+
+def cmd_disasm(args: argparse.Namespace) -> None:
+    from .mips import decode
+    _exe, _ovl, space = _space(args)
+    a = int(args.addr, 16)
+    for _ in range(args.count):
+        r = space.insn(a)
+        if r is None:
+            break
+        im, ins = r
+        print(f"{im.name:5s} {a:08x}: {ins.word:08x}  {ins.text()}")
+        a += 4
+
+
+def cmd_analyze(args: argparse.Namespace) -> None:
+    from .analysis import bios_name, discover, summarize
+    exe, ovl, space = _space(args)
+    entries = [exe.entry] if ovl is None else [int(x, 16) for x in args.entry]
+    funcs = discover(space, entries, limit_image=None if ovl is None else ovl.name)
+    s = summarize(funcs)
+    print(f"functions: {s['functions']}  computed jumps: {s['computed_jumps']}  "
+          f"computed calls: {s['computed_calls']}  GTE functions: {s['gte_funcs']}")
+    for a, b in s["bios"]:
+        print(f"  bios stub {a:08x} {bios_name(*b)}")
+    for (name, addr, rw), c in sorted(s["io"].items(), key=lambda x: x[0][1]):
+        print(f"  io {addr:08x} {name:22s} {rw} x{c}")
+    for a, e in s["errors"][:50]:
+        print(f"  error in {a:08x}: {e[0]:08x} {e[1]}")
+    if args.list:
+        for a in sorted(funcs):
+            f = funcs[a]
+            print(f"  fn {a:08x}-{f.end:08x} {f.image} calls={len(f.calls)} callers={len(f.callers)}")
+
+
+def cmd_functions(args: argparse.Namespace) -> None:
+    from .program import build, to_json
+    mods = build(Path(args.files))
+    out = Path(args.out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(to_json(mods))
+    for m in mods:
+        print(f"{m.name:9s} funcs={len(m.funcs):5d} fallthrough={sum(f.falls_through for f in m.funcs):3d} "
+              f"labels={len(m.labels):3d} text=" + ", ".join(f"{a:08x}-{b:08x}" for a, b in m.text))
+    print(f"total {sum(len(m.funcs) for m in mods)} functions -> {out}")
+
+
 def main() -> None:
     p = argparse.ArgumentParser(prog="gt2psp")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -41,6 +96,22 @@ def main() -> None:
     h = sub.add_parser("hash", help="print the SHA-1 of the image's data track")
     h.add_argument("cue")
     h.set_defaults(func=cmd_hash)
+    f = sub.add_parser("functions", help="partition all code (resident, boot, overlays) into functions")
+    f.add_argument("--files", default="extracted/files")
+    f.add_argument("--out", default="generated/functions.json")
+    f.set_defaults(func=cmd_functions)
+    for name, fn, hlp in (("disasm", cmd_disasm, "disassemble main EXE or an overlay"),
+                          ("analyze", cmd_analyze, "function discovery, BIOS stubs, I/O accesses")):
+        c = sub.add_parser(name, help=hlp)
+        c.add_argument("--files", default="extracted/files")
+        c.add_argument("--ovl", type=int, default=None, help="overlay index in GT2.OVL (0-5)")
+        if name == "disasm":
+            c.add_argument("addr")
+            c.add_argument("-n", "--count", type=int, default=64)
+        else:
+            c.add_argument("--entry", nargs="*", default=["80010000"])
+            c.add_argument("--list", action="store_true")
+        c.set_defaults(func=fn)
     args = p.parse_args()
     args.func(args)
 

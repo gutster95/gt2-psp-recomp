@@ -27,6 +27,17 @@ tools/             (ignored) local toolchain (pspdev inside a project-local WSL 
   address *and* the currently loaded overlay.
 * BIOS calls (`A0`/`B0`/`C0` tables, `syscall`) are replaced by high-level implementations.
 
+## Code model (decided)
+
+* The program consists of modules: `resident` (SCUS_944.88 `0x8005d600+`), `boot` (low part of SCUS_944.88,
+  only valid until the first overlay load) and `ovl0`-`ovl5`, all overlays mapped at `0x80010000`.
+* Each module is partitioned completely into functions (`python -m gt2psp functions`); every function becomes
+  one C function. Calls whose target lies in `0x80010000-0x8005d600` are dispatched through the currently loaded
+  module (runtime variable set by the HLE replacement of the overlay loader `0x8005dad8`).
+* The overlay loader itself is replaced by a runtime function (no gunzip of code needed — the code is already
+  compiled in; the RAM image is still filled so data inside the overlay is correct).
+* `setjmp`/`longjmp` used by the overlay switch map onto C `setjmp`/`longjmp` in the runtime.
+
 ## Reference material
 
 * `Recomps/GT2-PC-Port-Mod-Kit-0.4.3.1` (local only, not in this repo): a PC port for disc v1.0 that ships
