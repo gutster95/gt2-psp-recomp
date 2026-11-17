@@ -140,3 +140,11 @@
 * Performance: a software-rasterized 640x480 screen with several full-screen layers runs at only a few fps
   on PSP-class CPU time (PPSSPP paces the emulated CPU). Decision: keep the software rasterizer as the
   accurate reference; add fast paths / move hot primitives to the GE later (see ARCHITECTURE.md).
+
+## 2026-11-18 — Milestone 1: title screen
+
+* Sprite fast paths in the rasterizer (pre-modulated CLUT per primitive, row fills for flat rectangles) make
+  the notice fade run at playable speed; the game then loads overlay 1 and shows the **GT2 title screen**
+  ("Start Game", "Replay Theater", Polyphony Digital logo) — all game logic is recompiled code.
+* Title screen frame: 1 clear rect, 4 textured 256x256 background sprites, 1 flat triangle (menu cursor),
+  5 textured menu sprites with varying modulation (fade/highlight).

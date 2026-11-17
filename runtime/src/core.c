@@ -136,8 +136,6 @@ static void call_irq_handlers(PsxCpu *c)
 {
     static PsxCpu saved;
     g_n_irqs++;
-    uint32_t saved_istat = g_i_stat;
-    uint32_t trace_start = g_trace_pos;
     saved = *c;
     g_in_irq = 1;
     if (setjmp(g_irq_jb) == 0) {
@@ -163,19 +161,6 @@ static void call_irq_handlers(PsxCpu *c)
             uint32_t pc = c->r[31];
             c->r[31] = SENTINEL_RA;
             rt_call(c, pc);
-        }
-    }
-    {
-        static int dbg;
-        if (g_cur_overlay == 1 && dbg < 12 && g_n_irqs > 2600) {
-            dbg++;
-            logf_("irq #%u done: i_stat %03x->%03x dicr %08x, trace:", (unsigned)g_n_irqs, (unsigned)saved_istat,
-                  (unsigned)g_i_stat, (unsigned)io_r32(0x1F8010F4u));
-            uint32_t n = g_trace_pos - trace_start, from = n > 16 ? g_trace_pos - 16 : trace_start;
-            logf_(" (%u calls, last:)", (unsigned)n);
-            for (uint32_t i = from; i != g_trace_pos; i++)
-                logf_(" %08x", (unsigned)g_trace[i & (TRACE_SIZE - 1)]);
-            logf_("\n");
         }
     }
     *c = saved;

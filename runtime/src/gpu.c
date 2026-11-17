@@ -23,6 +23,7 @@ static uint32_t g_disp_x, g_disp_y, g_disp_mode, g_hrange = 0xC60260, g_vrange =
 static uint32_t g_status = 0x14802000u;
 static uint32_t g_draw_mode;
 static uint32_t g_prims, g_prims_frame;
+static int g_log_prims;
 
 void gpu_init(void)
 {
@@ -117,6 +118,11 @@ static void exec(void)
     }
     if (op >= 0x20 && op < 0x80) {
         g_prims++;
+        if (g_log_prims > 0) {
+            g_log_prims--;
+            logf_("prim %08x %08x %08x %08x %08x texpage %03x\n", (unsigned)g_fifo[0], (unsigned)g_fifo[1],
+                  (unsigned)g_fifo[2], (unsigned)g_fifo[3], (unsigned)g_fifo[4], (unsigned)g_rs.texpage);
+        }
         if (op < 0x40) raster_polygon(g_fifo);
         else if (op < 0x60) {
             int gour = op & 0x10;
@@ -244,6 +250,7 @@ void gpu_present(void)
         FILE *f = fopen(path, "wb");
         if (f) { fwrite(g_vram, 2, 1024 * 512, f); fclose(f); }
     }
+    if (frame == 100 || frame == 1000 || frame == 2000) g_log_prims = 24;
     if (++frame % 120 == 0)
         logf_("gpu: frame %d prims/frame %u disp %u,%u mode %02x status %08x\n", frame,
               (unsigned)(g_prims - g_prims_frame) / 1, (unsigned)g_disp_x, (unsigned)g_disp_y,

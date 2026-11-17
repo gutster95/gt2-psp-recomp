@@ -233,6 +233,69 @@ void raster_rect(const uint32_t *w)
     }
     int r = col & 0xFF, g = (col >> 8) & 0xFF, b = (col >> 16) & 0xFF;
     uint16_t flat = rgb15(r, g, b);
+
+    /* clip once */
+    int cx0 = x0, cy0 = y0, cx1 = x0 + ww - 1, cy1 = y0 + hh - 1;
+    if (cx0 < g_rs.clip_x0) cx0 = g_rs.clip_x0;
+    if (cy0 < g_rs.clip_y0) cy0 = g_rs.clip_y0;
+    if (cx1 > g_rs.clip_x1) cx1 = g_rs.clip_x1;
+    if (cy1 > g_rs.clip_y1) cy1 = g_rs.clip_y1;
+    if (cx0 > cx1 || cy0 > cy1) return;
+
+    /* Fast paths: opaque, no mask test, no texture window. */
+    if (!pi.semi && !g_rs.mask_check && !g_rs.tw_mask_x && !g_rs.tw_mask_y) {
+        uint16_t ms = g_rs.mask_set;
+        if (!tex) {
+            uint16_t c = flat | ms;
+            for (int py = cy0; py <= cy1; py++) {
+                uint16_t *d = &g_vram[py * 1024];
+                for (int px = cx0; px <= cx1; px++) d[px] = c;
+            }
+            return;
+        }
+        if (pi.depth < 2) {
+            /* pre-modulated palette; raw entry 0 = transparent */
+            static uint16_t pal[256];
+            static uint8_t opaque[256];
+            int n = pi.depth == 0 ? 16 : 256;
+            const uint16_t *cl = &g_vram[pi.cly * 1024];
+            for (int i = 0; i < n; i++) {
+                uint16_t t = cl[(pi.clx + i) & 1023];
+                opaque[i] = t != 0;
+                pal[i] = (pi.raw ? t : modulate(t, r, g, b)) | ms;
+            }
+            for (int py = cy0; py <= cy1; py++) {
+                uint16_t *d = &g_vram[py * 1024];
+                const uint16_t *srow = &g_vram[((pi.tpy + ((v0 + py - y0) & 255)) & 511) * 1024];
+                int u = u0 + (cx0 - x0);
+                if (pi.depth == 0) {
+                    for (int px = cx0; px <= cx1; px++, u++) {
+                        int uu = u & 255;
+                        int idx = (srow[(pi.tpx + (uu >> 2)) & 1023] >> ((uu & 3) * 4)) & 15;
+                        if (opaque[idx]) d[px] = pal[idx];
+                    }
+                } else {
+                    for (int px = cx0; px <= cx1; px++, u++) {
+                        int uu = u & 255;
+                        int idx = (srow[(pi.tpx + (uu >> 1)) & 1023] >> ((uu & 1) * 8)) & 255;
+                        if (opaque[idx]) d[px] = pal[idx];
+                    }
+                }
+            }
+            return;
+        }
+        for (int py = cy0; py <= cy1; py++) {
+            uint16_t *d = &g_vram[py * 1024];
+            const uint16_t *srow = &g_vram[((pi.tpy + ((v0 + py - y0) & 255)) & 511) * 1024];
+            int u = u0 + (cx0 - x0);
+            for (int px = cx0; px <= cx1; px++, u++) {
+                uint16_t t = srow[(pi.tpx + (u & 255)) & 1023];
+                if (t) d[px] = (pi.raw ? t : modulate(t, r, g, b)) | ms;
+            }
+        }
+        return;
+    }
+
     for (int y = 0; y < hh; y++) {
         int py = y0 + y;
         if (py < g_rs.clip_y0 || py > g_rs.clip_y1) continue;

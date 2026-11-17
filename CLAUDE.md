@@ -17,31 +17,50 @@ Repo: https://github.com/gutster95/gt2-psp-recomp (private).
 ```
 src/gt2psp/          Python tooling (run: python -m gt2psp ... with src on PYTHONPATH)
   disc.py            .cue/.bin MODE2/2352 reader, ISO9660 walk, XA Form 2 files kept raw
-  __main__.py        CLI: extract, hash
-runtime/             (planned) PSP C runtime: memory, BIOS HLE, GTE, GPU->GE, SPU, CD, pad
+  mips.py            R3000A + GTE decoder
+  image.py           PS-X EXE and GT2.OVL (gzip members) loaders
+  analysis.py        text ranges, jump tables, partitioning, BIOS/IO detection
+  program.py         whole program: modules resident/boot/ovl0-5, functions, resume points
+  recomp.py          MIPS -> C translator
+  __main__.py        CLI: extract, hash, disasm, analyze, functions, recomp
+runtime/             PSP runtime (C): include/gt2rt.h (interface for generated code), src/*.c
+  src/core.c         dispatcher, setjmp/longjmp unwind & resume, overlay hook, IRQ delivery, watchdog
+  src/bios.c io.c cdrom.c sio.c gpu.c raster.c gte.c log.c files.c main.c
+scripts/             wsl-setup.sh, build.sh, run-ppsspp.ps1, compile-generated.sh, vram2png.py
 docs/                ARCHITECTURE.md, DEVLOG.md
-ISO/                 user's disc image (ignored)
-Recomps/             reference PC port UGT2R 0.4.3 — v1.0 only, wasm modules, no source; docs only (ignored)
-extracted/           output of `extract` (ignored)
-tools/               downloads + project-local WSL distro (ignored)
+ISO/ extracted/ generated/ build/ Recomps/ tools/   (all git-ignored)
 ```
 
-Extract: `python -m gt2psp extract "ISO/Gran Turismo 2 (USA) (Simulation Mode) (Rev 2).cue" --out extracted`
-Disc files: SYSTEM.CNF, SCUS_944.88 (main EXE), GT2.OVL (code overlays), GT2.VOL (data), MUSIC.DAT (XA), FAULTY.PSX (filler).
+## Workflow
 
-## Toolchain status
+```
+python -m gt2psp extract "ISO/Gran Turismo 2 (USA) (Simulation Mode) (Rev 2).cue" --out extracted
+python -m gt2psp recomp                      # -> generated/*.c (2853 functions)
+wsl -d GT2PSPDev -u root --cd "<proj>" -- bash scripts/build.sh      # -> build/gt2psp/EBOOT.PBP
+powershell -ExecutionPolicy Bypass -File scripts/run-ppsspp.ps1 -Seconds 40 -Shot <png>   # stages + runs + log
+```
+(PYTHONPATH=src for the python calls.) The runtime needs `SCUS_944.88` and `GT2.BIN` (raw disc image) next to
+the EBOOT; run-ppsspp.ps1 stages them (hard links) into `tools/ppsspp/memstick/PSP/GAME/GT2PSP/`.
+Runtime log: `gt2log.txt` there (watchdog "alive" lines every 2 s with the last called functions).
 
-* pspdev has no native Windows build → project-local WSL distro `GT2PSPDev`, disk in `tools/wsl`.
-* Downloads ready: `tools/downloads/ubuntu/rootfs.tar.gz` (Ubuntu 24.04 WSL rootfs),
-  `tools/downloads/pspdev.tar.gz` (pspdev v20261101, ubuntu x86_64).
-* User enabled WSL (`wsl --install --no-distribution`) on 2026-11-17; a reboot was pending.
+Pitfalls: in Git-Bash heredocs `
+` inside C strings gets mangled � edit C files with the Edit tool.
+PowerShell `Set-Content -Encoding utf8` writes a BOM. CMake globs: build.sh re-runs cmake every time.
+
+## Status (2026-11-18)
+
+* Toolchain: WSL2 distro `GT2PSPDev` (`tools/wsl`), pspdev in `/opt/pspdev`, psp-gcc 15.2. PPSSPP 1.20.4
+  portable in `tools/ppsspp` (memstick inside, no `installed.txt`).
+* **Milestone 1 reached**: legal notice and the GT2 title screen ("Start Game / Replay Theater") render in
+  PPSSPP from recompiled code (screenshot: `build/milestone1-title.png`).
+* Not implemented yet: GTE (stub � needed as soon as anything 3D runs), SPU audio, XA music, MDEC (movies),
+  memory card (reported absent), GE-accelerated rendering (software rasterizer only), analog pad.
 
 ## Next steps
 
-1. `wsl --import GT2PSPDev "<proj>\tools\wsl" "<proj>\tools\downloads\ubuntu\rootfs.tar.gz" --version 2`
-   (if it fails: BIOS virtualization SVM/VT-x probably off — tell the user). Unpack pspdev into the distro,
-   set `PSPDEV`, verify `psp-gcc --version`, build a hello-world EBOOT.
-2. Get PPSSPP (portable) into `tools/ppsspp` for testing.
-3. Analyse SCUS_944.88 (PS-X EXE header, load address, entry) and GT2.OVL (overlay table/structure),
-   find functions, BIOS calls, hardware register accesses.
-4. Recompiler MIPS → C (`src/gt2psp/recomp/`) + PSP runtime skeleton. Milestone 1: title screen in PPSSPP.
+1. Implement the GTE (all commands, flags) in `runtime/src/gte.c`; press Start on the title screen and follow
+   the log to the next blocker.
+2. SPU emulation + PSP audio output; XA-ADPCM decoding for MUSIC.DAT streams (cdrom.c filters them now).
+3. MDEC for the intro/replay movies.
+4. Performance: profile on PPSSPP; GE path for sprites/polygons; reduce POLL overhead.
+5. Memory card emulation backed by a file on the memory stick.
