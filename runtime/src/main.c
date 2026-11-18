@@ -61,6 +61,25 @@ static void load_settings(void)
           g_tex_filter, g_hud_anchor);
 }
 
+/* HOME button: the XMB "quit game" dialog only appears with a registered exit callback. */
+static int exit_callback(int a, int b, void *arg)
+{
+    (void)a; (void)b; (void)arg;
+    logf_("exit requested (HOME)\n");
+    log_close();
+    sceKernelExitGame();
+    return 0;
+}
+
+static int callback_thread(SceSize args, void *argp)
+{
+    (void)args; (void)argp;
+    int cb = sceKernelCreateCallback("exit", exit_callback, 0);
+    sceKernelRegisterExitCallback(cb);
+    sceKernelSleepThreadCB();
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     char dir[256] = "";
@@ -70,6 +89,8 @@ int main(int argc, char **argv)
         if (s) s[1] = 0; else dir[0] = 0;
     }
     log_init(dir);
+    SceUID cbt = sceKernelCreateThread("callbacks", callback_thread, 0x11, 0x1000, PSP_THREAD_ATTR_USER, 0);
+    if (cbt >= 0) sceKernelStartThread(cbt, 0, 0);
     scePowerSetClockFrequency(333, 333, 166);   /* default is 222 MHz */
     logf_("CPU %d MHz, bus %d MHz\n", scePowerGetCpuClockFrequencyInt(), scePowerGetBusClockFrequencyInt());
     logf_("GT2 PSP runtime, base dir '%s'\n", dir);

@@ -8,6 +8,7 @@
 
 /* log.c */
 void log_init(const char *dir);
+void log_close(void);
 void logf_(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 void fatal(PsxCpu *c, const char *fmt, ...) __attribute__((format(printf, 2, 3), noreturn));
 void dump_trace(void);

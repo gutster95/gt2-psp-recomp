@@ -130,6 +130,15 @@ void ge_sync(void)
     g_ge_syncs++;
 }
 
+/* Variants of the 3D-mode setup, probed at startup (selftest_3d): PPSSPP accepts all of them, real hardware
+ * drew nothing with variant 0. zs = clip z per unit of w (ndc z), clip = GU_CLIP_PLANES (depth clamp), inv = depth
+ * range 65535..0. */
+static const struct { float zs; int clip, inv; } TVAR[] = {
+    {0, 0, 0}, {0.5f, 0, 0}, {0.5f, 1, 0}, {0, 1, 0}, {0.5f, 0, 1}, {-0.5f, 0, 0}, {0.5f, 1, 1},
+};
+#define NTVAR ((int)(sizeof TVAR / sizeof TVAR[0]))
+static int g_tvar;
+
 static void ge_begin(void)
 {
     if (g_open) return;
@@ -141,13 +150,13 @@ static void ge_begin(void)
     /* 3D mode (perspective-correct hi-res pass): vertices are (x*w, y*w, w); the projection moves w into the
      * homogeneous coordinate, the viewport has scale 1, so screen = (x, y) and attributes interpolate with 1/w. */
     static ScePspFMatrix4 ident = {{1, 0, 0, 0}, {0, 1, 0, 0}, {0, 0, 1, 0}, {0, 0, 0, 1}};
-    static ScePspFMatrix4 proj = {{1, 0, 0, 0}, {0, 1, 0, 0}, {0, 0, 0, 1}, {0, 0, 0, 0}};
+    ScePspFMatrix4 proj = {{1, 0, 0, 0}, {0, 1, 0, 0}, {0, 0, TVAR[g_tvar].zs, 1}, {0, 0, 0, 0}};
     sceGuSetMatrix(GU_PROJECTION, &proj);
     sceGuSetMatrix(GU_VIEW, &ident);
     sceGuSetMatrix(GU_MODEL, &ident);
     sceGuViewport(2048, 2048, 2, -2);
-    sceGuDepthRange(0, 65535);
-    sceGuDisable(GU_CLIP_PLANES);
+    if (TVAR[g_tvar].inv) sceGuDepthRange(65535, 0); else sceGuDepthRange(0, 65535);
+    if (TVAR[g_tvar].clip) sceGuEnable(GU_CLIP_PLANES); else sceGuDisable(GU_CLIP_PLANES);
     sceGuTexScale(1.0f, 1.0f);
     sceGuTexOffset(0.0f, 0.0f);
     sceGuDisable(GU_DEPTH_TEST);
@@ -953,10 +962,10 @@ static void selftest(void)
 
 /* Debug self-test of the perspective path: the same triangle in through mode and in 3D mode with very different
  * w per vertex must cover the same pixels. */
-static void selftest_3d(void)
+static int draw_test_3d(int t)
 {
     static const float tx[3] = {10, 300, 40}, ty[3] = {10, 60, 200}, tw[3][3] = {{1000, 1000, 1000}, {5, 2000, 300}, {2, 60000, 20}};
-    for (int t = 0; t < 4; t++) {
+    {
         memset(g_vram, 0, 1024 * 2 * 256);
         ge_begin();
         set_tex(0); set_blend(-1); set_atest(0);
@@ -980,13 +989,41 @@ static void selftest_3d(void)
                     hits++;
                     x0 = x < x0 ? x : x0; x1 = x > x1 ? x : x1; y0 = y < y0 ? y : y0; y1 = y > y1 ? y : y1;
                 }
-        logf_("ge selftest 3d case %d: %d pixels, bbox %d,%d-%d,%d\n", t, hits, x0, y0, x1, y1);
+        logf_("ge selftest 3d variant %d case %d: %d pixels, bbox %d,%d-%d,%d\n", g_tvar, t, hits, x0, y0, x1, y1);
+        return hits;
+    }
+}
+
+/* Picks the first 3D-mode variant that covers the same pixels as through mode; none: perspective pass off. */
+static void selftest_3d(void)
+{
+    g_tvar = 0;
+    int ref = draw_test_3d(0), found = -1;
+    for (int v = 0; v < NTVAR && found < 0; v++) {
+        g_tvar = v;
+        int ok = 1;
+        for (int t = 1; t < 4 && ok; t++) {
+            int h = draw_test_3d(t);
+            if (h < ref - ref / 50 || h > ref + ref / 50) ok = 0;
+        }
+        if (ok) found = v;
+    }
+    if (found < 0) {
+        g_tvar = 0;
+        g_pgxp = 0;
+        logf_("ge selftest 3d: no working variant - perspective-correct pass disabled\n");
+    } else {
+        g_tvar = found;
+        logf_("ge selftest 3d: using variant %d\n", found);
     }
     memset(g_vram, 0, 1024 * 2 * 256);
 }
 
 void ge_init(void)
 {
+    /* Lines of the zero-initialized BSS (display list, vertex arena) may still be dirty in the data cache; written
+     * back later they would overwrite what was written through the uncached mirror (PPSSPP has no cache). */
+    sceKernelDcacheWritebackInvalidateAll();
     sceGuInit();
     selftest_3d();
     selftest();
