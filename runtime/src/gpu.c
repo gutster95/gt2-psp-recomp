@@ -270,7 +270,15 @@ void gpu_present(void)
     }
     sceDisplaySetFrameBuf((void *)0x04188000, 512, PSP_DISPLAY_PIXEL_FORMAT_5551, PSP_DISPLAY_SETBUF_NEXTFRAME);
 stats:
-    if (frame == 300 || frame == 900 || frame == 2100) {   /* debug: raw VRAM snapshots */
+    static int dumps = -1;                       /* debug snapshots only if dumps.txt exists next to the EBOOT */
+    if (dumps < 0) {
+        char path[300];
+        snprintf(path, sizeof path, "%sdumps.txt", g_basedir);
+        FILE *f = fopen(path, "r");
+        dumps = f != 0;
+        if (f) fclose(f);
+    }
+    if (dumps && (frame == 300 || frame == 900 || (frame >= 1800 && frame % 300 == 0 && frame <= 9000))) {
         char path[300];
         snprintf(path, sizeof path, "%svram%d.bin", g_basedir, frame);
         ge_sync();
