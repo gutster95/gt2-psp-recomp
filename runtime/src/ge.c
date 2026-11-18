@@ -89,8 +89,12 @@ static uint32_t g_page_ver[32];
 static uint32_t g_ge_pending;           /* pages the GE has drawn into since the last sync */
 static int16_t g_pend_box[32][4];       /* per pending page: bounding box (x0, y0, x1, y1) of the GE's drawing */
 
+/* 1x presentation: the displayed VRAM rectangle and whether anything was written into it since the last blit */
+static int g_disp_rect[4] = {-1, -1, -1, -1}, g_disp_dirty = 1;
+
 static void touch(int x0, int y0, int x1, int y1, int by_ge)   /* inclusive */
 {
+    if (x0 <= g_disp_rect[2] && x1 >= g_disp_rect[0] && y0 <= g_disp_rect[3] && y1 >= g_disp_rect[1]) g_disp_dirty = 1;
     if (x0 < 0) x0 = 0;
     if (y0 < 0) y0 = 0;
     if (x1 > 1023) x1 = 1023;
@@ -410,7 +414,7 @@ static void setup_texture(int depth, int page, uint32_t clut)
 /* Widescreen and the perspective-correct 3D pass are off by default: on the real PSP the GE's transform mode drops
  * or distorts parts of the 3D scene (fine in PPSSPP); everything is drawn in through mode then (settings.txt can
  * enable them for experiments). */
-int g_hires = 1, g_widescreen = 0;
+int g_hires = 0, g_widescreen = 0;
 
 typedef struct {
     int x, y, w, h, used, drawn, band_clear, n3d_cur, n3d_last;
@@ -977,17 +981,17 @@ static int frame_for_display(int dx, int dy, int w, int h)
 }
 
 /* Fallback: scale the 1x display area from PS1 VRAM into buffer 2 (frames never drawn in hi-res, 24-bit, ...). */
-static void present_scaled(int dx, int dy, int w, int h, int blank)
+static void present_scaled(int tgt, int dx, int dy, int w, int h, int blank)
 {
     const int ow = 363, oh = 272, ox = (480 - ow) / 2;
-    int on_screen = g_shown == 2;
+    int on_screen = g_shown == tgt;
     if (on_screen) {                /* redrawing the shown buffer: the game's queued drawing first, then the clear and
                                      * blit right at the start of the vblank (no double buffer left for 1x screens) */
         ge_sync();
         sceDisplayWaitVblankStart();
     }
     ge_begin();
-    bind(2);
+    bind(tgt);
     set_scissor(0, 0, 479, 271);
     sceGuDisable(GU_DITHER);
     S.dither = 0;
@@ -1031,8 +1035,18 @@ void ge_present(int dx, int dy, int w, int h, int blank)
         show = k;
         g_frames[k ^ 1].band_clear = 1;
     } else {
-        present_scaled(dx, dy, w, h, blank);
-        show = 2;
+        /* without hi-res frames, buffers 0 and 1 are free: alternate between them (double buffering, no wait for
+         * the vblank); with hi-res frames the 1x fallback uses buffer 2 */
+        int r[4] = {dx, dy, dx + w - 1, dy + h - 1};
+        if (!g_hires && !blank && !g_disp_dirty && !memcmp(r, g_disp_rect, sizeof r) && g_shown != 2) {
+            PHASE_END();                     /* unchanged picture: no blit, no wait for the GE */
+            return;
+        }
+        memcpy(g_disp_rect, r, sizeof r);
+        g_disp_dirty = blank;
+        int tgt = g_hires ? 2 : (g_shown == 0 ? 1 : 0);
+        present_scaled(tgt, dx, dy, w, h, blank);
+        show = tgt;
     }
     if (show != g_shown) {
         sceDisplaySetFrameBuf((void *)(EDRAM + FB_OFF(show)), 512, PSP_DISPLAY_PIXEL_FORMAT_5551,
