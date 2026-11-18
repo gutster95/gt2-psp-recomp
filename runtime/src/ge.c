@@ -302,7 +302,8 @@ static void setup_texture(int depth, int page, uint32_t clut)
 
 int g_hires = 1, g_widescreen = 1;
 
-typedef struct { int x, y, w, h, used, drawn, band_clear; } Frame;
+typedef struct { int x, y, w, h, used, drawn, band_clear, n3d_cur, n3d_last; } Frame;
+int g_hud_anchor = 1;   /* widescreen: move HUD elements to the screen edges in 3D scenes (shifted, not stretched) */
 static Frame g_frames[2];
 
 typedef struct { uint16_t u, v; uint32_t c; float x, y, z; } HVtx;
@@ -391,6 +392,8 @@ static void prepare_frame(int k)
     f->drawn = 1;
     if (!f->band_clear) return;
     f->band_clear = 0;
+    f->n3d_last = f->n3d_cur;                  /* first draw of a new picture into this buffer */
+    f->n3d_cur = 0;
     if (!g_widescreen) return;
     bind(k);
     set_scissor(0, 0, 479, 271);
@@ -437,15 +440,44 @@ static void draw(int prim, int n, const GeVtx *v, int tex, int semi, int mode, i
         passes(prim, VFMT, n, gv, tex, semi, mode);
     }
     if (fk >= 0) {
-        const Frame *f = &g_frames[fk];
+        Frame *f = &g_frames[fk];
         bind(fk);
-        hires_scissor(f, is3d);
+        /* HUD anchoring: in a 3D scene, 2D elements in the left/right 40% of the 4:3 picture move to the 16:9
+         * edges by the band width (58.5 px); elements in the middle or wider than half the screen stay. */
+        /* Text is drawn glyph by glyph: a glyph next to the previous 2D element on the same line belongs to the same
+         * string and takes its shift, so strings are never torn apart. */
+        static float run_lo, run_hi, run_y0, run_y1, run_shift;
+        static int run_valid;
+        float shift = 0;
+        if (is3d) { f->n3d_cur++; run_valid = 0; }
+        else if (g_widescreen && g_hud_anchor && (f->n3d_last > 50 || f->n3d_cur > 50)) {
+            float lo = v[0].x, hi = v[0].x, y0 = v[0].y, y1 = v[0].y;
+            for (int i = 1; i < n; i++) {
+                if (v[i].x < lo) lo = v[i].x;
+                if (v[i].x > hi) hi = v[i].x;
+                if (v[i].y < y0) y0 = v[i].y;
+                if (v[i].y > y1) y1 = v[i].y;
+            }
+            float cx = (lo + hi) * 0.5f - f->x;
+            if (run_valid && y0 <= run_y1 && y1 >= run_y0 && lo <= run_hi + 12 && hi >= run_lo - 12) {
+                shift = run_shift;
+                if (lo < run_lo) run_lo = lo;
+                if (hi > run_hi) run_hi = hi;
+            } else {
+                if (hi - lo <= f->w * 0.5f) {
+                    if (cx < f->w * 0.4f) shift = -(480.0f - 363.0f) * 0.5f;
+                    else if (cx > f->w * 0.6f) shift = (480.0f - 363.0f) * 0.5f;
+                }
+                run_lo = lo; run_hi = hi; run_y0 = y0; run_y1 = y1; run_shift = shift; run_valid = 1;
+            }
+        }
+        hires_scissor(f, is3d || shift != 0);
         HVtx *hv = sceGuGetMemory(n * (int)sizeof(HVtx));
         for (int i = 0; i < n; i++) {
             hv[i].u = v[i].u;
             hv[i].v = v[i].v;
             hv[i].c = v[i].c;
-            hv[i].x = is3d ? map_x3(f, v[i].x) : map_x(f, v[i].x);
+            hv[i].x = is3d ? map_x3(f, v[i].x) : map_x(f, v[i].x) + shift;
             hv[i].y = map_y(f, v[i].y);
             hv[i].z = 0;
         }
@@ -691,7 +723,7 @@ static int frame_for_display(int dx, int dy, int w, int h)
     for (int k = 0; k < 2; k++)                  /* display mode changed: forget the old frames */
         if (g_frames[k].used && (g_frames[k].w != w || g_frames[k].h != h)) memset(g_frames, 0, sizeof g_frames);
     int k = !g_frames[0].used ? 0 : !g_frames[1].used ? 1 : (g_shown == 0 ? 1 : 0);
-    g_frames[k] = (Frame){dx, dy, w, h, 1, 0, 1};
+    g_frames[k] = (Frame){dx, dy, w, h, 1, 0, 1, 0, 0};
     return k;
 }
 
