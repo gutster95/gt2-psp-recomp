@@ -236,6 +236,22 @@ static void mix_spu(int16_t *out, int n)
             int32_t env = v->env;
             uint32_t counter = v->counter;
             int16_t prev = v->prev, cur = v->cur;
+            if (!nz && !pm && !need_out) {          /* common case: plain voice, no per-sample special cases */
+                uint32_t inc = step0 * SPU_DIV;
+                int32_t *acc = g_acc + s * 2;
+                for (int k = s; k < end; k++, acc += 2) {
+                    int32_t smp = prev + (((int32_t)cur - prev) * (int32_t)(counter & 0xFFF) >> 12);
+                    counter += inc;
+                    while (counter >= 0x1000) {
+                        counter -= 0x1000;
+                        prev = cur;
+                        cur = v->buf[v->pos];
+                        if (++v->pos >= 28) { v->pos = 0; block_end(v, i); }
+                    }
+                    acc[0] += smp * gl >> 15;
+                    acc[1] += smp * gr >> 15;
+                }
+            } else
             for (int k = s; k < end; k++) {
                 int32_t smp = nz ? g_noise[k] : prev + (((int32_t)cur - prev) * (int32_t)(counter & 0xFFF) >> 12);
                 uint32_t step = step0;
@@ -370,6 +386,7 @@ static int xa_thread(SceSize args, void *argp)
 }
 
 int g_audio = 1;   /* settings.txt audio=0: no sound output (for comparisons) */
+int g_autoexit;    /* settings.txt autoexit=N: quit after N seconds */
 
 void spu_init(void)
 {

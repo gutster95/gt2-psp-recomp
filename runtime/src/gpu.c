@@ -6,6 +6,7 @@
 #include <string.h>
 #include <pspdisplay.h>
 #include <pspctrl.h>
+#include <pspkernel.h>
 #include <pspge.h>
 #include "rt.h"
 #include "gpu.h"
@@ -341,19 +342,22 @@ void gpu_present(void)
     }
     sceDisplaySetFrameBuf((void *)0x04188000, 512, PSP_DISPLAY_PIXEL_FORMAT_5551, PSP_DISPLAY_SETBUF_NEXTFRAME);
 stats:
-    static int dumps = -1;                       /* debug snapshots only if dumps.txt exists next to the EBOOT */
+    static int dumps = -1, dumps_from;                       /* debug snapshots only if dumps.txt exists next to the EBOOT */
     if (dumps < 0) {
         char path[300];
         snprintf(path, sizeof path, "%sdumps.txt", g_basedir);
         FILE *f = fopen(path, "r");
         dumps = f != 0;
-        if (f) fclose(f);
+        if (f) {                                 /* optional content: first frame; then screens only (USB is slow) */
+            if (fscanf(f, "%d", &dumps_from) != 1) dumps_from = 0;
+            fclose(f);
+        }
     }
-    if (dumps && (frame >= 600 && frame % 150 == 0 && frame <= 9000)) {
+    if (dumps && (frame >= (dumps_from ? dumps_from : 600) && frame % 150 == 0 && frame <= 9000)) {
         char path[300];
         snprintf(path, sizeof path, "%svram%d.bin", g_basedir, frame);
         ge_sync();
-        FILE *f = fopen(path, "wb");
+        FILE *f = dumps_from ? 0 : fopen(path, "wb");
         if (f) { fwrite(g_vram, 2, 1024 * 512, f); fclose(f); }
         if (g_use_ge) {                          /* the PSP screen, as a 512x512 "VRAM" image for vram2png */
             snprintf(path, sizeof path, "%sscreen%d.bin", g_basedir, frame);
@@ -380,6 +384,16 @@ stats:
         combo_down = down;
     }
     if (frame == 100 || frame == 1000 || frame == 2000) g_log_prims = 24;
+    {   /* settings.txt autoexit=N: quit after N seconds (PSPLink profiling runs) */
+        extern int g_autoexit;
+        static uint64_t start;
+        if (!start) start = now_us();
+        if (g_autoexit > 0 && now_us() - start > (uint64_t)g_autoexit * 1000000u) {
+            logf_("autoexit after %d s\n", g_autoexit);
+            log_close();
+            sceKernelExitGame();
+        }
+    }
     if (++frame % 120 == 0) {
         extern uint32_t g_gpu_lists;
         extern uint64_t g_gpu_us;

@@ -50,16 +50,30 @@ typedef struct { unsigned int *start, *current; int parent_context; } GuListPriv
 extern GuListPriv *gu_list;
 static inline void cmd(uint32_t c, uint32_t a) { *gu_list->current++ = (c << 24) | (a & 0xFFFFFF); }
 
-/* Vertex arena (uncached, so the GE sees the data without cache writeback); valid until the next ge_sync. */
+/* Vertex arena; valid until the next ge_sync. Written through the data cache: uncached stores cost tens of cycles
+ * each on real hardware. The written range is written back (vflush) before every pspgu call that moves the GE's
+ * stall address (sceGuDrawArray, sceGuGetMemory, sceGuFinish - checked in libpspgu.a), so the GE never reads
+ * vertices still sitting in the cache. */
 #define VARENA (512 * 1024)
 static uint8_t g_varena[VARENA] __attribute__((aligned(64)));
-static uint32_t g_vtop;
+static uint32_t g_vtop, g_vflushed;
 static inline void *valloc_v(int bytes)
 {
-    void *p = (void *)((uintptr_t)(g_varena + g_vtop) | 0x40000000u);
+    void *p = g_varena + g_vtop;
     g_vtop += ((uint32_t)bytes + 15) & ~15u;
     return p;
 }
+static inline void vflush(void)
+{
+    if (g_vtop > g_vflushed) {
+        uint32_t a = g_vflushed & ~63u;
+        sceKernelDcacheWritebackRange(g_varena + a, g_vtop - a);
+        g_vflushed = g_vtop;
+    }
+}
+#define sceGuDrawArray(...) (vflush(), sceGuDrawArray(__VA_ARGS__))
+#define sceGuGetMemory(n) (vflush(), sceGuGetMemory(n))
+#define sceGuFinish() (vflush(), sceGuFinish())
 static int g_cur_fb = -1;             /* GE draw target: -1 PS1 VRAM, 0/1 hi-res frame buffers, 2 scaled present */
 static int g_scissor_is_width = 1;    /* sceGuScissor(x, y, w, h) semantics, checked at startup */
 uint32_t g_ge_prims, g_ge_sw_prims, g_ge_tex_uploads, g_ge_syncs, g_ge_pgxp;
@@ -138,6 +152,7 @@ void ge_sync(void)
     sceGuSync(0, 0);
     g_open = 0;
     g_vtop = 0;
+    g_vflushed = 0;
     g_ge_pending = 0;
     g_clut_top = 0;
     g_nclut = 0;
@@ -425,14 +440,14 @@ static inline float map_x3(const Frame *f, float x) { return f->ox3 + x * f->kx3
 
 /* Recently GTE-projected screen coordinates (hash set, entries expire after a few vblanks) */
 #define XYSET 8192
-static uint32_t g_xy_key[XYSET];
-static uint16_t g_xy_stamp[XYSET];
+/* one 32-byte entry (a cache line on the PSP) per vertex: key, stamp and the precise position together */
+typedef struct { uint32_t key; uint16_t stamp, pad; float px, py, pz; uint32_t pad2[3]; } XyEnt;
+static XyEnt g_xy[XYSET] __attribute__((aligned(64)));
 static inline uint16_t xy_now(void) { return (uint16_t)(g_vblank_count >> 1); }
 static inline uint32_t xy_hash(uint32_t k) { return (k * 0x9E3779B1u) >> 19; }
 
 /* Precise data per projected vertex (PGXP-style): sub-pixel screen position and view depth, used to draw 3D
  * primitives perspective-correct and without the integer jitter of PS1 coordinates. */
-static float g_xy_px[XYSET], g_xy_py[XYSET], g_xy_pz[XYSET];
 int g_pgxp = 1;          /* perspective-correct, sub-pixel 3D in the hi-res pass */
 int g_tex_filter = 1;    /* bilinear filtering of opaque 3D textures in the hi-res pass */
 
@@ -443,13 +458,14 @@ void ge_mark_3d_precise(uint32_t xy, float x, float y, float z)
     uint32_t h = xy_hash(xy), j = h;
     for (int i = 0; i < 8; i++) {
         uint32_t k = (h + i) & (XYSET - 1);
-        if (g_xy_key[k] == xy || (uint16_t)(now - g_xy_stamp[k]) > 3) { j = k; break; }
+        if (g_xy[k].key == xy || (uint16_t)(now - g_xy[k].stamp) > 3) { j = k; break; }
     }
-    g_xy_key[j] = xy;
-    g_xy_stamp[j] = now;
-    g_xy_px[j] = x;
-    g_xy_py[j] = y;
-    g_xy_pz[j] = z;
+    XyEnt *e = &g_xy[j];
+    e->key = xy;
+    e->stamp = now;
+    e->px = x;
+    e->py = y;
+    e->pz = z;
 }
 
 void ge_mark_3d(uint32_t xy) { ge_mark_3d_precise(xy, 0, 0, 0); }
@@ -460,7 +476,7 @@ static int xy_find(uint32_t xy)
     uint32_t h = xy_hash(xy);
     for (int i = 0; i < 8; i++) {
         uint32_t j = (h + i) & (XYSET - 1);
-        if (g_xy_key[j] == xy && (uint16_t)(now - g_xy_stamp[j]) <= 3) return (int)j;
+        if (g_xy[j].key == xy && (uint16_t)(now - g_xy[j].stamp) <= 3) return (int)j;
     }
     return -1;
 }
@@ -643,10 +659,11 @@ static void draw(int prim, int n, const GeVtx *v, int tex, int semi, int mode, i
             for (int i = 0; i < n && ok; i++) {
                 int rx = v[i].x - g_rs.off_x, ry = v[i].y - g_rs.off_y;
                 int j = xyj ? xyj[i] : -1;
-                if (j < 0 || g_xy_pz[j] < 1.0f || g_xy_px[j] - rx > 2 || rx - g_xy_px[j] > 2 ||
-                    g_xy_py[j] - ry > 2 || ry - g_xy_py[j] > 2) { ok = 0; break; }
-                float z = g_xy_pz[j];
-                float hx = map_x3(f, g_xy_px[j] + g_rs.off_x), hy = map_y(f, g_xy_py[j] + g_rs.off_y);
+                const XyEnt *e = j >= 0 ? &g_xy[j] : 0;
+                if (!e || e->pz < 1.0f || e->px - rx > 2 || rx - e->px > 2 ||
+                    e->py - ry > 2 || ry - e->py > 2) { ok = 0; break; }
+                float z = e->pz;
+                float hx = map_x3(f, e->px + g_rs.off_x), hy = map_y(f, e->py + g_rs.off_y);
                 pv[i] = (PVtx){v[i].u / 256.0f, v[i].v / 256.0f, v[i].c, hx * g_tix * z, hy * g_tiy * z, z};
             }
             if (ok) {
@@ -917,7 +934,13 @@ static int frame_for_display(int dx, int dy, int w, int h)
         if (f->used && f->x == dx && f->y == dy && f->w == w && f->h == h) return k;
     }
     for (int k = 0; k < 2; k++)                  /* display mode changed: forget the old frames */
-        if (g_frames[k].used && (g_frames[k].w != w || g_frames[k].h != h)) memset(g_frames, 0, sizeof g_frames);
+        if (g_frames[k].used && (g_frames[k].w != w || g_frames[k].h != h)) {
+            memset(g_frames, 0, sizeof g_frames);
+            /* a read of the old screen's frames (e.g. a texture page next to the title's 512-wide frame, read while
+             * the race loads) must not keep the double drawing on for the new screen: detect again */
+            if (g_frames_read) logf_("ge: display mode changed - 1x frame rendering off again\n");
+            g_frames_read = 0;
+        }
     int k = !g_frames[0].used ? 0 : !g_frames[1].used ? 1 : (g_shown == 0 ? 1 : 0);
     Frame *f = &g_frames[k];
     *f = (Frame){dx, dy, w, h, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0};
