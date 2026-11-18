@@ -5,6 +5,7 @@
 #include "gpu.h"
 #include "cdrom.h"
 #include "sio.h"
+#include "card.h"
 #include "prof.h"
 
 uint32_t g_i_stat, g_i_mask;
@@ -36,6 +37,7 @@ void raise_irq(int bit) { g_i_stat |= 1u << bit; }
 void io_vblank(void)
 {
     g_vblank_count++;
+    card_tick();
     raise_irq(0);
     gpu_present();
 }

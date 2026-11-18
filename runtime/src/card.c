@@ -1,5 +1,7 @@
-/* Memory card in slot 1 as a 128 KB card image on the memory stick (GT2CARD1.MCD next to the EBOOT, standard raw
- * .mcd layout: 1024 sectors of 128 bytes; created formatted if missing).
+/* Memory card in slot 1: a 128 KB card image (standard raw .mcd layout, 1024 sectors of 128 bytes) kept in RAM and
+ * stored as a PSP save through the system's save data utility (savedata.c): it appears in the XMB under Saved
+ * Data. A missing save means a freshly formatted card. An old GT2CARD1.MCD next to the EBOOT (earlier builds) is
+ * taken over once.
  *
  * GT2 only uses the BIOS's raw sector functions and builds its own file handling on top:
  *   _card_info(port)               A0:AB  -> SwCARD event (IOE: card present, TIMEOUT: no card)
@@ -11,6 +13,7 @@
 #include <string.h>
 #include "rt.h"
 #include "card.h"
+#include "savedata.h"
 
 #define SECTOR 128
 #define SECTORS 1024
@@ -52,37 +55,26 @@ static void format(void)
     memcpy(g_img + 63 * SECTOR, g_img, SECTOR);    /* write test frame */
 }
 
-static void save_all(void)
-{
-    FILE *f = fopen(g_path, "wb");
-    if (!f) { logf_("card: cannot create %s\n", g_path); return; }
-    fwrite(g_img, 1, sizeof g_img, f);
-    fclose(f);
-}
-
 void card_init(void)
 {
-    snprintf(g_path, sizeof g_path, "%sGT2CARD1.MCD", g_basedir);
+    g_present = 1;
+    if (savedata_load(g_img)) { logf_("card: loaded from PSP save data\n"); return; }
+    snprintf(g_path, sizeof g_path, "%sGT2CARD1.MCD", g_basedir);   /* card file of earlier builds */
     FILE *f = fopen(g_path, "rb");
     if (f) {
         size_t n = fread(g_img, 1, sizeof g_img, f);
         fclose(f);
-        if (n == sizeof g_img) { g_present = 1; logf_("card: %s loaded\n", g_path); return; }
+        if (n == sizeof g_img) {
+            logf_("card: took over %s, it is saved as PSP save data from now on (the file can be deleted)\n", g_path);
+            savedata_written();
+            return;
+        }
     }
     format();
-    save_all();
-    g_present = 1;
-    logf_("card: new formatted card %s\n", g_path);
+    logf_("card: no save yet - new formatted card\n");
 }
 
-static void save_sector(int s)
-{
-    FILE *f = fopen(g_path, "r+b");
-    if (!f) { save_all(); return; }
-    fseek(f, s * SECTOR, SEEK_SET);
-    fwrite(g_img + s * SECTOR, 1, SECTOR, f);
-    fclose(f);
-}
+void card_tick(void) { savedata_tick(g_img); }
 
 static int slot1(uint32_t port) { return (port & 0x30) == 0 && g_present; }
 
@@ -110,7 +102,7 @@ uint32_t card_write(uint32_t port, uint32_t sector, uint32_t src)
     if (!slot1(port) || sector >= SECTORS) { bios_event_later(HW_CARD, EV_TIMEOUT); return 1; }
     if (src) {                                     /* src = 0: _new_card() acknowledge, nothing is written */
         for (int i = 0; i < SECTOR; i++) g_img[sector * SECTOR + i] = (uint8_t)mem_r8(src + i);
-        save_sector((int)sector);
+        savedata_written();
     }
     bios_event_later(HW_CARD, EV_IOE);
     return 1;

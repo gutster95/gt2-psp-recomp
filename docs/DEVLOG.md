@@ -301,3 +301,14 @@ is a stable 30 fps.
 * CD fix: the "overrun" (deliver the next sector if the game has not taken the previous one within 13 ms) let a
   new sector replace an untaken one when frames were slow, which desynchronised libcd's interrupt handler (hang in
   CdGetSector in overlay 4). Removed; a new read/pause/stop discards an untaken sector instead.
+
+## 2026-11-18 - Memory card as PSP save data
+
+* User wish: keep things PSP-native. The card image is now a PSP save through sceUtilitySavedata (savedata.c):
+  ms0:/PSP/SAVEDATA/GT2PSP00000CARD1/ with MEMCARD.BIN (encrypted by the system), PARAM.SFO (title "Gran Turismo 2
+  (PSP)", "Memory Card 1", detail text) and ICON0.PNG (own artwork, scripts/make_save_icon.py -> save_icon.h).
+  Visible, copyable and deletable in the XMB under Saved Data.
+* Auto modes only (no PSP dialog; GT2's own card screens are the UI). Load blocking at startup; saving in the
+  background from the vblank tick once the game has not written a sector for 1 s (snapshot of the image).
+* A GT2CARD1.MCD from the previous build is taken over once. Verified in PPSSPP: save result 0, reload gives the
+  identical image (checksum logged on save and load).

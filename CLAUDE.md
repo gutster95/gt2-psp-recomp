@@ -26,6 +26,7 @@ src/gt2psp/          Python tooling (run: python -m gt2psp ... with src on PYTHO
 runtime/             PSP runtime (C): include/gt2rt.h (interface for generated code), src/*.c
   src/widescreen.c   game patch: near-plane clipping for the overlay 0 scenery renderer
   src/ge.c           GE renderer (PS1 VRAM in eDRAM, texture page cache, presentation)
+  src/card.c savedata.c  memory card: BIOS sector functions + events, stored as PSP save data
   src/core.c         dispatcher, setjmp/longjmp unwind & resume, overlay hook, IRQ delivery, watchdog
   src/bios.c io.c cdrom.c sio.c gpu.c raster.c gte.c log.c files.c main.c
 scripts/             wsl-setup.sh, build.sh, run-ppsspp.ps1, compile-generated.sh, vram2png.py
@@ -66,7 +67,7 @@ PowerShell `Set-Content -Encoding utf8` writes a BOM. CMake globs: build.sh re-r
 * **Hi-res 480x272 + 16:9** (ge.c `g_hires`, `g_widescreen`, GTE X*3/4, 3D/2D by GTE output tagging);
   game patches via recomp.py HOOKS (widescreen.c near-plane clipper).
 * **Input + memory card**: DualShock analog emulation (libpad works now - before, all input was ignored and the
-  "race replay" was the attract demo); memory card = GT2CARD1.MCD on the memory stick (card.c, BIOS events).
+  "race replay" was the attract demo); memory card = PSP save data (XMB "Saved Data", savedata.c via sceUtilitySavedata; card.c BIOS events).
   Test input: input.txt (`<vblank> <button> <len>`), e.g. start/cross reaches the GT mode world map.
 * Not implemented yet: SPU audio, XA music, MDEC (movies),
   15-bit textures / texture windows on the GE (software fallback).
