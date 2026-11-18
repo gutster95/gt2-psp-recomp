@@ -71,6 +71,12 @@ OVERRIDE[("ovl0", 0x800100D4)] = "c->r[6] = c->r[6] + (g_widescreen ? 213u : 160
 OVERRIDE[("ovl0", 0x800295EC)] = "c->r[5] = g_widescreen ? (uint32_t)-80 : (uint32_t)-60;"
 OVERRIDE[("ovl0", 0x800295F0)] = "c->r[6] = g_widescreen ? 80u : 60u;"
 
+# 60 fps (Silent's GT2 "60 FPS" cheat, NTSC-U 1.2): the runtime sets the frame interval at 0x801D5864 from 2 to 1;
+# the game then disables tire smoke, the sky in the rear view mirror and the mirror itself ("interval < 2" tests,
+# slti v0, v0, 2). With g_fps60 the comparison constant becomes 0 so the effects stay on.
+for _a in (0x800168C8, 0x80019644, 0x80029550):
+    OVERRIDE[("ovl0", _a)] = "c->r[2] = g_fps60 ? 0u : (uint32_t)((int32_t)c->r[2] < 2);"
+
 
 # Runtime functions that take the CPU but never touch c->r[] (GTE, coprocessor 0, division, interrupt polling):
 # calls to them need no register write-back (see registers_to_locals).

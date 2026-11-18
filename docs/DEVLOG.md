@@ -274,3 +274,14 @@ recompiled functions). Frames per 120 vblanks in the heavy part of the replay (3
 The last step barely shows in PPSSPP (its timing does not model loads/stores) but removes most memory traffic of
 the generated code on real hardware. Remaining profile: game code ~65% (incl. inlined GTE, ~4% VSync wait),
 GE build ~25%, IRQ 3%. Not yet done: TRACE removal in release builds, POLL budget tuning, cheaper hi-res pass.
+
+## 2026-11-18 - 60 fps patch (option fps60, off by default)
+
+* Source: Silent's (CookiePLMonster) GT2 "60 FPS" cheat for NTSC-U 1.2 (Console-Cheat-Codes, PS1/Gran Turismo 2):
+  frame interval byte at 0x801D5864 2 -> 1 (set by the runtime every vblank), plus three overlay 0 patches
+  (0x800168C8 tire smoke, 0x80019644 mirror sky, 0x80029550 rear view mirror): `slti v0, v0, 2` interval tests whose
+  constant becomes 0 so the effects stay on at interval 1 (recomp.py OVERRIDE, active with g_fps60).
+* Result in PPSSPP: 78-80 frames per 120 vblanks (~40 fps), worst scene ~30 fps.
+* The game advances its simulation by a fixed step per frame: at interval 1 it needs a steady 60 fps, otherwise it
+  runs in slow motion (measured: race clock 16.1 s per 25 s real time at ~40 fps, 24.6 s in 30 fps mode). So the
+  option stays off until the port can hold 60 fps.

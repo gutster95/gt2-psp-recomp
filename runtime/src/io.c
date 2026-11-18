@@ -33,9 +33,12 @@ static void seen(uint32_t off, const char *rw, uint32_t v)
 
 void raise_irq(int bit) { g_i_stat |= 1u << bit; }
 
+int g_fps60;   /* settings.txt fps60: frame interval 1 instead of 2 (see recomp.py, Silent's 60 FPS cheat) */
+
 void io_vblank(void)
 {
     g_vblank_count++;
+    if (g_fps60 && g_ram[0x1D5864] == 2) g_ram[0x1D5864] = 1;
     raise_irq(0);
     gpu_present();
 }
