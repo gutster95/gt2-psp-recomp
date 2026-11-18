@@ -306,6 +306,9 @@ stats:
         extern uint32_t g_ge_prims, g_ge_sw_prims, g_ge_tex_uploads, g_ge_syncs;
         logf_("ge: %u prims, %u software, %u texture page copies, %u syncs (totals)\n", (unsigned)g_ge_prims,
               (unsigned)g_ge_sw_prims, (unsigned)g_ge_tex_uploads, (unsigned)g_ge_syncs);
+        extern uint32_t g_wide_clipped, g_wide_tris;
+        logf_("widescreen clipper: %u polygons, %u triangles (totals)\n", (unsigned)g_wide_clipped,
+              (unsigned)g_wide_tris);
         last_lists = g_gpu_lists;
         last_prims = g_prims;
         last_gpu = g_gpu_us;

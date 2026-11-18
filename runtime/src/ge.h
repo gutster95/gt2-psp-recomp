@@ -16,4 +16,5 @@ int ge_copy(int sx, int sy, int dx, int dy, int w, int h);       /* 0: not handl
 void ge_vram_written(int x, int y, int w, int h);                /* CPU wrote VRAM: invalidate texture cache */
 void ge_upload_done(int x, int y, int w, int h);                 /* CPU upload finished: mirror to hi-res */
 void ge_present(int x, int y, int w, int h, int blank);          /* show the PS1 display area, flip */
+void ge_mark_3d(uint32_t xy);                                   /* GTE-projected vertex (3D, not HUD) */
 const uint16_t *ge_display_buffer(void);                        /* debug: last shown 512x272 buffer */

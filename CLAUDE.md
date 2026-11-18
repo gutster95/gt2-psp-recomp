@@ -24,6 +24,7 @@ src/gt2psp/          Python tooling (run: python -m gt2psp ... with src on PYTHO
   recomp.py          MIPS -> C translator
   __main__.py        CLI: extract, hash, disasm, analyze, functions, recomp
 runtime/             PSP runtime (C): include/gt2rt.h (interface for generated code), src/*.c
+  src/widescreen.c   game patch: near-plane clipping for the overlay 0 scenery renderer
   src/ge.c           GE renderer (PS1 VRAM in eDRAM, texture page cache, presentation)
   src/core.c         dispatcher, setjmp/longjmp unwind & resume, overlay hook, IRQ delivery, watchdog
   src/bios.c io.c cdrom.c sio.c gpu.c raster.c gte.c log.c files.c main.c
@@ -62,8 +63,8 @@ PowerShell `Set-Content -Encoding utf8` writes a BOM. CMake globs: build.sh re-r
 * **Data pack**: PSP folder = `EBOOT.PBP` + `GT2.PAK` (converted on the PC); no disc image.
 * **GE renderer** (`runtime/src/ge.c`): all primitives in GT2's title and race run on the GE (0 software
   fallbacks); race at the game's full 30 fps in PPSSPP (was ~6 fps with the software rasterizer).
-* **Hi-res 480x272 + 16:9** (ge.c `g_hires`, `g_widescreen`, GTE X*3/4). Known issue: near ground polygons
-  missing at the 16:9 edges (game culls outside 4:3).
+* **Hi-res 480x272 + 16:9** (ge.c `g_hires`, `g_widescreen`, GTE X*3/4, 3D/2D by GTE output tagging);
+  game patches via recomp.py HOOKS (widescreen.c near-plane clipper).
 * Not implemented yet: SPU audio, XA music, MDEC (movies), memory card (reported absent), analog pad,
   15-bit textures / texture windows on the GE (software fallback).
 

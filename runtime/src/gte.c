@@ -16,6 +16,7 @@ enum { RT0, RT1, RT2, RT3, RT4, TRX, TRY, TRZ, L0, L1, L2, L3, L4, RBK, GBK, BBK
        LR0, LR1, LR2, LR3, LR4, RFC, GFC, BFC, OFX, OFY, H, DQA, DQB, ZSF3, ZSF4, FLAG };
 
 static uint32_t g_flag;
+uint32_t g_gte_rtpt, g_gte_err[32];   /* debug: RTPT count and error-flag histogram */
 static uint8_t g_unr[0x101];
 
 static void unr_init(void)
@@ -174,6 +175,7 @@ static void rtp(PsxCpu *c, int n, int sf, int lm, int last)
     int64_t sy = (int64_t)q * (int16_t)D[IR2] + (int32_t)C[OFY];
     set_mac0(c, sx); set_mac0(c, sy);
     push_sxy(c, sx >> 16, sy >> 16);
+    ge_mark_3d(D[SXY2]);
     if (last) {
         int64_t p = (int64_t)q * (int16_t)C[DQA] + (int32_t)C[DQB];
         set_mac0(c, p);
@@ -236,7 +238,11 @@ void gte_cmd(PsxCpu *c, uint32_t insn)
     g_flag = 0;
     switch (insn & 63) {
     case 0x01: rtp(c, 0, sf, lm, 1); break;                              /* RTPS */
-    case 0x30: rtp(c, 0, sf, lm, 0); rtp(c, 1, sf, lm, 0); rtp(c, 2, sf, lm, 1); break;   /* RTPT */
+    case 0x30:                                                           /* RTPT */
+        rtp(c, 0, sf, lm, 0); rtp(c, 1, sf, lm, 0); rtp(c, 2, sf, lm, 1);
+        g_gte_rtpt++;
+        if (g_flag & 0x7F87E000u) for (int b = 12; b < 31; b++) if (g_flag & (1u << b)) g_gte_err[b]++;
+        break;
     case 0x06: {                                                         /* NCLIP */
         int64_t x0 = lo16(D[SXY0]), y0 = hi16(D[SXY0]), x1 = lo16(D[SXY1]), y1 = hi16(D[SXY1]);
         int64_t x2 = lo16(D[SXY2]), y2 = hi16(D[SXY2]);
@@ -422,4 +428,22 @@ void gte_write_ctrl(PsxCpu *c, int reg, uint32_t v)
         if (v & 0x7F87E000u) v |= 0x80000000u;
     }
     C[reg] = v;
+}
+
+/* For the widescreen near-plane clipper: model -> view space with the current rotation/translation (sf = 1),
+ * and the projection parameters (H, OFX/OFY in 16.16). */
+void gte_view_space(PsxCpu *c, int x, int y, int z, int32_t out[3])
+{
+    for (int i = 0; i < 3; i++) {
+        int64_t m = ((int64_t)(int32_t)C[TRX + i] << 12) + (int64_t)mat(c, RT0, i, 0) * x +
+                    (int64_t)mat(c, RT0, i, 1) * y + (int64_t)mat(c, RT0, i, 2) * z;
+        out[i] = (int32_t)(m >> 12);
+    }
+}
+
+void gte_screen_params(PsxCpu *c, int32_t *h, int32_t *ofx, int32_t *ofy)
+{
+    *h = (int32_t)(C[H] & 0xFFFF);
+    *ofx = (int32_t)C[OFX];
+    *ofy = (int32_t)C[OFY];
 }

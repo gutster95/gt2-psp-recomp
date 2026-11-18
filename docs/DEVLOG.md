@@ -221,3 +221,14 @@ Step 1 done:
 * Known issue: near ground polygons at the 16:9 edges are missing (black steps): the game discards polygons
   that lie outside the 4:3 screen. The cull/subdivision code still has to be found and widened.
 * PPSSPP (software GE) cost: ~45 instead of 60 lists per 120 vblanks in the race; real PSP numbers pending.
+
+## 2026-11-18 - 16:9 without missing geometry
+
+* First approach (3D X * 3/4, PS1 frame mapped 4:3 into the centre) lost near ground at the 16:9 edges: the edge
+  areas were outside PS1 x 0..320 and the game culls in screen space in many places.
+* Measured with a GTE error histogram: ~12% of RTPTs fail (vertex near/behind camera); 90% of them in overlay 0's
+  scenery renderer 0x80018d1c. Added a recompiler patch mechanism and a near-plane clipper for its 8 loops - it
+  works (~900 polygons recovered per minute) but was not the cause of the black edges.
+* Fix: keep X * 3/4 but stretch 3D over the full width in the hi-res pass, so 16:9 = PS1 0..320 and every game
+  visibility test is right. 2D/3D are told apart by tagging GTE output coordinates. Result:
+  `build/milestone5-widescreen-race.png` - full 16:9, no gaps, HUD undistorted.

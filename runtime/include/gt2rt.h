@@ -187,6 +187,10 @@ extern uint32_t g_trace_pos;
 /* ---- interrupt polling ----------------------------------------------------------------------------------- */
 
 /* Emitted at every backward branch: lets the runtime deliver interrupts inside busy-wait loops. */
+/* Game patches called from generated code (recomp.py HOOKS/OVERRIDE) */
+extern int g_widescreen;
+void wide_clip_track(PsxCpu *c, int kind, uint32_t entry, uint32_t pkt, uint32_t ot);
+
 extern int32_t g_poll_budget;
 void rt_poll(PsxCpu *c);
 #define POLL(c) do { if (--g_poll_budget < 0) rt_poll(c); } while (0)

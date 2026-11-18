@@ -39,6 +39,28 @@ WRAP = {
 }
 
 
+# Game-specific patches (see docs/ARCHITECTURE.md, "Widescreen"):
+# HOOKS: C code inserted before the instruction at (module, address); OVERRIDE: C code replacing an instruction.
+# Overlay 0, 0x80018d40: track/scenery renderer with prebuilt GPU packets, 8 loops (F3 F4 G3 G4 FT3 FT4 GT3 GT4).
+# Each loop discards a polygon when the GTE flags an error (vertex too close to / behind the camera); with
+# widescreen the hook passes it to the runtime's near-plane clipper instead.
+_TRACK_LOOPS = [  # kind, bltz address, flag reg, entry reg, packet reg, mask lui address
+    (0, 0x80018E90, 3, 10, 5, 0x80018E24),
+    (1, 0x80018FB8, 7, 9, 8, 0x80018F18),
+    (2, 0x80019098, 3, 9, 5, 0x8001902C),
+    (3, 0x800191BC, 7, 9, 8, 0x8001911C),
+    (4, 0x8001929C, 3, 9, 5, 0x80019230),
+    (5, 0x800193C8, 7, 9, 8, 0x80019328),
+    (6, 0x800194BC, 3, 10, 5, 0x80019450),
+    (7, 0x800195EC, 7, 9, 8, 0x8001954C),
+]
+HOOKS: dict[tuple[str, int], str] = {}
+OVERRIDE: dict[tuple[str, int], str] = {}
+for _k, _b, _f, _e, _p, _m in _TRACK_LOOPS:
+    HOOKS[("ovl0", _b)] = (f"if ((int32_t)c->r[{_f}] < 0 && g_widescreen) "
+                           f"wide_clip_track(c, {_k}, c->r[{_e}], c->r[{_p}], c->r[14]);")
+
+
 def sym(mod: str, addr: int) -> str:
     if mod == "resident":
         return f"f_{addr:08x}"
@@ -82,6 +104,9 @@ class Translator:
     # --- per instruction --------------------------------------------------------------------------------
     def simple(self, ins: Insn) -> str:
         """C statement for a non-control-flow instruction."""
+        ov = OVERRIDE.get((getattr(self, "cur_mod", ""), ins.pc))
+        if ov is not None:
+            return ov
         op, rs, rt, rd, sa, imm = ins.op, ins.rs, ins.rt, ins.rd, ins.sa, ins.imm
         s_, t_ = R(rs), R(rt)
         u16 = imm & 0xFFFF
@@ -250,11 +275,15 @@ class Translator:
             if ins.kind in (K_BRANCH, K_JUMP) and ins.target is not None and start <= ins.target < end:
                 targets.add(ins.target)
         out = [f"void {name}(PsxCpu *c)", "{", f"    TRACE(0x{start:08x}u);"]
+        self.cur_mod = m.name
         pc = start
         while pc < end:
             ins = insns[pc]
             if pc in targets:
                 out.append(f"L_{pc:08x}:;")
+            hook = HOOKS.get((m.name, pc))
+            if hook:
+                out.append(f"    {hook}")
             self.stats.insns += 1
             if not ins.has_delay_slot:
                 st = self.simple(ins)

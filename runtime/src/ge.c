@@ -295,8 +295,10 @@ static void setup_texture(int depth, int page, uint32_t clut)
  * A "frame" is a PS1 framebuffer region that has been displayed (display start + size). Primitives whose drawing
  * area lies in a frame are drawn twice: into the PS1 VRAM (exact 1x image for readback and render-to-texture) and,
  * mapped to PSP resolution, into one of the two PSP display buffers. Presenting a frame is then just a flip.
- * Mapping: the 4:3 PS1 picture covers the centre 363x272; with the widescreen GTE hack (gte.c: projected X * 3/4)
- * 3D geometry continues into the 480-pixel width, 2D (HUD, menus) stays 4:3 in the centre. */
+ * Mapping: 2D primitives (HUD, menus) keep the 4:3 picture in the centre 363x272. With widescreen, the GTE hack
+ * (gte.c: projected X * 3/4) squeezes the whole 16:9 field of view into the PS1 screen width, so every visibility
+ * test of the game (all in PS1 screen space) covers 16:9; 3D primitives - recognised by vertices the GTE produced
+ * in the last frames - are then stretched over the full 480 pixels. */
 
 int g_hires = 1, g_widescreen = 1;
 
@@ -307,6 +309,38 @@ typedef struct { uint16_t u, v; uint32_t c; float x, y, z; } HVtx;
 #define HFMT (GU_TEXTURE_16BIT | GU_COLOR_8888 | GU_VERTEX_32BITF | GU_TRANSFORM_2D)
 
 static inline float map_x(const Frame *f, float x) { return 240.0f + (x - f->x - f->w * 0.5f) * (363.0f / f->w); }
+static inline float map_x3(const Frame *f, float x) { return (x - f->x) * (480.0f / f->w); }
+
+/* Recently GTE-projected screen coordinates (hash set, entries expire after a few vblanks) */
+#define XYSET 8192
+static uint32_t g_xy_key[XYSET];
+static uint16_t g_xy_stamp[XYSET];
+static inline uint16_t xy_now(void) { return (uint16_t)(g_vblank_count >> 1); }
+static inline uint32_t xy_hash(uint32_t k) { return (k * 0x9E3779B1u) >> 19; }
+
+void ge_mark_3d(uint32_t xy)
+{
+    if (!g_widescreen || !g_hires) return;
+    uint16_t now = xy_now();
+    uint32_t h = xy_hash(xy);
+    for (int i = 0; i < 8; i++) {
+        uint32_t j = (h + i) & (XYSET - 1);
+        if (g_xy_key[j] == xy || (uint16_t)(now - g_xy_stamp[j]) > 3) { g_xy_key[j] = xy; g_xy_stamp[j] = now; return; }
+    }
+    g_xy_key[h] = xy;
+    g_xy_stamp[h] = now;
+}
+
+static int is_3d_xy(uint32_t xy)
+{
+    uint16_t now = xy_now();
+    uint32_t h = xy_hash(xy);
+    for (int i = 0; i < 8; i++) {
+        uint32_t j = (h + i) & (XYSET - 1);
+        if (g_xy_key[j] == xy && (uint16_t)(now - g_xy_stamp[j]) <= 3) return 1;
+    }
+    return 0;
+}
 static inline float map_y(const Frame *f, float y) { return (y - f->y) * (272.0f / f->h); }
 
 static void bind(int target)
@@ -331,13 +365,11 @@ static int frame_of(int x, int y)
 static int clampi(int v, int lo, int hi) { return v < lo ? lo : v > hi ? hi : v; }
 
 /* scissor in the hi-res buffer for the current drawing area */
-static void hires_scissor(const Frame *f)
+static void hires_scissor(const Frame *f, int is3d)
 {
-    int full = g_rs.clip_x0 <= f->x && g_rs.clip_y0 <= f->y && g_rs.clip_x1 >= f->x + f->w - 1 &&
-               g_rs.clip_y1 >= f->y + f->h - 1;
-    if (full && g_widescreen) { set_scissor(0, 0, 479, 271); return; }
-    int x0 = clampi((int)(map_x(f, (float)g_rs.clip_x0) + 0.5f), 0, 479);
-    int x1 = clampi((int)(map_x(f, (float)g_rs.clip_x1 + 1) + 0.5f) - 1, 0, 479);
+    float (*mx)(const Frame *, float) = is3d ? map_x3 : map_x;
+    int x0 = clampi((int)(mx(f, (float)g_rs.clip_x0) + 0.5f), 0, 479);
+    int x1 = clampi((int)(mx(f, (float)g_rs.clip_x1 + 1) + 0.5f) - 1, 0, 479);
     int y0 = clampi((int)(map_y(f, (float)g_rs.clip_y0) + 0.5f), 0, 271);
     int y1 = clampi((int)(map_y(f, (float)g_rs.clip_y1 + 1) + 0.5f) - 1, 0, 271);
     set_scissor(x0, y0, x1, y1);
@@ -393,7 +425,7 @@ static void passes(int prim, int fmt, int n, const void *gv, int tex, int semi, 
 }
 
 /* vis1: visible in the PS1 drawing area; fk: hi-res frame or -1 */
-static void draw(int prim, int n, const GeVtx *v, int tex, int semi, int mode, int vis1, int fk)
+static void draw(int prim, int n, const GeVtx *v, int tex, int semi, int mode, int vis1, int fk, int is3d)
 {
     set_mask();
     set_dither();
@@ -407,13 +439,13 @@ static void draw(int prim, int n, const GeVtx *v, int tex, int semi, int mode, i
     if (fk >= 0) {
         const Frame *f = &g_frames[fk];
         bind(fk);
-        hires_scissor(f);
+        hires_scissor(f, is3d);
         HVtx *hv = sceGuGetMemory(n * (int)sizeof(HVtx));
         for (int i = 0; i < n; i++) {
             hv[i].u = v[i].u;
             hv[i].v = v[i].v;
             hv[i].c = v[i].c;
-            hv[i].x = map_x(f, v[i].x);
+            hv[i].x = is3d ? map_x3(f, v[i].x) : map_x(f, v[i].x);
             hv[i].y = map_y(f, v[i].y);
             hv[i].z = 0;
         }
@@ -444,15 +476,13 @@ static void mirror(int x, int y, int w, int h);
 
 /* Common tail of all primitives: decide targets, run the software fallback or the GE passes. */
 static void submit(int prim, int n, const GeVtx *v, int *box, int tex, int depth, int page, uint32_t clut, int raw,
-                   int semi, int mode, void (*sw)(const uint32_t *), const uint32_t *w)
+                   int semi, int mode, void (*sw)(const uint32_t *), const uint32_t *w, int is3d)
 {
     if (too_big(box)) return;
     int vis1 = clip_box(box);
+    if (!vis1) return;
     int fk = frame_of(g_rs.clip_x0, g_rs.clip_y0);
-    if (fk >= 0 && !vis1 && !g_widescreen) fk = -1;
-    if (!vis1 && fk < 0) return;
     if (needs_sw(tex, depth) && sw) {
-        if (!vis1) return;
         ge_sync();
         sw(w);
         touch(box[0], box[1], box[2], box[3], 0);
@@ -464,7 +494,7 @@ static void submit(int prim, int n, const GeVtx *v, int *box, int tex, int depth
     if (fk >= 0) prepare_frame(fk);
     if (tex) { setup_texture(depth, page, clut); set_tfx(raw); }
     set_tex(tex);
-    draw(prim, n, v, tex, semi, mode, vis1, fk);
+    draw(prim, n, v, tex, semi, mode, vis1, fk, is3d && g_widescreen);
     if (vis1) touch(box[0], box[1], box[2], box[3], 1);
 }
 
@@ -474,13 +504,14 @@ void ge_polygon(const uint32_t *w)
 {
     uint32_t op = w[0] >> 24;
     int quad = op & 8, tex = (op & 4) != 0, gour = op & 0x10, semi = (op & 2) != 0, raw = op & 1;
-    int n = quad ? 4 : 3, k = 0;
+    int n = quad ? 4 : 3, k = 0, n3d = 0;
     GeVtx v[4];
     uint32_t col = w[k++] & 0xFFFFFF, clut = 0, page = 0;
     int box[4] = {4096, 4096, -4096, -4096};
     for (int i = 0; i < n; i++) {
         if (i > 0 && gour) col = w[k++] & 0xFFFFFF;
         uint32_t xy = w[k++];
+        n3d += is_3d_xy(xy);
         int x = sx11(xy) + g_rs.off_x, y = sx11(xy >> 16) + g_rs.off_y;
         if (x < box[0]) box[0] = x;
         if (y < box[1]) box[1] = y;
@@ -499,7 +530,7 @@ void ge_polygon(const uint32_t *w)
     }
     if (tex) g_rs.texpage = (g_rs.texpage & ~0x9FFu) | (page & 0x9FF);
     int depth = (int)(page >> 7) & 3, mode = (g_rs.texpage >> 5) & 3;
-    submit(GU_TRIANGLE_STRIP, n, v, box, tex, depth, (int)page, clut, raw, semi, mode, raster_polygon, w);
+    submit(GU_TRIANGLE_STRIP, n, v, box, tex, depth, (int)page, clut, raw, semi, mode, raster_polygon, w, n3d >= 2);
 }
 
 void ge_rect(const uint32_t *w)
@@ -529,11 +560,12 @@ void ge_rect(const uint32_t *w)
         {(uint16_t)(u0 + ww), (uint16_t)(v0 + hh), 0xFF000000u | col, (int16_t)(x0 + ww), (int16_t)(y0 + hh), 0, 0},
     };
     submit(GU_SPRITES, 2, v, box, tex, depth, (int)(g_rs.texpage & 0x1F) | (depth << 7), clut, raw, semi, mode,
-           raster_rect, w);
+           raster_rect, w, 0);
 }
 
 void ge_line(int x0, int y0, uint32_t c0, int x1, int y1, uint32_t c1, int semi)
 {
+    uint32_t x0r = (uint32_t)x0, y0r = (uint32_t)y0, x1r = (uint32_t)x1, y1r = (uint32_t)y1;
     x0 = sx11(x0) + g_rs.off_x; y0 = sx11(y0) + g_rs.off_y;
     x1 = sx11(x1) + g_rs.off_x; y1 = sx11(y1) + g_rs.off_y;
     int box[4] = {x0 < x1 ? x0 : x1, y0 < y1 ? y0 : y1, x0 > x1 ? x0 : x1, y0 > y1 ? y0 : y1};
@@ -541,7 +573,8 @@ void ge_line(int x0, int y0, uint32_t c0, int x1, int y1, uint32_t c1, int semi)
         {0, 0, 0xFF000000u | c0, (int16_t)x0, (int16_t)y0, 0, 0},
         {0, 0, 0xFF000000u | c1, (int16_t)x1, (int16_t)y1, 0, 0},
     };
-    submit(GU_LINES, 2, v, box, 0, 0, 0, 0, 0, semi, (g_rs.texpage >> 5) & 3, 0, 0);
+    int n3d = is_3d_xy(((uint32_t)y0r << 16) | (x0r & 0xFFFF)) + is_3d_xy(((uint32_t)y1r << 16) | (x1r & 0xFFFF));
+    submit(GU_LINES, 2, v, box, 0, 0, 0, 0, 0, semi, (g_rs.texpage >> 5) & 3, 0, 0, n3d >= 2);
 }
 
 /* ---- fills, copies, uploads ---------------------------------------------------------------------------------- */

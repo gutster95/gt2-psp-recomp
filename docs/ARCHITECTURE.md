@@ -72,11 +72,17 @@ tools/             (ignored) local toolchain (pspdev inside a project-local WSL 
   * Hi-res + 16:9 (`g_hires`, `g_widescreen`): a displayed PS1 framebuffer region becomes a "frame" bound to
     one of two PSP display buffers. Primitives drawn into a frame are drawn twice: 1x into PS1 VRAM (readback,
     render-to-texture stay exact) and mapped (float through-mode vertices) at 480x272 into the frame's display
-    buffer; presenting a frame is a flip. The 4:3 picture maps to the centre 363x272. Widescreen: gte.c scales
-    projected X by 3/4 so the 4:3 field of view covers 3/4 of the width; frame-wide drawing areas get the full
-    480-pixel scissor; 2D stays 4:3 in the centre; side bands are cleared before the first draw after a flip.
-    Fills/copies/uploads/software-rasterized areas inside a frame are mirrored (scaled blit from 1x VRAM).
-    Frames not drawn in hi-res fall back to the scaled 1x presentation (buffer 2 at 0x188000).
+    buffer; presenting a frame is a flip. Fills/copies/uploads/software-rasterized areas are mirrored.
+  * Widescreen: gte.c scales projected X by 3/4, which squeezes the whole 16:9 field of view into the PS1 screen
+    width. All of the game's visibility tests work in PS1 screen space, so they automatically cover 16:9 - no
+    culling code needs patching (a first attempt kept 4:3 in PS1 space and lost geometry at the edges to dozens of
+    screen-space culls). In the hi-res pass, 3D primitives are stretched over the full 480 pixels, 2D primitives
+    (HUD, menus) are mapped 4:3 into the centre 363 pixels. 3D = at least two vertices equal a screen coordinate
+    the GTE produced within the last few vblanks (hash set fed by RTPS/RTPT, like PGXP-style tagging).
+  * Recompiler patches (`recomp.py` HOOKS/OVERRIDE): C code at specific game addresses. Overlay 0's scenery
+    renderer (0x80018d1c, 8 loops with prebuilt packets) calls `wide_clip_track` (widescreen.c) for polygons the
+    GTE rejects (vertex near/behind the camera): near-plane + guard-band clipping in view space, emitted as
+    triangles into a packet ring in kernel RAM, linked into the same OT slot.
   * The state cache is invalidated at every list start (the GE keeps state across lists); "unknown" must not
     collide with a valid value (blend -1 = opaque caused additive accumulation on the title screen).
   * pspgu keeps its own scissor state and re-sends it: use sceGuScissor (startup check of its width semantics),
