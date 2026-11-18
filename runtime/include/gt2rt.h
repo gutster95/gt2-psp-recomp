@@ -46,6 +46,52 @@ void io_w32(uint32_t a, uint32_t v);
 #define RAM_HIT(p) ((p) < 0x00800000u)
 #define SCR_HIT(p) (((p) & 0xFFFFFC00u) == 0x1F800000u)
 
+#ifdef GT2_SMALL_MEM
+/* Size-optimized accessors: only the RAM check is inline; scratchpad and I/O go through one out-of-line function
+ * each (the PSP's 16 KB instruction cache makes smaller generated code faster). */
+uint32_t mem_slow_r8(uint32_t a);
+uint32_t mem_slow_r16(uint32_t a);
+uint32_t mem_slow_r32(uint32_t a);
+void mem_slow_w8(uint32_t a, uint32_t v);
+void mem_slow_w16(uint32_t a, uint32_t v);
+void mem_slow_w32(uint32_t a, uint32_t v);
+GT2_INLINE uint32_t mem_r8(uint32_t a)
+{
+    uint32_t p = a & 0x1FFFFFFFu;
+    if (__builtin_expect(RAM_HIT(p), 1)) return g_ram[p & (PSX_RAM_SIZE - 1)];
+    return mem_slow_r8(a);
+}
+GT2_INLINE uint32_t mem_r16(uint32_t a)
+{
+    uint32_t p = a & 0x1FFFFFFFu;
+    if (__builtin_expect(RAM_HIT(p), 1)) return *(uint16_t *)(g_ram + (p & (PSX_RAM_SIZE - 1)));
+    return mem_slow_r16(a);
+}
+GT2_INLINE uint32_t mem_r32(uint32_t a)
+{
+    uint32_t p = a & 0x1FFFFFFFu;
+    if (__builtin_expect(RAM_HIT(p), 1)) return *(uint32_t *)(g_ram + (p & (PSX_RAM_SIZE - 1)));
+    return mem_slow_r32(a);
+}
+GT2_INLINE void mem_w8(uint32_t a, uint8_t v)
+{
+    uint32_t p = a & 0x1FFFFFFFu;
+    if (__builtin_expect(RAM_HIT(p), 1)) { g_ram[p & (PSX_RAM_SIZE - 1)] = v; return; }
+    mem_slow_w8(a, v);
+}
+GT2_INLINE void mem_w16(uint32_t a, uint16_t v)
+{
+    uint32_t p = a & 0x1FFFFFFFu;
+    if (__builtin_expect(RAM_HIT(p), 1)) { *(uint16_t *)(g_ram + (p & (PSX_RAM_SIZE - 1))) = v; return; }
+    mem_slow_w16(a, v);
+}
+GT2_INLINE void mem_w32(uint32_t a, uint32_t v)
+{
+    uint32_t p = a & 0x1FFFFFFFu;
+    if (__builtin_expect(RAM_HIT(p), 1)) { *(uint32_t *)(g_ram + (p & (PSX_RAM_SIZE - 1))) = v; return; }
+    mem_slow_w32(a, v);
+}
+#else
 GT2_INLINE uint32_t mem_r8(uint32_t a)
 {
     uint32_t p = a & 0x1FFFFFFFu;
@@ -88,6 +134,8 @@ GT2_INLINE void mem_w32(uint32_t a, uint32_t v)
     if (SCR_HIT(p)) { *(uint32_t *)(g_scratch + (p & 0x3FF)) = v; return; }
     io_w32(a, v);
 }
+
+#endif
 
 /* Unaligned word access (little endian semantics of the R3000A). */
 GT2_INLINE uint32_t op_lwl(uint32_t a, uint32_t rt)

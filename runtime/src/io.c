@@ -222,3 +222,31 @@ uint32_t io_r32(uint32_t a) { return io_read(a, 4); }
 void io_w8(uint32_t a, uint32_t v) { io_write(a, v, 1); }
 void io_w16(uint32_t a, uint32_t v) { io_write(a, v, 2); }
 void io_w32(uint32_t a, uint32_t v) { io_write(a, v, 4); }
+
+/* Out-of-line scratchpad/I/O paths of the size-optimized accessors (gt2rt.h, GT2_SMALL_MEM). */
+uint32_t mem_slow_r8(uint32_t a) { uint32_t p = a & 0x1FFFFFFFu; return SCR_HIT(p) ? g_scratch[p & 0x3FF] : io_r8(a); }
+uint32_t mem_slow_r16(uint32_t a)
+{
+    uint32_t p = a & 0x1FFFFFFFu;
+    return SCR_HIT(p) ? *(uint16_t *)(g_scratch + (p & 0x3FF)) : io_r16(a);
+}
+uint32_t mem_slow_r32(uint32_t a)
+{
+    uint32_t p = a & 0x1FFFFFFFu;
+    return SCR_HIT(p) ? *(uint32_t *)(g_scratch + (p & 0x3FF)) : io_r32(a);
+}
+void mem_slow_w8(uint32_t a, uint32_t v)
+{
+    uint32_t p = a & 0x1FFFFFFFu;
+    if (SCR_HIT(p)) g_scratch[p & 0x3FF] = (uint8_t)v; else io_w8(a, v);
+}
+void mem_slow_w16(uint32_t a, uint32_t v)
+{
+    uint32_t p = a & 0x1FFFFFFFu;
+    if (SCR_HIT(p)) *(uint16_t *)(g_scratch + (p & 0x3FF)) = (uint16_t)v; else io_w16(a, v);
+}
+void mem_slow_w32(uint32_t a, uint32_t v)
+{
+    uint32_t p = a & 0x1FFFFFFFu;
+    if (SCR_HIT(p)) *(uint32_t *)(g_scratch + (p & 0x3FF)) = v; else io_w32(a, v);
+}

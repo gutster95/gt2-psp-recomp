@@ -484,6 +484,7 @@ void ge_mark_3d(uint32_t xy) { ge_mark_3d_precise(xy, 0, 0, 0); }
 
 static int xy_find(uint32_t xy)
 {
+    if (!g_widescreen || !g_hires) return -1;   /* only the hi-res/widescreen mapping needs to know 3D vertices */
     uint16_t now = xy_now();
     uint32_t h = xy_hash(xy);
     for (int i = 0; i < 8; i++) {
