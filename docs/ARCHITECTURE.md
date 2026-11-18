@@ -54,9 +54,23 @@ tools/             (ignored) local toolchain (pspdev inside a project-local WSL 
   PsyQ library code (libcd, libetc, libgpu, libpad, libspu, libcard) running unmodified as recompiled code.
 * Interrupts are delivered at `POLL()` points (every backward branch, budgeted) and run the BIOS chains
   (SysEnqIntRP) and the HookEntryInt hook on a saved copy of the CPU state.
-* GPU: software rasterizer into a 1024x512 VRAM image (exact PS1 VRAM semantics), presented by scaling the
-  display area to the PSP framebuffer. Planned: GE-accelerated rendering of the hot primitive types once the
-  game reaches 3D; the software path remains the reference.
+* GPU (`gpu.c` front end, `ge.c` renderer, `raster.c` software reference):
+  * The PS1 VRAM (1024x512x16) lives at the start of PSP eDRAM. PS1 15-bit pixels are bit-identical to GE 5551,
+    so the GE renders directly into the PS1 VRAM image and the CPU uses the same memory (uncached mirror) for
+    uploads, readback and software fallbacks. Display buffers follow at 0x100000/0x144000.
+  * Primitives become GE draws in through mode (vertex = VRAM coordinate, offset 2048 allows negatives); drawing
+    area = scissor; PS1 mask bit = GE stencil (5551 alpha); semi-transparency modes = fixed-factor blending;
+    dithering = GE dither matrix; modulation uses the GE colour-doubling bit (tex*col*2/255 ~ tex*col/128).
+  * Textures: 4/8-bit texture pages cannot be sampled in place (row pitch 4096/2048 texels > GE limit 2047), so
+    the GE copies pages (block transfer, part of the command stream) into a 40-slot T4/T8 cache in RAM; per-page
+    version counters (16x2 pages) detect stale copies after CPU or GE writes, which keeps render-to-texture
+    correct. CLUTs are converted by the CPU to 8888 with an alpha code (0 transparent, 0xFF opaque, 0x70 STP);
+    semi-transparent textured primitives are drawn twice (opaque texels, then STP texels blended).
+  * Fills and VRAM copies run on the GE; CPU uploads/readbacks sync the GE first. 15-bit textures and texture
+    windows still use the software rasterizer (after a sync).
+  * Presentation: the GE scales the display area (4:3, 363x272, bilinear) into the back buffer, then flips.
+  * pspgu keeps its own scissor state and re-sends it: use sceGuScissor (startup check of its width semantics),
+    never raw scissor commands.
 * Game data: the PC tool `python -m gt2psp pack <cue>` converts the user's own disc once into `GT2.PAK`
   (never distributed): Form 1 sectors as 2048-byte data, Form 2 (XA music) as 2336 bytes, runs of sectors with
   a shared subheader, padding file FAULTY.PSX dropped (587 MB vs 692 MB). The runtime rebuilds raw sectors on

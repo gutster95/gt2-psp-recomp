@@ -197,3 +197,15 @@ Step 1 done:
   seconds (it drains all pending sectors with interrupts blocked), stalling VSync.
 * CPU clock set to 333 MHz at startup (PSP default is 222 MHz).
 * Verified in PPSSPP: boot -> title -> overlay 0 -> 3D race replay, PSP folder = EBOOT.PBP + GT2.PAK only.
+
+## 2026-11-18 - GE renderer: race replay at full 30 fps
+
+* `runtime/src/ge.c`: PS1 primitives on the PSP GE (design in ARCHITECTURE.md). PS1 VRAM moved into eDRAM.
+* Debugging: nothing reached VRAM at first. A startup self-test (draw sprite, read back) showed that raw
+  scissor commands were overridden by pspgu's own scissor state; sceGuScissor (width/height semantics in this
+  pspsdk, verified by the self-test) fixed it.
+* PPSSPP's hardware renderers keep GE output on the host GPU (no write-back to emulated VRAM), so VRAM dumps
+  were black and texture copies from rendered areas would fail there. Tests now use PPSSPP's software renderer.
+* 640-wide display modes are presented in 256-texel strips (GE texture width limit 512).
+* Result (PPSSPP, hardware renderer): race replay 60 display lists per 120 vblanks = the game's 30 fps,
+  title 60 fps; 0 software fallbacks, 38 texture page copies in total. Screens: `build/milestone3-ge-race.png`.

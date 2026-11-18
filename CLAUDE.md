@@ -24,6 +24,7 @@ src/gt2psp/          Python tooling (run: python -m gt2psp ... with src on PYTHO
   recomp.py          MIPS -> C translator
   __main__.py        CLI: extract, hash, disasm, analyze, functions, recomp
 runtime/             PSP runtime (C): include/gt2rt.h (interface for generated code), src/*.c
+  src/ge.c           GE renderer (PS1 VRAM in eDRAM, texture page cache, presentation)
   src/core.c         dispatcher, setjmp/longjmp unwind & resume, overlay hook, IRQ delivery, watchdog
   src/bios.c io.c cdrom.c sio.c gpu.c raster.c gte.c log.c files.c main.c
 scripts/             wsl-setup.sh, build.sh, run-ppsspp.ps1, compile-generated.sh, vram2png.py
@@ -54,17 +55,20 @@ PowerShell `Set-Content -Encoding utf8` writes a BOM. CMake globs: build.sh re-r
 ## Status (2026-11-18)
 
 * Toolchain: WSL2 distro `GT2PSPDev` (`tools/wsl`), pspdev in `/opt/pspdev`, psp-gcc 15.2. PPSSPP 1.20.4
-  portable in `tools/ppsspp` (memstick inside, no `installed.txt`).
-* **Milestone 1 reached**: legal notice and title screen render (`build/milestone1-title.png`).
-* **Beyond**: GTE implemented; with `input.txt` (start/cross) the game enters overlay 0 and renders the 3D
-  attract-mode race replay (`build/milestone2-race-replay.png`). ~6 fps: rasterizer 72 %, game code ~46 ms/frame.
-* Not implemented yet: SPU audio, XA music, MDEC (movies), memory card (reported absent), GE rendering,
-  analog pad / DualShock, real-time pacing (game runs in slow motion when frames take too long).
+  portable in `tools/ppsspp` (memstick inside, no `installed.txt`). **PPSSPP must use its software renderer**
+  (`SoftwareRenderer = True` in `memstick/PSP/SYSTEM/ppsspp.ini`): the hardware renderers do not write GE output
+  back to emulated VRAM, which the port relies on (texture page copies, CPU readback). Real PSP: no issue.
+* Milestone 1 (title screen) reached; 3D attract-mode race replay renders.
+* **Data pack**: PSP folder = `EBOOT.PBP` + `GT2.PAK` (converted on the PC); no disc image.
+* **GE renderer** (`runtime/src/ge.c`): all primitives in GT2's title and race run on the GE (0 software
+  fallbacks); race at the game's full 30 fps in PPSSPP (was ~6 fps with the software rasterizer).
+* Not implemented yet: SPU audio, XA music, MDEC (movies), memory card (reported absent), analog pad,
+  15-bit textures / texture windows on the GE (software fallback).
 
 ## Next steps
 
-1. GE renderer: draw PS1 primitives with the PSP GE (keep the software rasterizer as reference/fallback;
-   PS1 VRAM image must stay coherent for CPU readback, VRAM copies and texture uploads).
-2. Speed up generated code (registers in locals, sp-relative fast memory path, POLL budget) — see DEVLOG.
-3. SPU emulation + PSP audio; XA-ADPCM decoding of MUSIC.DAT streams (cdrom.c filters them now).
-4. MDEC for movies; memory card file on the memory stick; DualShock analog for steering.
+1. Test on the PSP-3000 (user, manually) and fix what differs from PPSSPP.
+2. Replace the CD-controller adapter by a libcd-level read path (no CD timing at all); speed up generated code.
+3. SPU emulation + PSP audio; XA-ADPCM of MUSIC.DAT pre-converted on the PC.
+4. MDEC movies pre-converted on the PC; saves as memory stick files; DualShock analog for steering.
+5. Texture replacement / graphics options on top of the GE texture cache.

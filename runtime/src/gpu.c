@@ -1,5 +1,6 @@
 /* PS1 GPU front end: command parsing, VRAM transfers, display registers, presentation.
- * Primitive rasterisation (to be mapped onto the PSP GE) is not implemented yet; primitives are counted. */
+ * Primitives go to the GE renderer (ge.c); the software rasterizer (raster.c) is the fallback and reference.
+ * The PS1 VRAM lives in PSP eDRAM (see ge.c); g_vram is its uncached CPU mirror. */
 #include <malloc.h>
 #include <stdio.h>
 #include <string.h>
@@ -8,6 +9,7 @@
 #include "rt.h"
 #include "gpu.h"
 #include "raster.h"
+#include "ge.h"
 
 uint16_t *g_vram;
 
@@ -28,10 +30,9 @@ static int g_log_prims;
 void gpu_init(void)
 {
     sceDisplaySetMode(0, 480, 272);
-    memset((void *)0x44000000u, 0, 512 * 272 * 2);
-    sceDisplaySetFrameBuf((void *)0x04000000, 512, PSP_DISPLAY_PIXEL_FORMAT_5551, PSP_DISPLAY_SETBUF_NEXTFRAME);
-    g_vram = memalign(64, 1024 * 512 * 2);
-    memset(g_vram, 0, 1024 * 512 * 2);
+    memset((void *)0x44000000u, 0, 0x188000);       /* PS1 VRAM + both display buffers */
+    g_vram = (uint16_t *)0x44000000u;
+    ge_init();
 }
 
 static int cmd_len(uint32_t cmd)
@@ -73,6 +74,9 @@ static void exec(void)
         int x = g_fifo[1] & 0x3F0, y = (g_fifo[1] >> 16) & 0x1FF;
         int w = ((g_fifo[2] & 0x3FF) + 15) & ~15, h = (g_fifo[2] >> 16) & 0x1FF;
         uint16_t col = (uint16_t)(((c >> 3) & 0x1F) | (((c >> 11) & 0x1F) << 5) | (((c >> 19) & 0x1F) << 10));
+        if (ge_fill(x, y, w, h, col)) return;
+        ge_sync();
+        ge_vram_written(x, y, w, h);
         for (int j = 0; j < h; j++)
             for (int i = 0; i < w; i++) g_vram[((y + j) & 511) * 1024 + ((x + i) & 1023)] = col;
         return;
@@ -84,6 +88,8 @@ static void exec(void)
         if (!g_xh) g_xh = 512;
         g_xi = 0;
         g_xfer_dir = (op >> 5) == 5 ? 1 : 2;
+        ge_sync();                              /* the CPU accesses VRAM directly */
+        if (g_xfer_dir == 1) ge_vram_written(g_xx, g_xy, g_xw, g_xh);
         return;
     }
     if ((op >> 5) == 4) {                       /* VRAM copy */
@@ -92,6 +98,9 @@ static void exec(void)
         int w = g_fifo[3] & 0x3FF, h = (g_fifo[3] >> 16) & 0x1FF;
         if (!w) w = 1024;
         if (!h) h = 512;
+        if (ge_copy(sx, sy, dx, dy, w, h)) return;
+        ge_sync();
+        ge_vram_written(dx, dy, w, h);
         for (int j = 0; j < h; j++)
             for (int i = 0; i < w; i++)
                 g_vram[((dy + j) & 511) * 1024 + ((dx + i) & 1023)] = g_vram[((sy + j) & 511) * 1024 + ((sx + i) & 1023)];
@@ -123,6 +132,17 @@ static void exec(void)
             logf_("prim %08x %08x %08x %08x %08x texpage %03x\n", (unsigned)g_fifo[0], (unsigned)g_fifo[1],
                   (unsigned)g_fifo[2], (unsigned)g_fifo[3], (unsigned)g_fifo[4], (unsigned)g_rs.texpage);
         }
+        if (g_use_ge) {
+            if (op < 0x40) ge_polygon(g_fifo);
+            else if (op < 0x60) {
+                int gour = op & 0x10;
+                uint32_t c1 = gour ? g_fifo[2] : c;
+                uint32_t p1 = gour ? g_fifo[3] : g_fifo[2];
+                ge_line((int)(g_fifo[1] & 0xFFFF), (int)(g_fifo[1] >> 16), c & 0xFFFFFF,
+                        (int)(p1 & 0xFFFF), (int)(p1 >> 16), c1 & 0xFFFFFF, (op & 2) != 0);
+            } else ge_rect(g_fifo);
+            return;
+        }
         if (op < 0x40) raster_polygon(g_fifo);
         else if (op < 0x60) {
             int gour = op & 0x10;
@@ -144,7 +164,7 @@ static void polyline_word(uint32_t v)
     if (g_pl_gour && g_pl_expect_col) { g_pl_pending_col = v & 0xFFFFFF; g_pl_expect_col = 0; return; }
     uint32_t col = g_pl_gour ? g_pl_pending_col : g_pl_col;
     if (g_pl_have_xy)
-        raster_line((int)(g_pl_xy & 0xFFFF), (int)(g_pl_xy >> 16), g_pl_col, (int)(v & 0xFFFF), (int)(v >> 16),
+        (g_use_ge ? ge_line : raster_line)((int)(g_pl_xy & 0xFFFF), (int)(g_pl_xy >> 16), g_pl_col, (int)(v & 0xFFFF), (int)(v >> 16),
                     col, (g_fifo[0] >> 25) & 1);
     g_pl_xy = v;
     g_pl_col = col;
@@ -228,10 +248,15 @@ void gpu_present(void)
     static const int hres[4] = {256, 320, 512, 640};
     int w = (g_disp_mode & 0x40) ? 368 : hres[g_disp_mode & 3];
     int h = (g_disp_mode & 0x04) && (g_disp_mode & 0x20) ? 480 : 240;
-    uint16_t *fb = (uint16_t *)(0x44000000u);       /* uncached VRAM, 512-pixel stride */
+    int disabled = g_status & 0x800000u;
+    static int frame;
+    if (g_use_ge) {
+        ge_present((int)g_disp_x, (int)g_disp_y, w, h, disabled);
+        goto stats;
+    }
+    uint16_t *fb = (uint16_t *)(0x44100000u);       /* uncached display buffer 0, 512-pixel stride */
     /* The PS1 picture is 4:3 whatever the resolution: scale it to 363x272, centred (nearest neighbour). */
     const int ow = 363, oh = 272, ox = (480 - ow) / 2;
-    int disabled = g_status & 0x800000u;
     static int xmap[363];
     for (int x = 0; x < ow; x++) xmap[x] = (g_disp_x + x * w / ow) & 1023;
     for (int y = 0; y < oh; y++) {
@@ -242,13 +267,28 @@ void gpu_present(void)
         for (int x = 0; x < ow; x++) dst[ox + x] = src[xmap[x]] | 0x8000;
         memset(dst + ox + ow, 0, (480 - ox - ow) * 2);
     }
-    sceDisplaySetFrameBuf((void *)0x04000000, 512, PSP_DISPLAY_PIXEL_FORMAT_5551, PSP_DISPLAY_SETBUF_NEXTFRAME);
-    static int frame;
-    if (frame == 300 || frame == 900 || frame == 1500) {   /* debug: raw VRAM snapshots */
+    sceDisplaySetFrameBuf((void *)0x04100000, 512, PSP_DISPLAY_PIXEL_FORMAT_5551, PSP_DISPLAY_SETBUF_NEXTFRAME);
+stats:
+    if (frame == 300 || frame == 900 || frame == 2100) {   /* debug: raw VRAM snapshots */
         char path[300];
         snprintf(path, sizeof path, "%svram%d.bin", g_basedir, frame);
+        ge_sync();
         FILE *f = fopen(path, "wb");
         if (f) { fwrite(g_vram, 2, 1024 * 512, f); fclose(f); }
+        if (g_use_ge) {                          /* the PSP screen, as a 512x512 "VRAM" image for vram2png */
+            snprintf(path, sizeof path, "%sscreen%d.bin", g_basedir, frame);
+            f = fopen(path, "wb");
+            if (f) {
+                static uint16_t row[1024];
+                const uint16_t *fb = ge_display_buffer();
+                for (int y = 0; y < 512; y++) {
+                    memset(row, 0, sizeof row);
+                    if (y < 272) memcpy(row, fb + y * 512, 480 * 2);
+                    fwrite(row, 2, 1024, f);
+                }
+                fclose(f);
+            }
+        }
     }
     if (frame == 100 || frame == 1000 || frame == 2000) g_log_prims = 24;
     if (++frame % 120 == 0) {
@@ -258,10 +298,13 @@ void gpu_present(void)
         static uint64_t last_t, last_gpu;
         uint64_t t = now_us();
         uint32_t dt_ms = last_t ? (uint32_t)((t - last_t) / 1000) : 0;
-        logf_("gpu: vblank %d | last 120 vblanks took %u ms (raster %u ms), %u display lists, %u prims | "
+        logf_("gpu: vblank %d | last 120 vblanks took %u ms (display lists %u ms), %u display lists, %u prims | "
               "disp %u,%u mode %02x\n", frame, (unsigned)dt_ms, (unsigned)((g_gpu_us - last_gpu) / 1000),
               (unsigned)(g_gpu_lists - last_lists), (unsigned)(g_prims - last_prims),
               (unsigned)g_disp_x, (unsigned)g_disp_y, (unsigned)g_disp_mode);
+        extern uint32_t g_ge_prims, g_ge_sw_prims, g_ge_tex_uploads, g_ge_syncs;
+        logf_("ge: %u prims, %u software, %u texture page copies, %u syncs (totals)\n", (unsigned)g_ge_prims,
+              (unsigned)g_ge_sw_prims, (unsigned)g_ge_tex_uploads, (unsigned)g_ge_syncs);
         last_lists = g_gpu_lists;
         last_prims = g_prims;
         last_gpu = g_gpu_us;
