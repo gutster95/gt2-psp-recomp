@@ -40,7 +40,7 @@ static void load_settings(void)
     extern int g_hud_anchor, g_near_clip;
     static const struct { const char *name; int *var; } opts[] = {
         {"widescreen", &g_widescreen}, {"hires", &g_hires}, {"pgxp", &g_pgxp}, {"filter", &g_tex_filter},
-        {"hud_anchor", &g_hud_anchor}, {"near_clip", &g_near_clip}, {"fps60", &g_fps60},
+        {"hud_anchor", &g_hud_anchor}, {"near_clip", &g_near_clip},
     };
     char path[300], line[64];
     snprintf(path, sizeof path, "%ssettings.txt", g_basedir);

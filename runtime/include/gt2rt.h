@@ -224,7 +224,7 @@ extern uint32_t g_trace_pos;
 
 /* Emitted at every backward branch: lets the runtime deliver interrupts inside busy-wait loops. */
 /* Game patches called from generated code (recomp.py HOOKS/OVERRIDE) */
-extern int g_widescreen, g_fps60;
+extern int g_widescreen;
 void wide_clip_track(PsxCpu *c, int kind, uint32_t entry, uint32_t pkt, uint32_t ot);
 
 extern int32_t g_poll_budget;
