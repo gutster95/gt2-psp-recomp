@@ -67,12 +67,12 @@ static void vram_put(uint16_t px)
     g_xi++;
 }
 
-static void exec(void)
+static void exec(const uint32_t *f)
 {
-    uint32_t c = g_fifo[0], op = c >> 24;
+    uint32_t c = f[0], op = c >> 24;
     if (op == 0x02) {                           /* fill rectangle */
-        int x = g_fifo[1] & 0x3F0, y = (g_fifo[1] >> 16) & 0x1FF;
-        int w = ((g_fifo[2] & 0x3FF) + 15) & ~15, h = (g_fifo[2] >> 16) & 0x1FF;
+        int x = f[1] & 0x3F0, y = (f[1] >> 16) & 0x1FF;
+        int w = ((f[2] & 0x3FF) + 15) & ~15, h = (f[2] >> 16) & 0x1FF;
         uint16_t col = (uint16_t)(((c >> 3) & 0x1F) | (((c >> 11) & 0x1F) << 5) | (((c >> 19) & 0x1F) << 10));
         if (ge_fill(x, y, w, h, col)) return;
         ge_sync();
@@ -82,8 +82,8 @@ static void exec(void)
         return;
     }
     if ((op >> 5) == 5 || (op >> 5) == 6) {    /* start VRAM transfer */
-        g_xx = g_fifo[1] & 0x3FF; g_xy = (g_fifo[1] >> 16) & 0x1FF;
-        g_xw = g_fifo[2] & 0x3FF; g_xh = (g_fifo[2] >> 16) & 0x1FF;
+        g_xx = f[1] & 0x3FF; g_xy = (f[1] >> 16) & 0x1FF;
+        g_xw = f[2] & 0x3FF; g_xh = (f[2] >> 16) & 0x1FF;
         if (!g_xw) g_xw = 1024;
         if (!g_xh) g_xh = 512;
         g_xi = 0;
@@ -94,9 +94,9 @@ static void exec(void)
         return;
     }
     if ((op >> 5) == 4) {                       /* VRAM copy */
-        int sx = g_fifo[1] & 0x3FF, sy = (g_fifo[1] >> 16) & 0x1FF;
-        int dx = g_fifo[2] & 0x3FF, dy = (g_fifo[2] >> 16) & 0x1FF;
-        int w = g_fifo[3] & 0x3FF, h = (g_fifo[3] >> 16) & 0x1FF;
+        int sx = f[1] & 0x3FF, sy = (f[1] >> 16) & 0x1FF;
+        int dx = f[2] & 0x3FF, dy = (f[2] >> 16) & 0x1FF;
+        int w = f[3] & 0x3FF, h = (f[3] >> 16) & 0x1FF;
         if (!w) w = 1024;
         if (!h) h = 512;
         ge_note_read(sx, sy, w, h);
@@ -132,28 +132,28 @@ static void exec(void)
         g_prims++;
         if (g_log_prims > 0) {
             g_log_prims--;
-            logf_("prim %08x %08x %08x %08x %08x texpage %03x\n", (unsigned)g_fifo[0], (unsigned)g_fifo[1],
-                  (unsigned)g_fifo[2], (unsigned)g_fifo[3], (unsigned)g_fifo[4], (unsigned)g_rs.texpage);
+            logf_("prim %08x %08x %08x %08x %08x texpage %03x\n", (unsigned)f[0], (unsigned)f[1],
+                  (unsigned)f[2], (unsigned)f[3], (unsigned)f[4], (unsigned)g_rs.texpage);
         }
         if (g_use_ge) {
-            if (op < 0x40) ge_polygon(g_fifo);
+            if (op < 0x40) ge_polygon(f);
             else if (op < 0x60) {
                 int gour = op & 0x10;
-                uint32_t c1 = gour ? g_fifo[2] : c;
-                uint32_t p1 = gour ? g_fifo[3] : g_fifo[2];
-                ge_line((int)(g_fifo[1] & 0xFFFF), (int)(g_fifo[1] >> 16), c & 0xFFFFFF,
+                uint32_t c1 = gour ? f[2] : c;
+                uint32_t p1 = gour ? f[3] : f[2];
+                ge_line((int)(f[1] & 0xFFFF), (int)(f[1] >> 16), c & 0xFFFFFF,
                         (int)(p1 & 0xFFFF), (int)(p1 >> 16), c1 & 0xFFFFFF, (op & 2) != 0);
-            } else ge_rect(g_fifo);
+            } else ge_rect(f);
             return;
         }
-        if (op < 0x40) raster_polygon(g_fifo);
+        if (op < 0x40) raster_polygon(f);
         else if (op < 0x60) {
             int gour = op & 0x10;
-            uint32_t c1 = gour ? g_fifo[2] : c;
-            uint32_t p1 = gour ? g_fifo[3] : g_fifo[2];
-            raster_line((int)(g_fifo[1] & 0xFFFF), (int)(g_fifo[1] >> 16), c & 0xFFFFFF,
+            uint32_t c1 = gour ? f[2] : c;
+            uint32_t p1 = gour ? f[3] : f[2];
+            raster_line((int)(f[1] & 0xFFFF), (int)(f[1] >> 16), c & 0xFFFFFF,
                         (int)(p1 & 0xFFFF), (int)(p1 >> 16), c1 & 0xFFFFFF, (op & 2) != 0);
-        } else raster_rect(g_fifo);
+        } else raster_rect(f);
     }
 }
 
@@ -203,8 +203,22 @@ void gpu_gp0(uint32_t v)
     }
     g_fifo[g_fifo_n++] = v;
     if (g_fifo_n >= g_fifo_need) {
-        exec();
+        exec(g_fifo);
         g_fifo_n = 0;
+    }
+}
+
+/* A whole DMA packet: complete commands are executed straight from PS1 RAM; transfers, polylines and commands
+ * split across packets go word by word through gpu_gp0(). */
+void gpu_packet(const uint32_t *w, uint32_t n)
+{
+    uint32_t i = 0;
+    while (i < n) {
+        if (g_xfer_dir == 1 || g_polyline || g_fifo_n) { gpu_gp0(w[i++]); continue; }
+        int len = cmd_len(w[i]);
+        if (len < 0 || i + (uint32_t)len > n) { gpu_gp0(w[i++]); continue; }
+        exec(&w[i]);
+        i += (uint32_t)len;
     }
 }
 

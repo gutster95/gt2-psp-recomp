@@ -69,8 +69,8 @@ static void dma_run(int ch)
             for (;;) {
                 uint32_t hdr = *(uint32_t *)(g_ram + a);
                 uint32_t n = hdr >> 24;
-                for (uint32_t i = 0; i < n; i++)
-                    gpu_gp0(*(uint32_t *)(g_ram + ((a + 4 + 4 * i) & 0x1FFFFC)));
+                if (a + 4 + 4 * n <= PSX_RAM_SIZE) gpu_packet((const uint32_t *)(g_ram + a + 4), n);
+                else for (uint32_t i = 0; i < n; i++) gpu_gp0(*(uint32_t *)(g_ram + ((a + 4 + 4 * i) & 0x1FFFFC)));
                 if ((hdr & 0x800000) || ++guard > 0x40000) break;
                 a = hdr & 0x1FFFFC;
             }

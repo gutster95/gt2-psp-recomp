@@ -43,6 +43,23 @@ typedef struct { uint16_t u, v; uint32_t c; int16_t x, y, z, pad; } GeVtx;
 static uint32_t g_list[LIST_BYTES / 4] __attribute__((aligned(64)));
 static int g_open, g_shown;
 static int g_last_vtype = -1, g_draws;    /* draw_array state */
+
+/* Hot-path GE commands are written straight into pspgu's current display list (same as sceGuSendCommandi, without
+ * the call). gu_list is pspgu's internal list descriptor {start, current, parent_context}. */
+typedef struct { unsigned int *start, *current; int parent_context; } GuListPriv;
+extern GuListPriv *gu_list;
+static inline void cmd(uint32_t c, uint32_t a) { *gu_list->current++ = (c << 24) | (a & 0xFFFFFF); }
+
+/* Vertex arena (uncached, so the GE sees the data without cache writeback); valid until the next ge_sync. */
+#define VARENA (512 * 1024)
+static uint8_t g_varena[VARENA] __attribute__((aligned(64)));
+static uint32_t g_vtop;
+static inline void *valloc_v(int bytes)
+{
+    void *p = (void *)((uintptr_t)(g_varena + g_vtop) | 0x40000000u);
+    g_vtop += ((uint32_t)bytes + 15) & ~15u;
+    return p;
+}
 static int g_cur_fb = -1;             /* GE draw target: -1 PS1 VRAM, 0/1 hi-res frame buffers, 2 scaled present */
 static int g_scissor_is_width = 1;    /* sceGuScissor(x, y, w, h) semantics, checked at startup */
 uint32_t g_ge_prims, g_ge_sw_prims, g_ge_tex_uploads, g_ge_syncs, g_ge_pgxp;
@@ -106,6 +123,7 @@ void ge_sync(void)
     sceGuFinish();
     sceGuSync(0, 0);
     g_open = 0;
+    g_vtop = 0;
     g_ge_pending = 0;
     g_clut_top = 0;
     g_nclut = 0;
@@ -232,14 +250,14 @@ static void set_filter(int lin)
 {
     if (S.filter == lin) return;
     S.filter = lin;
-    sceGuTexFilter(lin ? GU_LINEAR : GU_NEAREST, lin ? GU_LINEAR : GU_NEAREST);
+    cmd(0xC6, lin ? ((GU_LINEAR << 8) | GU_LINEAR) : ((GU_NEAREST << 8) | GU_NEAREST));
 }
 
 static void set_tex(int on)
 {
     if (S.tex == on) return;
     S.tex = on;
-    if (on) sceGuEnable(GU_TEXTURE_2D); else sceGuDisable(GU_TEXTURE_2D);
+    cmd(0x1E, on ? 1 : 0);
 }
 
 static void set_tfx(int raw)
@@ -247,32 +265,31 @@ static void set_tfx(int raw)
     if (S.tfx == raw) return;
     S.tfx = raw;
     /* GE TEXFUNC: bits 0-2 function, bit 8 alpha from texture, bit 16 colour doubling */
-    sceGuSendCommandi(201, raw ? ((GU_TCC_RGBA << 8) | GU_TFX_REPLACE) : ((1 << 16) | (GU_TCC_RGBA << 8) | GU_TFX_MODULATE));
+    cmd(0xC9, raw ? ((GU_TCC_RGBA << 8) | GU_TFX_REPLACE) : ((1 << 16) | (GU_TCC_RGBA << 8) | GU_TFX_MODULATE));
 }
 
 static void set_blend(int mode)                 /* -1: opaque, 0-3: PS1 semi-transparency mode */
 {
     if (S.blend == mode) return;
     S.blend = mode;
-    if (mode < 0) { sceGuDisable(GU_BLEND); return; }
-    sceGuEnable(GU_BLEND);
-    switch (mode) {
-    case 0: sceGuBlendFunc(GU_ADD, GU_FIX, GU_FIX, 0x808080, 0x808080); break;              /* B/2 + F/2 */
-    case 1: sceGuBlendFunc(GU_ADD, GU_FIX, GU_FIX, 0xFFFFFF, 0xFFFFFF); break;              /* B + F */
-    case 2: sceGuBlendFunc(GU_REVERSE_SUBTRACT, GU_FIX, GU_FIX, 0xFFFFFF, 0xFFFFFF); break; /* B - F */
-    default: sceGuBlendFunc(GU_ADD, GU_FIX, GU_FIX, 0x404040, 0xFFFFFF); break;             /* B + F/4 */
-    }
+    if (mode < 0) { cmd(0x21, 0); return; }
+    cmd(0x21, 1);
+    static const uint32_t fa[4] = {0x808080, 0xFFFFFF, 0xFFFFFF, 0x404040}, fb[4] = {0x808080, 0xFFFFFF, 0xFFFFFF, 0xFFFFFF};
+    /* B/2 + F/2, B + F, B - F, B + F/4 */
+    cmd(0xDF, GU_FIX | (GU_FIX << 4) | ((mode == 2 ? GU_REVERSE_SUBTRACT : GU_ADD) << 8));
+    cmd(0xE0, fa[mode]);
+    cmd(0xE1, fb[mode]);
 }
 
 static void set_atest(int m)                    /* 0 off, 1 texel not transparent, 2 opaque texels, 3 STP texels */
 {
     if (S.atest == m) return;
     S.atest = m;
-    if (m == 0) { sceGuDisable(GU_ALPHA_TEST); return; }
-    sceGuEnable(GU_ALPHA_TEST);
-    if (m == 1) sceGuAlphaFunc(GU_GREATER, 0, 0xFF);
-    else if (m == 2) sceGuAlphaFunc(GU_EQUAL, 0xC0, 0xC0);
-    else sceGuAlphaFunc(GU_EQUAL, 0x40, 0xC0);
+    if (m == 0) { cmd(0x22, 0); return; }
+    cmd(0x22, 1);
+    if (m == 1) cmd(0xDB, GU_GREATER | (0 << 8) | (0xFF << 16));
+    else if (m == 2) cmd(0xDB, GU_EQUAL | (0xC0 << 8) | (0xC0 << 16));
+    else cmd(0xDB, GU_EQUAL | (0x40 << 8) | (0xC0 << 16));
 }
 
 static void set_scissor(int x0, int y0, int x1, int y1)   /* inclusive */
@@ -290,11 +307,11 @@ static void set_mask(void)
     if (S.stencil == code) return;
     S.stencil = code;
     if (g_rs.mask_check) {               /* draw only where the mask bit is clear */
-        sceGuStencilFunc(GU_EQUAL, 0, 0xFF);
-        sceGuStencilOp(GU_KEEP, GU_KEEP, g_rs.mask_set ? GU_INVERT : GU_KEEP);
+        cmd(0xDC, GU_EQUAL | (0 << 8) | (0xFF << 16));
+        cmd(0xDD, GU_KEEP | (GU_KEEP << 8) | ((g_rs.mask_set ? GU_INVERT : GU_KEEP) << 16));
     } else {
-        sceGuStencilFunc(GU_ALWAYS, g_rs.mask_set ? 0xFF : 0, 0xFF);
-        sceGuStencilOp(GU_KEEP, GU_KEEP, GU_REPLACE);
+        cmd(0xDC, GU_ALWAYS | ((g_rs.mask_set ? 0xFF : 0) << 8) | (0xFF << 16));
+        cmd(0xDD, GU_KEEP | (GU_KEEP << 8) | (GU_REPLACE << 16));
     }
 }
 
@@ -303,7 +320,7 @@ static void set_dither(void)
     int d = (g_rs.texpage >> 9) & 1;
     if (S.dither == d) return;
     S.dither = d;
-    if (d) sceGuEnable(GU_DITHER); else sceGuDisable(GU_DITHER);
+    cmd(0x20, d ? 1 : 0);
 }
 
 
@@ -490,10 +507,10 @@ static void draw_array(int prim, int vtype, int n, const void *v)
         sceGuDrawArray(prim, vtype, n, 0, v);
         return;
     }
-    if (vtype != g_last_vtype) { sceGuSendCommandi(18, vtype); g_last_vtype = vtype; }
-    sceGuSendCommandi(16, (int)(((uintptr_t)v >> 8) & 0xF0000));
-    sceGuSendCommandi(1, (int)((uintptr_t)v & 0xFFFFFF));
-    sceGuSendCommandi(4, (prim << 16) | n);
+    if (vtype != g_last_vtype) { cmd(0x12, (uint32_t)vtype); g_last_vtype = vtype; }
+    cmd(0x10, (uint32_t)(((uintptr_t)v >> 8) & 0xF0000));
+    cmd(0x01, (uint32_t)((uintptr_t)v & 0xFFFFFF));
+    cmd(0x04, (uint32_t)((prim << 16) | n));
 }
 
 static void passes(int prim, int fmt, int n, const void *gv, int tex, int semi, int mode)
@@ -526,7 +543,7 @@ static void draw(int prim, int n, const GeVtx *v, int tex, int semi, int mode, i
         bind(-1);
         set_filter(0);
         set_scissor(g_rs.clip_x0, g_rs.clip_y0, g_rs.clip_x1, g_rs.clip_y1);
-        GeVtx *gv = sceGuGetMemory(n * (int)sizeof(GeVtx));
+        GeVtx *gv = valloc_v(n * (int)sizeof(GeVtx));
         memcpy(gv, v, n * sizeof(GeVtx));
         passes(prim, VFMT, n, gv, tex, semi, mode);
     }
@@ -564,7 +581,7 @@ static void draw(int prim, int n, const GeVtx *v, int tex, int semi, int mode, i
         }
         hires_scissor(f, is3d || shift != 0);
         if (is3d && g_pgxp && xyj && prim == GU_TRIANGLE_STRIP) {
-            PVtx *pv = sceGuGetMemory(n * (int)sizeof(PVtx));
+            PVtx *pv = valloc_v(n * (int)sizeof(PVtx));
             int ok = 1;
             for (int i = 0; i < n && ok; i++) {
                 int rx = v[i].x - g_rs.off_x, ry = v[i].y - g_rs.off_y;
@@ -586,7 +603,7 @@ static void draw(int prim, int n, const GeVtx *v, int tex, int semi, int mode, i
                 return;
             }
         }
-        HVtx *hv = sceGuGetMemory(n * (int)sizeof(HVtx));
+        HVtx *hv = valloc_v(n * (int)sizeof(HVtx));
         for (int i = 0; i < n; i++) {
             hv[i].u = v[i].u;
             hv[i].v = v[i].v;
@@ -637,6 +654,7 @@ static void submit(int prim, int n, const GeVtx *v, int *box, int tex, int depth
         if (fk >= 0) mirror(box[0], box[1], box[2] - box[0] + 1, box[3] - box[1] + 1);
         return;
     }
+    if (g_vtop > VARENA - 1024) ge_sync();
     ge_begin();
     if (fk >= 0) prepare_frame(fk);
     int ph = g_phase;
