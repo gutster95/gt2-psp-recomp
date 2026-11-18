@@ -61,6 +61,15 @@ for _k, _b, _f, _e, _p, _m in _TRACK_LOOPS:
                            f"wide_clip_track(c, {_k}, c->r[{_e}], c->r[{_p}], c->r[14]);")
 
 
+# View window of the 3D camera (world-space frustum used for culling), from Silent's (CookiePLMonster) GT2
+# "16:9 Widescreen Hack 2.0" for NTSC-U 1.2: the half-width +-160 (race) / +-60 (rear view mirror) is scaled by
+# 4/3 so objects in the 16:9 side areas are not culled.
+OVERRIDE[("ovl0", 0x800100D0)] = "c->r[5] = c->r[6] + (g_widescreen ? (uint32_t)-213 : (uint32_t)-160);"
+OVERRIDE[("ovl0", 0x800100D4)] = "c->r[6] = c->r[6] + (g_widescreen ? 213u : 160u);"
+OVERRIDE[("ovl0", 0x800295EC)] = "c->r[5] = g_widescreen ? (uint32_t)-80 : (uint32_t)-60;"
+OVERRIDE[("ovl0", 0x800295F0)] = "c->r[6] = g_widescreen ? 80u : 60u;"
+
+
 def sym(mod: str, addr: int) -> str:
     if mod == "resident":
         return f"f_{addr:08x}"

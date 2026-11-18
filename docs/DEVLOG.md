@@ -232,3 +232,14 @@ Step 1 done:
 * Fix: keep X * 3/4 but stretch 3D over the full width in the hi-res pass, so 16:9 = PS1 0..320 and every game
   visibility test is right. 2D/3D are told apart by tagging GTE output coordinates. Result:
   `build/milestone5-widescreen-race.png` - full 16:9, no gaps, HUD undistorted.
+
+## 2026-11-18 - Widescreen: widen the game's view window (world-space culling)
+
+* Research: the established GT2 widescreen fix is Silent's (CookiePLMonster) "16:9 Widescreen Hack 2.0"
+  (DuckStation cheat, github.com/CookiePLMonster/Console-Cheat-Codes, PS1/Gran Turismo 2). It patches the viewport
+  extents the game hands to its view setup, not the projection. For NTSC-U 1.2 race/replay: overlay 0
+  `0x800100D0/D4` `addiu a1/a2, a2, -160/+160` before `jal 0x8007b320`, rear view mirror `0x800295EC/F0` (+-60).
+  Scaled by 4/3 (+-213, +-80) the game's world-space culling covers 16:9.
+* Implemented as recompiler OVERRIDEs (active when `g_widescreen`), on top of the GTE X*3/4 squeeze + 3D stretch.
+  Objects at the 16:9 edges no longer pop in/out. Menu screens (car selection, GT mode) have further viewport
+  values in Silent's cheat - to be ported when those screens are reached.
