@@ -75,10 +75,18 @@ PowerShell `Set-Content -Encoding utf8` writes a BOM. CMake globs: build.sh re-r
 * Not implemented yet: reverb,
   15-bit textures / texture windows on the GE (software fallback).
 
-## Next steps
+## Next steps (as of 2026-11-18 evening)
 
-1. Test on the PSP-3000 (user, manually) and fix what differs from PPSSPP.
-2. Replace the CD-controller adapter by a libcd-level read path (no CD timing at all); speed up generated code.
-3. SPU emulation + PSP audio; XA-ADPCM of MUSIC.DAT pre-converted on the PC.
-4. (done: saves as PSP save data, DualShock analog; no movies on this disc)
-5. Texture replacement / graphics options on top of the GE texture cache.
+Real PSP-3000 status: correct, stable picture (native 1x rendering is the default; widescreen, PGXP and hi-res
+frames are off - they caused the hardware glitches). License tests run at 30 fps, replays ~20-22 fps.
+
+1. **Top priority: 30 fps in races incl. replays.** Measure on the PSP via PSPLink: `bash scripts/psp-run.sh 140`
+   (attract replay, prints `RACE: x fps`; baseline 22.2). Profile build with function trace:
+   `wsl ... bash scripts/build-exp.sh "-Os"`. Generated code must stay small (-Os beat -O2; 16 KB I-cache).
+   Candidates: cache-friendlier generated code, SPU mixer on the Media Engine (8-12% CPU), GPU list path (~12-14%),
+   VFPU for the GTE.
+2. Side quest: an all-unlocked GT2 Simulation NTSC-U save (e.g. GameFAQs .mcr) converted to the port's PSP save
+   data, so everything can be tested; back up the user's save first.
+3. Picture reference: PCSX-Redux (tools/downloads/pcsx-redux-*, OpenBIOS, `build/ref/shots.lua` screenshots every
+   30 vsyncs), never PPSSPP alone. PSPLink: tools/downloads/psplink-3.2.1 + pspsh-windows; `pspsh -e "scrshot ..."`.
+   Ask before taking over the PSP while the user is playing.
