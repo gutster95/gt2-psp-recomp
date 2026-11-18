@@ -115,6 +115,17 @@ tools/             (ignored) local toolchain (pspdev inside a project-local WSL 
   commands into pspgu's list, vertices come from an uncached arena; GPU DMA packets are executed in place.
 * `profile.txt` next to the EBOOT starts the sampling profiler (log every 10 s).
 
+## Real-hardware rendering decision (2026-11-18)
+
+* Default rendering is native 1x: all primitives go into the PS1 VRAM in eDRAM (GE through mode), the displayed
+  area is scaled into PSP buffer 0/1 (double-buffered, blit only when the displayed area changed). Hi-res frames,
+  widescreen (GTE X*3/4) and the perspective-correct pass (GE transform mode) stay optional via settings.txt: GE
+  transform mode drops/distorts geometry on the real PSP, and the hi-res frame bookkeeping was the main source of
+  hardware-only glitches.
+* Picture reference: PCSX-Redux with OpenBIOS and the original disc (Lua screenshots), not PPSSPP - PPSSPP's GE is
+  more forgiving than the hardware (transform-mode culling, cache coherency, display buffer timing).
+* Code size beats instruction count on the Allegrex (16 KB I-cache): generated code is built with -Os.
+
 ## Reference material
 
 * `Recomps/GT2-PC-Port-Mod-Kit-0.4.3.1` (local only, not in this repo): a PC port for disc v1.0 that ships
