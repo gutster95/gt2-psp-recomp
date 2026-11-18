@@ -367,3 +367,19 @@ is a stable 30 fps.
   layout in the 4:3 middle. Race and license HUD still anchored; the dealer car renders correctly.
 * Software fallbacks (15-bit textures, texture windows): 0 in ~10 M primitives over title, map, menus, dealer,
   license test and replay. 24-bit display mode only occurs in the (unused) movie overlay. Nothing to do for now.
+
+## 2026-11-18 - First tests on the real PSP-3000
+
+* Missing on hardware, invisible in PPSSPP: HOME exit callback (now registered); the log lost everything after the
+  first lines on power-off (FAT size only updated on close - the log is reopened every second now); the
+  perspective-correct 3D pass drew nothing (GE transform mode with viewport scale 1 draws 0 pixels on hardware; the
+  startup probe now picks a variant with scale 256); drawing into the still scanned-out display buffer (half-drawn
+  frames, black band streaks - now waits for the swap vblank); unaligned 32-bit stores trap (BMP header);
+  CLUT syncs per primitive on the GT map (palette next to a frame buffer in the same 64x256 page - now bounding box).
+* PSPLink 3.2.1 (tools/downloads) + libusb-win32 driver: scripts/psp-run.sh resets the PSP, starts gt2psp.prx from
+  host0: (= build/psp/PSP/GAME/GT2PSP, the log arrives live) and prints the race frame rate. pspsh `scrshot` takes
+  screenshots. sceKernelExitGame (autoexit setting) left PSPLink unresponsive - do not use with PSPLink.
+* Race speed on hardware (attract replay): 11.5 fps at the start. Game code ~60%, GE preparation ~30%, audio mixer
+  ~20% (separate thread). Steps: generated code with -Os and without trace 12.0; the 1x pass of frame primitives
+  stayed on for the whole session after a stale title frame matched a texture read - reset on display mode change
+  13.3; cached vertex arena with writeback before stall-address updates 13.5.
