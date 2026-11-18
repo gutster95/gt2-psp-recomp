@@ -104,6 +104,17 @@ tools/             (ignored) local toolchain (pspdev inside a project-local WSL 
   faster rates make the libcd interrupt handler loop for seconds with interrupts blocked) and only after the
   game has taken the previous one. Next: replace the read path at the libcd level so no CD timing remains.
 
+## Performance design
+
+* Generated functions keep PS1 registers in C locals (`registers_to_locals` in recomp.py) and write them back only
+  before calls that take the CPU and before returns; memory accessors and GTE transfers are force-inlined
+  (`GT2_INLINE`); PS1 RAM is a static array (constant base address).
+* The GTE command word is a compile-time constant at each call site: `gte_fast.h` inlines RTPS/RTPT/NCLIP/MVMVA so
+  the decoding folds away; all GTE arithmetic uses 32x32->64 multiplies (no libgcc 64-bit helpers).
+* GE: draw calls bypass sceGuDrawArray (kernel stall update every 32 draws only), state changes are raw GE
+  commands into pspgu's list, vertices come from an uncached arena; GPU DMA packets are executed in place.
+* `profile.txt` next to the EBOOT starts the sampling profiler (log every 10 s).
+
 ## Reference material
 
 * `Recomps/GT2-PC-Port-Mod-Kit-0.4.3.1` (local only, not in this repo): a PC port for disc v1.0 that ships

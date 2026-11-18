@@ -49,42 +49,42 @@ void io_w32(uint32_t a, uint32_t v);
 GT2_INLINE uint32_t mem_r8(uint32_t a)
 {
     uint32_t p = a & 0x1FFFFFFFu;
-    if (RAM_HIT(p)) return g_ram[p & (PSX_RAM_SIZE - 1)];
+    if (__builtin_expect(RAM_HIT(p), 1)) return g_ram[p & (PSX_RAM_SIZE - 1)];
     if (SCR_HIT(p)) return g_scratch[p & 0x3FF];
     return io_r8(a);
 }
 GT2_INLINE uint32_t mem_r16(uint32_t a)
 {
     uint32_t p = a & 0x1FFFFFFFu;
-    if (RAM_HIT(p)) return *(uint16_t *)(g_ram + (p & (PSX_RAM_SIZE - 1)));
+    if (__builtin_expect(RAM_HIT(p), 1)) return *(uint16_t *)(g_ram + (p & (PSX_RAM_SIZE - 1)));
     if (SCR_HIT(p)) return *(uint16_t *)(g_scratch + (p & 0x3FF));
     return io_r16(a);
 }
 GT2_INLINE uint32_t mem_r32(uint32_t a)
 {
     uint32_t p = a & 0x1FFFFFFFu;
-    if (RAM_HIT(p)) return *(uint32_t *)(g_ram + (p & (PSX_RAM_SIZE - 1)));
+    if (__builtin_expect(RAM_HIT(p), 1)) return *(uint32_t *)(g_ram + (p & (PSX_RAM_SIZE - 1)));
     if (SCR_HIT(p)) return *(uint32_t *)(g_scratch + (p & 0x3FF));
     return io_r32(a);
 }
 GT2_INLINE void mem_w8(uint32_t a, uint8_t v)
 {
     uint32_t p = a & 0x1FFFFFFFu;
-    if (RAM_HIT(p)) { g_ram[p & (PSX_RAM_SIZE - 1)] = v; return; }
+    if (__builtin_expect(RAM_HIT(p), 1)) { g_ram[p & (PSX_RAM_SIZE - 1)] = v; return; }
     if (SCR_HIT(p)) { g_scratch[p & 0x3FF] = v; return; }
     io_w8(a, v);
 }
 GT2_INLINE void mem_w16(uint32_t a, uint16_t v)
 {
     uint32_t p = a & 0x1FFFFFFFu;
-    if (RAM_HIT(p)) { *(uint16_t *)(g_ram + (p & (PSX_RAM_SIZE - 1))) = v; return; }
+    if (__builtin_expect(RAM_HIT(p), 1)) { *(uint16_t *)(g_ram + (p & (PSX_RAM_SIZE - 1))) = v; return; }
     if (SCR_HIT(p)) { *(uint16_t *)(g_scratch + (p & 0x3FF)) = v; return; }
     io_w16(a, v);
 }
 GT2_INLINE void mem_w32(uint32_t a, uint32_t v)
 {
     uint32_t p = a & 0x1FFFFFFFu;
-    if (RAM_HIT(p)) { *(uint32_t *)(g_ram + (p & (PSX_RAM_SIZE - 1))) = v; return; }
+    if (__builtin_expect(RAM_HIT(p), 1)) { *(uint32_t *)(g_ram + (p & (PSX_RAM_SIZE - 1))) = v; return; }
     if (SCR_HIT(p)) { *(uint32_t *)(g_scratch + (p & 0x3FF)) = v; return; }
     io_w32(a, v);
 }

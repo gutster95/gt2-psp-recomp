@@ -255,3 +255,22 @@ Step 1 done:
 * Black garbage polygons appeared in some frames with the near-plane clipper enabled; it is now off by default.
 * PPSSPP (software GE) speed is the same with and without PGXP/filtering; real PSP numbers still pending.
 * `settings.txt` added for toggling all enhancements without rebuilding.
+
+## 2026-11-18 - Performance round: from ~13 to ~28 fps (PPSSPP, heavy replay scenes)
+
+Measured with a new sampling profiler (prof.c, enabled by profile.txt; 1 kHz thread, runtime phases + hottest
+recompiled functions). Frames per 120 vblanks in the heavy part of the replay (30 fps = 60):
+
+| step | frames/120 vb | finding |
+|------|---------------|---------|
+| baseline | 23-32 | GTE 51%, GE build 26%, game 20% |
+| GTE 32x32 multiplies | 32-45 | 64-bit products/division/float conversion were libgcc calls |
+| direct GE draw cmds, precomputed mappings | 41-47 | sceGuDrawArray calls the kernel (stall update) every draw |
+| forced inlining (mem/GTE regs), restrict, static RAM | 46-51 | mem_r32 was an out-of-line call per access |
+| inline GTE fast paths RTPS/RTPT/NCLIP/MVMVA | 46-59 | ~16k GTE ops per frame; decoding folded at compile time |
+| DMA packets in place, raw GE state cmds, vertex arena | 52-60 | per-word GP0 calls, pspgu call overhead |
+| registers in locals (recompiler) | 50-60 | c->r[] was stored/reloaded around every memory access |
+
+The last step barely shows in PPSSPP (its timing does not model loads/stores) but removes most memory traffic of
+the generated code on real hardware. Remaining profile: game code ~65% (incl. inlined GTE, ~4% VSync wait),
+GE build ~25%, IRQ 3%. Not yet done: TRACE removal in release builds, POLL budget tuning, cheaper hi-res pass.

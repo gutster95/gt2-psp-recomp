@@ -19,6 +19,8 @@ Translation rules (see docs/ARCHITECTURE.md):
 
 from __future__ import annotations
 
+import re
+
 import bisect
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -68,6 +70,77 @@ OVERRIDE[("ovl0", 0x800100D0)] = "c->r[5] = c->r[6] + (g_widescreen ? (uint32_t)
 OVERRIDE[("ovl0", 0x800100D4)] = "c->r[6] = c->r[6] + (g_widescreen ? 213u : 160u);"
 OVERRIDE[("ovl0", 0x800295EC)] = "c->r[5] = g_widescreen ? (uint32_t)-80 : (uint32_t)-60;"
 OVERRIDE[("ovl0", 0x800295F0)] = "c->r[6] = g_widescreen ? 80u : 60u;"
+
+
+# Runtime functions that take the CPU but never touch c->r[] (GTE, coprocessor 0, division, interrupt polling):
+# calls to them need no register write-back (see registers_to_locals).
+_NO_FLUSH = {"POLL", "gte_cmd", "gte_read_data", "gte_write_data", "gte_read_ctrl", "gte_write_ctrl", "op_div",
+             "op_divu", "cop0_read", "cop0_write", "cop0_rfe"}
+_REG = re.compile(r"c->r\[(\d+)\]")
+_WRITE = re.compile(r"c->r\[(\d+)\] = ")
+_CALL = re.compile(r"\b([A-Za-z_]\w*)\(c[,)]")
+
+
+def registers_to_locals(body: list[str]) -> list[str]:
+    """Keep the PS1 registers of one function in C locals.
+
+    The compiler cannot keep c->r[] in machine registers: every memory access has an out-of-line I/O path that
+    might (as far as it knows) modify *c, so it stores and reloads the registers around every load and store. With
+    locals, registers are written back to c->r[] only right before a call that takes the CPU (other recompiled
+    functions, dispatch, BIOS, hooks) or a return, and reloaded after such a call. Interrupt polling needs neither:
+    interrupt handlers save and restore the whole CPU state and do not depend on the interrupted registers.
+    """
+    text = "\n".join(body)
+    used = sorted({int(n) for n in _REG.findall(text)} - {0})
+    if not used:
+        return body
+    written = sorted({int(n) for n in _WRITE.findall(text)} - {0})
+    flush = " ".join(f"c->r[{n}] = r{n};" for n in written)
+    reload = " ".join(f"r{n} = c->r[{n}];" for n in used)
+
+    def wrap_calls(line: str) -> str:
+        out, i = [], 0
+        while True:
+            m = _CALL.search(line, i)
+            if not m:
+                out.append(line[i:])
+                return "".join(out)
+            name = m.group(1)
+            if name in _NO_FLUSH:
+                out.append(line[i:m.end()])
+                i = m.end()
+                continue
+            # find the end of the call expression and its ';'
+            depth, j = 0, m.start(1) + len(name)
+            while j < len(line):
+                if line[j] == "(":
+                    depth += 1
+                elif line[j] == ")":
+                    depth -= 1
+                    if depth == 0:
+                        break
+                j += 1
+            k = j + 1
+            assert line[k:k + 1] == ";", line
+            call = line[m.start():k + 1]
+            rest = line[k + 1:]
+            out.append(line[i:m.start()])
+            if rest.lstrip().startswith("return;"):          # tail call
+                out.append(f"{{ {flush} {call} return; }}")
+                i = k + 1 + rest.index("return;") + len("return;")
+            else:
+                out.append(f"{{ {flush} {call} {reload} }}")
+                i = k + 1
+
+    res = []
+    for line in body:
+        line = wrap_calls(_REG.sub(lambda m: "r" + m.group(1) if m.group(1) != "0" else "0u", line))
+        # remaining plain returns (jr ra): write back first
+        if "return;" in line and "{ " + flush not in line:
+            line = line.replace("return;", f"{{ {flush} return; }}")
+        res.append(line)
+    decl = "    uint32_t " + ", ".join(f"r{n} = c->r[{n}]" for n in used) + ";"
+    return [decl] + res
 
 
 def sym(mod: str, addr: int) -> str:
@@ -354,7 +427,7 @@ class Translator:
             pc += 8
         if falls_through:
             out.append(f"    {self.tail(m.name, end)}")
-        out.append("}")
+        out = out[:3] + registers_to_locals(out[3:]) + ["}"]
         self.stats.funcs += 1
         return "\n".join(out)
 
