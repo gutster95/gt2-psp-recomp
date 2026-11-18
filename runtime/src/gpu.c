@@ -353,11 +353,11 @@ stats:
             fclose(f);
         }
     }
-    if (dumps && (frame >= (dumps_from ? dumps_from : 600) && frame % 150 == 0 && frame <= 9000)) {
+    if (dumps && (frame >= (dumps_from ? (dumps_from < 0 ? -dumps_from : dumps_from) : 600) && frame % (dumps_from < 0 ? 30 : 150) == 0 && frame <= 9000)) {
         char path[300];
         snprintf(path, sizeof path, "%svram%d.bin", g_basedir, frame);
         ge_sync();
-        FILE *f = dumps_from ? 0 : fopen(path, "wb");
+        FILE *f = dumps_from > 0 ? 0 : fopen(path, "wb");   /* negative start frame: VRAM dumps too */
         if (f) { fwrite(g_vram, 2, 1024 * 512, f); fclose(f); }
         if (g_use_ge) {                          /* the PSP screen, as a 512x512 "VRAM" image for vram2png */
             snprintf(path, sizeof path, "%sscreen%d.bin", g_basedir, frame);

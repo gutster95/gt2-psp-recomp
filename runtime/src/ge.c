@@ -416,6 +416,7 @@ static int g_frame_gen;   /* bumped whenever a frame's mapping changes */
 /* Displayed frames are drawn into PS1 VRAM (1x) as well only once the game reads them (as a texture, by a VRAM
  * copy or a CPU readback); until then the 1x pass of frame primitives is skipped - about half the GE work. */
 int g_frames_read;
+int g_frames_forced;   /* settings.txt frames1x=1: always draw frame primitives into PS1 VRAM too (debug) */
 
 void ge_note_read(int x, int y, int w, int h)
 {
@@ -611,7 +612,7 @@ static void draw(int prim, int n, const GeVtx *v, int tex, int semi, int mode, i
 {
     set_mask();
     set_dither();
-    if (vis1 && (fk < 0 || g_frames_read)) {
+    if (vis1 && (fk < 0 || g_frames_read || g_frames_forced)) {
         bind(-1);
         set_filter(0);
         set_scissor(g_rs.clip_x0, g_rs.clip_y0, g_rs.clip_x1, g_rs.clip_y1);

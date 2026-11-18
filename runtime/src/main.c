@@ -39,10 +39,10 @@ static int load_exe(void)
 /* Optional settings.txt next to the EBOOT, lines "name=0|1": widescreen, hires, pgxp, filter, hud_anchor. */
 static void load_settings(void)
 {
-    extern int g_hud_anchor, g_near_clip, g_pad_analog, g_audio, g_autoexit;
+    extern int g_hud_anchor, g_near_clip, g_pad_analog, g_audio, g_autoexit, g_frames_forced;
     static const struct { const char *name; int *var; } opts[] = {
         {"widescreen", &g_widescreen}, {"hires", &g_hires}, {"pgxp", &g_pgxp}, {"filter", &g_tex_filter},
-        {"hud_anchor", &g_hud_anchor}, {"near_clip", &g_near_clip}, {"analog", &g_pad_analog}, {"audio", &g_audio}, {"autoexit", &g_autoexit},
+        {"hud_anchor", &g_hud_anchor}, {"near_clip", &g_near_clip}, {"analog", &g_pad_analog}, {"audio", &g_audio}, {"autoexit", &g_autoexit}, {"frames1x", &g_frames_forced}, {"ge", &g_use_ge},
     };
     char path[300], line[64];
     snprintf(path, sizeof path, "%ssettings.txt", g_basedir);
