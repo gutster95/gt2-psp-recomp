@@ -1,17 +1,13 @@
-# Stage the EBOOT + user's game files into PPSSPP's portable memstick, run for N seconds, screenshot, show log.
+# Stage the EBOOT + converted game data into PPSSPP's portable memstick, run for N seconds, screenshot, show log.
+# Needs build\gt2psp\EBOOT.PBP (scripts/build.sh) and build\GT2.PAK (python -m gt2psp pack <cue>).
 param([int]$Seconds = 15, [string]$Shot = "")
 $proj = Split-Path -Parent $PSScriptRoot
 $g = Join-Path $proj "tools\ppsspp\memstick\PSP\GAME\GT2PSP"
 New-Item -ItemType Directory -Force $g | Out-Null
 Copy-Item (Join-Path $proj "build\gt2psp\EBOOT.PBP") $g
-foreach ($f in "SCUS_944.88", "GT2.OVL", "SYSTEM.CNF") {
-    if (-not (Test-Path "$g\$f")) { Copy-Item (Join-Path $proj "extracted\files\$f") $g }
-}
-if (-not (Test-Path "$g\GT2.VOL")) {
-    New-Item -ItemType HardLink -Path "$g\GT2.VOL" -Target (Join-Path $proj "extracted\files\GT2.VOL") | Out-Null
-}
-if (-not (Test-Path "$g\MUSIC.DAT")) {
-    New-Item -ItemType HardLink -Path "$g\MUSIC.DAT" -Target (Join-Path $proj "extracted\files\MUSIC.DAT") | Out-Null
+Remove-Item "$g\SCUS_944.88" -ErrorAction SilentlyContinue
+if (-not (Test-Path "$g\GT2.PAK")) {
+    New-Item -ItemType HardLink -Path "$g\GT2.PAK" -Target (Join-Path $proj "build\GT2.PAK") | Out-Null
 }
 Remove-Item "$g\gt2log.txt" -ErrorAction SilentlyContinue
 $p = Start-Process (Join-Path $proj "tools\ppsspp\PPSSPPWindows64.exe") -ArgumentList "`"$g\EBOOT.PBP`"" -PassThru

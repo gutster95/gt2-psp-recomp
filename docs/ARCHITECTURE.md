@@ -57,7 +57,14 @@ tools/             (ignored) local toolchain (pspdev inside a project-local WSL 
 * GPU: software rasterizer into a 1024x512 VRAM image (exact PS1 VRAM semantics), presented by scaling the
   display area to the PSP framebuffer. Planned: GE-accelerated rendering of the hot primitive types once the
   game reaches 3D; the software path remains the reference.
-* Game data comes from the user's own disc image `GT2.BIN` next to the EBOOT (never distributed).
+* Game data: the PC tool `python -m gt2psp pack <cue>` converts the user's own disc once into `GT2.PAK`
+  (never distributed): Form 1 sectors as 2048-byte data, Form 2 (XA music) as 2336 bytes, runs of sectors with
+  a shared subheader, padding file FAULTY.PSX dropped (587 MB vs 692 MB). The runtime rebuilds raw sectors on
+  demand (128 KB read-ahead with sceIo) and loads SCUS_944.88 from the pack, so the PSP folder is just
+  `EBOOT.PBP` + `GT2.PAK`. The CD controller interface stays as the adapter between game and pack for now
+  (GT2's own CD layer is driven by libcd interrupts); data sectors come every 1.5 ms (~4x the 2x drive rate;
+  faster rates make the libcd interrupt handler loop for seconds with interrupts blocked) and only after the
+  game has taken the previous one. Next: replace the read path at the libcd level so no CD timing remains.
 
 ## Reference material
 

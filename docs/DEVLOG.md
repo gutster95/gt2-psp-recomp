@@ -179,3 +179,21 @@ The emulated vblank clock advances from `POLL()`, so the game runs in slow motio
 Conclusion: a GE-based renderer is the top priority for speed; the recompiled code itself also needs work
 (target < 33 ms) — candidates: keep CPU registers in locals instead of `c->r[]`, cheaper memory access for
 known-RAM bases (sp/gp), fewer POLL checks, `-O3`/profile-guided hot paths.
+
+## 2026-11-18 - Direction: native port; data pack GT2.PAK replaces the disc image
+
+User feedback: shipping the raw disc image next to the EBOOT and emulating PS1 hardware is not acceptable - the
+goal is a native port where the PC converts code and assets once and the PSP (target: PSP-3000) just runs it.
+Plan: (1) data pack instead of BIN, (2) GE renderer with PSP-native textures, (3) native audio with music
+pre-converted on the PC, (4) movies pre-converted, (5) saves as memory stick files.
+
+Step 1 done:
+* `src/gt2psp/pack.py`, `python -m gt2psp pack <cue>` -> `build/GT2.PAK` (12 runs, 587 MB).
+* `cdrom.c` reads from the pack (sceIo, 128 KB read-ahead); `main.c` loads SCUS_944.88 from the pack (LBA 24).
+* Bug found on the way: a newly delivered sector emptied the data FIFO while CdGetSector (`8008a488`) was waiting
+  for it (BFRD written, then polling status bit 6) -> endless loop inside the CD interrupt. Sector buffer and
+  data FIFO are now separate as on hardware; the FIFO is only loaded by BFRD.
+* Data sectors every 1.5 ms instead of 6.7 ms. 100 us worked but kept the libcd interrupt handler busy for
+  seconds (it drains all pending sectors with interrupts blocked), stalling VSync.
+* CPU clock set to 333 MHz at startup (PSP default is 222 MHz).
+* Verified in PPSSPP: boot -> title -> overlay 0 -> 3D race replay, PSP folder = EBOOT.PBP + GT2.PAK only.

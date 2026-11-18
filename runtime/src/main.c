@@ -1,8 +1,10 @@
 /* GT2 PSP runtime entry point. */
 #include <malloc.h>
+#include <stdlib.h>
 #include <string.h>
 #include <pspkernel.h>
 #include <pspdebug.h>
+#include <psppower.h>
 #include "rt.h"
 #include "gpu.h"
 #include "cdrom.h"
@@ -15,15 +17,17 @@ PSP_HEAP_SIZE_KB(-2048);
 
 static PsxCpu g_cpu;
 
+/* SCUS_944.88 sits at LBA 24 of the GT2 Rev 2 disc (see extracted/index.json); it is read from the pack. */
+#define EXE_LBA 24
+
 static int load_exe(void)
 {
-    uint32_t size;
-    uint8_t *exe = load_file("SCUS_944.88", &size);
-    if (!exe || size < 0x800 || memcmp(exe, "PS-X EXE", 8)) return 0;
-    uint32_t pc0 = *(uint32_t *)(exe + 0x10), taddr = *(uint32_t *)(exe + 0x18), tsize = *(uint32_t *)(exe + 0x1C);
-    memcpy(g_ram + (taddr & 0x1FFFFF), exe + 0x800, tsize);
+    static uint8_t hdr[2048];
+    if (!cdrom_read_data(EXE_LBA, 1, hdr) || memcmp(hdr, "PS-X EXE", 8)) return 0;
+    uint32_t pc0 = *(uint32_t *)(hdr + 0x10), taddr = *(uint32_t *)(hdr + 0x18), tsize = *(uint32_t *)(hdr + 0x1C);
+    if (tsize > 0x1F0000 || (tsize & 2047)) return 0;
+    if (!cdrom_read_data(EXE_LBA + 1, tsize / 2048, g_ram + (taddr & 0x1FFFFF))) return 0;
     logf_("SCUS_944.88: pc0=%08x text=%08x size=%08x\n", (unsigned)pc0, (unsigned)taddr, (unsigned)tsize);
-    free(exe);
     return 1;
 }
 
@@ -36,6 +40,7 @@ int main(int argc, char **argv)
         if (s) s[1] = 0; else dir[0] = 0;
     }
     log_init(dir);
+    scePowerSetClockFrequency(333, 333, 166);   /* default is 222 MHz */
     logf_("GT2 PSP runtime, base dir '%s'\n", dir);
 
     g_ram = memalign(64, PSX_RAM_SIZE);
@@ -45,7 +50,7 @@ int main(int argc, char **argv)
     io_init();
     cdrom_init();
     sio_init();
-    if (!load_exe()) fatal(0, "cannot load SCUS_944.88 from the EBOOT directory");
+    if (!load_exe()) fatal(0, "cannot load the game from GT2.PAK (EBOOT directory)");
 
     memset(&g_cpu, 0, sizeof g_cpu);
     g_cpu.r[29] = 0x801FFF00u;            /* SYSTEM.CNF STACK */

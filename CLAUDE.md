@@ -36,11 +36,15 @@ ISO/ extracted/ generated/ build/ Recomps/ tools/   (all git-ignored)
 ```
 python -m gt2psp extract "ISO/Gran Turismo 2 (USA) (Simulation Mode) (Rev 2).cue" --out extracted
 python -m gt2psp recomp                      # -> generated/*.c (2853 functions)
+python -m gt2psp pack "ISO/...cue"          # -> build/GT2.PAK (PSP data pack, converted once)
 wsl -d GT2PSPDev -u root --cd "<proj>" -- bash scripts/build.sh      # -> build/gt2psp/EBOOT.PBP
 powershell -ExecutionPolicy Bypass -File scripts/run-ppsspp.ps1 -Seconds 40 -Shot <png>   # stages + runs + log
+powershell -ExecutionPolicy Bypass -File scripts/package-psp.ps1   # -> build/psp/PSP/GAME/GT2PSP for a real PSP
 ```
-(PYTHONPATH=src for the python calls.) The runtime needs `SCUS_944.88` and `GT2.BIN` (raw disc image) next to
-the EBOOT; run-ppsspp.ps1 stages them (hard links) into `tools/ppsspp/memstick/PSP/GAME/GT2PSP/`.
+(PYTHONPATH=src for the python calls.) The PSP folder holds only `EBOOT.PBP` + `GT2.PAK` (the EXE is read from the
+pack too); run-ppsspp.ps1 stages them (hard links) into `tools/ppsspp/memstick/PSP/GAME/GT2PSP/`.
+Target hardware: PSP-3000 (the user tests on it manually). Goal: a native port - convert code AND assets on the PC,
+no raw disc image, no hardware emulation where a native PSP implementation is possible.
 Runtime log: `gt2log.txt` there (watchdog "alive" lines every 2 s with the last called functions).
 
 Pitfalls: in Git-Bash heredocs `

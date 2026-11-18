@@ -1,18 +1,29 @@
-/* PS1 CD-ROM controller emulation at register level (nocash psx-spx), backed by the user's disc image
- * (GT2.BIN in the EBOOT directory: raw MODE2/2352 sectors, single data track).
+/* PS1 CD-ROM controller at register level (nocash psx-spx), backed by the data pack GT2.PAK that the PC tool
+ * `python -m gt2psp pack` builds from the user's disc (see src/gt2psp/pack.py for the format). Sectors are served
+ * as fast as the game takes them; only XA streaming keeps the real 2x rate.
  *
  * Responses are queued with a delay and delivered one at a time: the next response is only raised after the
  * game acknowledged the previous interrupt. XA-ADPCM audio sectors (music) are filtered out for now. */
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
+#include <pspiofilemgr.h>
 #include "rt.h"
 #include "cdrom.h"
 
 #define SECTOR_RAW 2352
 #define LEADIN 150                 /* 2 s pregap: LBA 0 = 00:02:00 */
 
-static FILE *g_disc;
+typedef struct { uint32_t lba, count, offset; uint8_t sub[4]; uint16_t stride, reserved; } PakRun;
+static SceUID g_pak = -1;
+static PakRun *g_runs;
+static uint32_t g_nruns;
 static uint32_t g_disc_sectors;
+
+/* read-ahead cache over the pack file */
+#define CACHE_SIZE (128 * 1024)
+static uint8_t g_cache[CACHE_SIZE] __attribute__((aligned(64)));
+static uint32_t g_cache_off = 0xFFFFFFFFu, g_cache_len;
 
 static uint8_t g_index;
 static uint8_t g_params[16], g_nparams;
@@ -29,7 +40,11 @@ static uint64_t g_next_sector_at;
 static uint8_t g_sector[SECTOR_RAW];
 static uint8_t g_data[SECTOR_RAW];
 static uint32_t g_data_len, g_data_pos;
-static int g_data_ready;           /* a sector is waiting for the request register (BFRD) */
+static uint8_t g_buf[SECTOR_RAW];  /* sector buffer: last sector delivered by the drive */
+static uint32_t g_buf_len;
+static int g_data_ready;           /* the sector buffer holds a sector not yet loaded into the FIFO (BFRD) */
+static int g_consumed = 1;         /* the game has taken (read out or discarded) the last delivered sector */
+static uint64_t g_overrun_at;      /* deliver anyway after this time (the game skips sectors it does not want) */
 static uint8_t g_last_hdr[8];
 
 typedef struct { uint64_t at; uint8_t type; uint8_t n; uint8_t b[12]; } Resp;
@@ -42,16 +57,34 @@ static uint8_t i2bcd(int v) { return (uint8_t)(((v / 10) << 4) | (v % 10)); }
 void cdrom_init(void)
 {
     char path[320];
-    snprintf(path, sizeof path, "%sGT2.BIN", g_basedir);
-    g_disc = fopen(path, "rb");
-    if (g_disc) {
-        fseek(g_disc, 0, SEEK_END);
-        g_disc_sectors = (uint32_t)(ftell(g_disc) / SECTOR_RAW);
-        logf_("disc image %s: %u sectors\n", path, (unsigned)g_disc_sectors);
-    } else {
-        logf_("no disc image (%s)\n", path);
+    snprintf(path, sizeof path, "%sGT2.PAK", g_basedir);
+    g_pak = sceIoOpen(path, PSP_O_RDONLY, 0);
+    struct { char magic[8]; uint32_t nruns, total; } h;
+    if (g_pak < 0 || sceIoRead(g_pak, &h, sizeof h) != sizeof h || memcmp(h.magic, "GT2PAK1", 8) || h.nruns > 4096) {
+        logf_("no data pack (%s)\n", path);
+        if (g_pak >= 0) sceIoClose(g_pak);
+        g_pak = -1;
         g_stat = 0x10;             /* shell open */
+        return;
     }
+    g_nruns = h.nruns;
+    g_disc_sectors = h.total;
+    g_runs = malloc(sizeof(PakRun) * g_nruns);
+    sceIoRead(g_pak, g_runs, sizeof(PakRun) * g_nruns);
+    logf_("data pack %s: %u runs, %u sectors\n", path, (unsigned)g_nruns, (unsigned)g_disc_sectors);
+}
+
+static int pak_read(uint32_t off, uint8_t *dst, uint32_t n)
+{
+    if (off < g_cache_off || off + n > g_cache_off + g_cache_len) {
+        if (sceIoLseek32(g_pak, (int)off, PSP_SEEK_SET) != (int)off) return 0;
+        int r = sceIoRead(g_pak, g_cache, CACHE_SIZE);
+        if (r < (int)n) { g_cache_off = 0xFFFFFFFFu; g_cache_len = 0; return 0; }
+        g_cache_off = off;
+        g_cache_len = (uint32_t)r;
+    }
+    memcpy(dst, g_cache + (off - g_cache_off), n);
+    return 1;
 }
 
 static void push(uint64_t delay_us, uint8_t type, const uint8_t *b, int n)
@@ -68,11 +101,32 @@ static void push(uint64_t delay_us, uint8_t type, const uint8_t *b, int n)
 
 static void push_stat(uint64_t d, uint8_t type) { push(d, type, &g_stat, 1); }
 
+/* Rebuild the raw 2352-byte sector (sync, header, subheader, data) for an MSF-absolute sector number. */
 static int read_sector(uint32_t msf_sector)
 {
-    if (!g_disc || msf_sector < LEADIN || msf_sector - LEADIN >= g_disc_sectors) return 0;
-    fseek(g_disc, (long)(msf_sector - LEADIN) * SECTOR_RAW, SEEK_SET);
-    return fread(g_sector, 1, SECTOR_RAW, g_disc) == SECTOR_RAW;
+    if (g_pak < 0 || msf_sector < LEADIN || msf_sector - LEADIN >= g_disc_sectors) return 0;
+    uint32_t lba = msf_sector - LEADIN;
+    memset(g_sector, 0, SECTOR_RAW);
+    memset(g_sector + 1, 0xFF, 10);
+    g_sector[12] = i2bcd(msf_sector / 4500);
+    g_sector[13] = i2bcd(msf_sector / 75 % 60);
+    g_sector[14] = i2bcd(msf_sector % 75);
+    g_sector[15] = 2;
+    int lo = 0, hi = (int)g_nruns - 1;
+    while (lo <= hi) {
+        int mid = (lo + hi) >> 1;
+        const PakRun *r = &g_runs[mid];
+        if (lba < r->lba) hi = mid - 1;
+        else if (lba >= r->lba + r->count) lo = mid + 1;
+        else {
+            uint32_t off = r->offset + (lba - r->lba) * r->stride;
+            if (r->stride == 2336) return pak_read(off, g_sector + 16, 2336);
+            memcpy(g_sector + 16, r->sub, 4);
+            memcpy(g_sector + 20, r->sub, 4);
+            return pak_read(off, g_sector + 24, 2048);
+        }
+    }
+    return 1;                      /* sector not in the pack (padding): zeros */
 }
 
 static void stop_reading(void)
@@ -95,7 +149,7 @@ static void command(uint8_t cmd)
         g_reading = 1;
         g_stat = (g_stat & ~0x40) | 0x22;
         push_stat(ACK, 3);
-        g_next_sector_at = now_us() + 20000;
+        g_next_sector_at = now_us() + 1000;
         break;
     case 0x07: g_stat |= 0x02; push_stat(ACK, 3); push_stat(50000, 2); break;  /* MotorOn */
     case 0x08: stop_reading(); push_stat(ACK, 3); g_stat &= ~0x02; push_stat(100000, 2); break;  /* Stop */
@@ -140,7 +194,7 @@ static void command(uint8_t cmd)
         break;
     case 0x1A: {                                                            /* GetID */
         push_stat(ACK, 3);
-        if (g_disc) { uint8_t b[8] = {0x02, 0x00, 0x20, 0x00, 'S', 'C', 'E', 'A'}; push(20000, 2, b, 8); }
+        if (g_pak >= 0) { uint8_t b[8] = {0x02, 0x00, 0x20, 0x00, 'S', 'C', 'E', 'A'}; push(20000, 2, b, 8); }
         else { uint8_t b[2] = {0x11, 0x80}; push(20000, 5, b, 2); }
         break;
     }
@@ -172,8 +226,10 @@ static void deliver(void)
         update_irq();
         return;
     }
-    if (g_reading && t >= g_next_sector_at && !g_qn) {
-        g_next_sector_at = t + ((g_mode & 0x80) ? 6667 : 13333);
+    /* Data sectors come as fast as the game takes them: a new one only after the previous one was consumed, so the
+     * interrupt handler is never overtaken in the middle of reading a sector. */
+    if (g_reading && t >= g_next_sector_at && !g_qn && (g_consumed || t >= g_overrun_at)) {
+        g_next_sector_at = t + ((g_mode & 0x40) ? ((g_mode & 0x80) ? 6667 : 13333) : 1500);
         if (!read_sector(g_pos)) {
             stop_reading();
             uint8_t b[2] = {(uint8_t)(g_stat | 1), 0x10};
@@ -188,10 +244,12 @@ static void deliver(void)
             if ((g_mode & 0x08) && (g_sector[16] != g_filter_file || g_sector[17] != g_filter_chan)) return;
             return;
         }
-        if (g_mode & 0x20) { memcpy(g_data, g_sector + 12, 0x924); g_data_len = 0x924; }
-        else { memcpy(g_data, g_sector + 24, 0x800); g_data_len = 0x800; }
-        g_data_pos = g_data_len;           /* empty until requested */
+        /* into the sector buffer; the data FIFO is only (re)loaded by the request register */
+        if (g_mode & 0x20) { memcpy(g_buf, g_sector + 12, 0x924); g_buf_len = 0x924; }
+        else { memcpy(g_buf, g_sector + 24, 0x800); g_buf_len = 0x800; }
         g_data_ready = 1;
+        g_consumed = 0;
+        g_overrun_at = t + 13333;
         memcpy(g_resp, &g_stat, 1);
         g_nresp = 1;
         g_resp_pos = 0;
@@ -215,7 +273,9 @@ uint32_t cdrom_read(uint32_t reg)
         return s;
     }
     case 1: return g_resp_pos < g_nresp ? g_resp[g_resp_pos++] : 0;
-    case 2: return g_data_pos < g_data_len ? g_data[g_data_pos++] : 0;
+    case 2:
+        if (g_data_pos >= g_data_len) return 0;
+        return g_data[g_data_pos++];
     case 3: return (g_index & 1) ? (0xE0 | g_int_flag) : (0xE0 | g_int_enable);
     }
     return 0;
@@ -232,9 +292,16 @@ void cdrom_write(uint32_t reg, uint32_t v)
     case 3 * 4 + 0:                                     /* request register */
         /* BFRD: 1 = load the buffered sector into the data FIFO (only if the FIFO is empty), 0 = clear FIFO */
         if (v & 0x80) {
-            if (g_data_ready && g_data_pos >= g_data_len) g_data_pos = 0;
+            if (g_data_ready && g_data_pos >= g_data_len) {
+                memcpy(g_data, g_buf, g_buf_len);
+                g_data_len = g_buf_len;
+                g_data_pos = 0;
+                g_data_ready = 0;
+                g_consumed = 1;
+            }
         } else {
             g_data_pos = g_data_len;
+            g_consumed = 1;
         }
         break;
     case 3 * 4 + 1:                                     /* interrupt flag acknowledge */
@@ -253,4 +320,13 @@ void cdrom_dma(uint32_t madr, uint32_t words)
         uint8_t b = g_data_pos < g_data_len ? g_data[g_data_pos++] : 0;
         g_ram[(madr + i) & (PSX_RAM_SIZE - 1)] = b;
     }
+}
+
+int cdrom_read_data(uint32_t lba, uint32_t count, uint8_t *dst)
+{
+    for (uint32_t i = 0; i < count; i++) {
+        if (!read_sector(lba + i + LEADIN)) return 0;
+        memcpy(dst + i * 2048, g_sector + 24, 2048);
+    }
+    return 1;
 }

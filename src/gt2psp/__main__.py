@@ -26,6 +26,14 @@ def cmd_extract(args: argparse.Namespace) -> None:
     disc.close()
 
 
+def cmd_pack(args: argparse.Namespace) -> None:
+    from .pack import build_pack, default_skip
+    disc = Disc.from_cue(Path(args.cue))
+    info = build_pack(disc, Path(args.out), default_skip(disc.walk()))
+    disc.close()
+    print(f"{args.out}: {info['runs']} runs, {info['sectors']} sectors, {info['bytes'] / 1e6:.1f} MB")
+
+
 def cmd_hash(args: argparse.Namespace) -> None:
     disc = Disc.from_cue(Path(args.cue))
     print(f"{sha1_file(disc.path)}  {disc.path.name}")
@@ -108,6 +116,10 @@ def main() -> None:
     e.add_argument("cue")
     e.add_argument("--out", default="extracted")
     e.set_defaults(func=cmd_extract)
+    k = sub.add_parser("pack", help="convert the disc image into the PSP data pack GT2.PAK")
+    k.add_argument("cue")
+    k.add_argument("--out", default="build/GT2.PAK")
+    k.set_defaults(func=cmd_pack)
     h = sub.add_parser("hash", help="print the SHA-1 of the image's data track")
     h.add_argument("cue")
     h.set_defaults(func=cmd_hash)
