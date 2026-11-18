@@ -281,3 +281,23 @@ Tried Silent's GT2 "60 FPS" cheat (frame interval 0x801D5864 2 -> 1 plus three e
 works technically (~40 fps in PPSSPP), but the game advances its simulation by a fixed step per frame, so anything
 below a steady 60 fps runs in slow motion (measured ~2/3 speed). Decision with the user: removed again, the target
 is a stable 30 fps.
+
+## 2026-11-18 - Controller (DualShock) and memory card
+
+* Controller input never worked before: libpad clears IRQ7, waits for RX, reads the byte and only then waits for
+  the /ACK interrupt - the emulation raised it at transmit time, libpad timed out after the first byte of every
+  poll. Now the ACK interrupt is raised when the response byte is read. The "race replay" seen so far was GT2's
+  attract demo; with input the game now reaches GT mode (world map, My Home, Game Status).
+* DualShock (SCPH-1200) emulation: analog mode by default (ID 0x73, settings.txt analog=0 for digital), config
+  commands 0x43-0x4D (GT2's libpad uses config mode), PSP stick = left stick with dead zone, SELECT+L/R = L2/R2.
+* Memory card: GT2 uses only the BIOS raw sector functions (_card_info A0:AB, _card_read B0:4F, _card_write
+  B0:4E, _new_card via write sector 63 with NULL) and its own file handling. card.c emulates them on a 128 KB
+  .mcd image (GT2CARD1.MCD next to the EBOOT, created formatted), results are delivered as SwCARD/HwCARD events
+  whose callbacks run in interrupt context shortly after the call (bios.c event table: OpenEvent/EnableEvent/
+  DeliverEvent with callback mode). The callbacks are 2-instruction stubs at 0x8007ea68+8n that the partitioner
+  had taken for a jump table: program.py EXTRA_STARTS.
+* GT2 detects the card and reads its directory at boot. An in-game save has not been exercised yet (the save
+  menu was not found by scripted navigation).
+* CD fix: the "overrun" (deliver the next sector if the game has not taken the previous one within 13 ms) let a
+  new sector replace an untaken one when frames were slow, which desynchronised libcd's interrupt handler (hang in
+  CdGetSector in overlay 4). Removed; a new read/pause/stop discards an untaken sector instead.

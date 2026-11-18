@@ -175,6 +175,19 @@ static void call_irq_handlers(PsxCpu *c)
 
 void irq_abandon(void) { g_in_irq = 0; }
 
+/* Run a game callback (BIOS event handler) in interrupt context: own stack, CPU state restored afterwards. */
+void rt_callback(PsxCpu *c, uint32_t func)
+{
+    PsxCpu saved = *c;
+    int was = g_in_irq;
+    g_in_irq = 1;
+    c->r[31] = SENTINEL_RA;
+    c->r[29] = IRQ_STACK_TOP;
+    rt_call(c, func);
+    *c = saved;
+    g_in_irq = was;
+}
+
 void bios_return_from_exception(PsxCpu *c)
 {
     (void)c;
@@ -203,5 +216,6 @@ void rt_poll(PsxCpu *c)
     }
     if (!g_in_irq && g_irq_enabled && (c->cop0[12] & 0x401) == 0x401 && (g_i_stat & g_i_mask))
         call_irq_handlers(c);
+    if (!g_in_irq && g_irq_enabled) bios_poll_events(c);
     PHASE_END();
 }

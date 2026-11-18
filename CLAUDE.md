@@ -65,7 +65,10 @@ PowerShell `Set-Content -Encoding utf8` writes a BOM. CMake globs: build.sh re-r
   fallbacks); race at the game's full 30 fps in PPSSPP (was ~6 fps with the software rasterizer).
 * **Hi-res 480x272 + 16:9** (ge.c `g_hires`, `g_widescreen`, GTE X*3/4, 3D/2D by GTE output tagging);
   game patches via recomp.py HOOKS (widescreen.c near-plane clipper).
-* Not implemented yet: SPU audio, XA music, MDEC (movies), memory card (reported absent), analog pad,
+* **Input + memory card**: DualShock analog emulation (libpad works now - before, all input was ignored and the
+  "race replay" was the attract demo); memory card = GT2CARD1.MCD on the memory stick (card.c, BIOS events).
+  Test input: input.txt (`<vblank> <button> <len>`), e.g. start/cross reaches the GT mode world map.
+* Not implemented yet: SPU audio, XA music, MDEC (movies),
   15-bit textures / texture windows on the GE (software fallback).
 
 ## Next steps

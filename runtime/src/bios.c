@@ -3,12 +3,49 @@
 #include <stdio.h>
 #include <string.h>
 #include "rt.h"
+#include "card.h"
 
 uint32_t g_hook_entry_int;
 uint32_t g_irq_chain[4];
 int g_irq_enabled = 1;
 
-static uint32_t g_event_next = 0xF1000000u;
+/* Events (OpenEvent/EnableEvent/DeliverEvent). Handles are 0xF1000000 + index. Callback-mode events (mode
+ * 0x1000) call their function when delivered; GT2 uses them for the memory card results. */
+typedef struct { uint32_t cls, spec, mode, func; int open, enabled; } Event;
+#define MAX_EVENTS 32
+static Event g_events[MAX_EVENTS];
+static int g_nevents;
+
+/* events delivered a little later from rt_poll (memory card results) */
+typedef struct { uint32_t cls, spec; uint64_t at; } Pending;
+static Pending g_pending[16];
+static int g_npending;
+
+void bios_event_later(uint32_t cls, uint32_t spec)
+{
+    if (g_npending >= 16) { logf_("BIOS: event queue full\n"); return; }
+    g_pending[g_npending++] = (Pending){cls, spec, now_us() + 2000};
+}
+
+static void deliver(PsxCpu *c, uint32_t cls, uint32_t spec)
+{
+    for (int i = 0; i < g_nevents; i++) {
+        Event *e = &g_events[i];
+        if (!e->open || e->cls != cls || e->spec != spec) continue;
+        if (e->enabled && e->mode == 0x1000 && e->func) rt_callback(c, e->func);
+    }
+}
+
+/* called from rt_poll outside interrupt handlers */
+void bios_poll_events(PsxCpu *c)
+{
+    uint64_t t = now_us();
+    while (g_npending && g_pending[0].at <= t) {
+        Pending p = g_pending[0];
+        memmove(g_pending, g_pending + 1, sizeof(Pending) * (--g_npending));
+        deliver(c, p.cls, p.spec);
+    }
+}
 
 static void ram_copy(uint32_t dst, uint32_t src, uint32_t n)
 {
@@ -79,7 +116,7 @@ static void bios_a0(PsxCpu *c, uint32_t n)
     case 0x49: io_w32(0x1F801810u, a0); return;                     /* GPU_cw */
     case 0x70: logf_("BIOS _bu_init\n"); return;
     case 0x72: return;                                              /* CdRemove */
-    case 0xAB: c->r[2] = 1; logf_("BIOS _card_info(%d)\n", (int)a0); return;
+    case 0xAB: c->r[2] = card_info(a0); return;                     /* _card_info */
     }
     fatal(c, "unimplemented BIOS A0:%02X (ra=%08x)", (unsigned)n, (unsigned)c->r[31]);
 }
@@ -88,13 +125,34 @@ static void bios_b0(PsxCpu *c, uint32_t n)
 {
     uint32_t a0 = c->r[4], a1 = c->r[5], a2 = c->r[6], a3 = c->r[7];
     switch (n) {
-    case 0x07: c->r[2] = 1; return;                                 /* DeliverEvent */
-    case 0x08:                                                      /* OpenEvent(class, spec, mode, func) */
-        logf_("BIOS OpenEvent(%08x, %04x, %04x, %08x)\n", (unsigned)a0, (unsigned)a1, (unsigned)a2, (unsigned)a3);
-        c->r[2] = g_event_next++;
+    case 0x07: {                                                    /* DeliverEvent(class, spec) */
+        PsxCpu saved = *c;
+        deliver(c, a0, a1);
+        *c = saved;
+        c->r[2] = 1;
         return;
-    case 0x09: c->r[2] = 1; return;                                 /* CloseEvent */
-    case 0x0C: c->r[2] = 1; return;                                 /* EnableEvent */
+    }
+    case 0x08: {                                                    /* OpenEvent(class, spec, mode, func) */
+        int i = 0;
+        while (i < g_nevents && g_events[i].open) i++;
+        if (i >= MAX_EVENTS) { c->r[2] = 0xFFFFFFFFu; return; }
+        if (i == g_nevents) g_nevents++;
+        g_events[i] = (Event){a0, a1, a2, a3, 1, 0};
+        c->r[2] = 0xF1000000u + (uint32_t)i;
+        return;
+    }
+    case 0x09:                                                      /* CloseEvent */
+        if ((a0 & 0xFFFF) < MAX_EVENTS) g_events[a0 & 0xFFFF].open = 0;
+        c->r[2] = 1;
+        return;
+    case 0x0C:                                                      /* EnableEvent */
+        if ((a0 & 0xFFFF) < MAX_EVENTS) g_events[a0 & 0xFFFF].enabled = 1;
+        c->r[2] = 1;
+        return;
+    case 0x0D:                                                      /* DisableEvent */
+        if ((a0 & 0xFFFF) < MAX_EVENTS) g_events[a0 & 0xFFFF].enabled = 0;
+        c->r[2] = 1;
+        return;
     case 0x12: c->r[2] = 1; logf_("BIOS InitPad(%08x, %d, %08x, %d)\n", (unsigned)a0, (int)a1, (unsigned)a2, (int)a3); return;
     case 0x13: c->r[2] = 1; return;                                 /* StartPad */
     case 0x15: c->r[2] = 1; return;                                 /* OutdatedPadInitAndStart */
@@ -111,7 +169,8 @@ static void bios_b0(PsxCpu *c, uint32_t n)
         return;
     }
     case 0x4A: case 0x4B: case 0x4C: c->r[2] = 1; return;           /* InitCard / StartCard / StopCard */
-    case 0x4E: case 0x4F: c->r[2] = 0; logf_("BIOS card sector I/O (stub)\n"); return;
+    case 0x4E: c->r[2] = card_write(a0, a1, a2); return;             /* _card_write(port, sector, src) */
+    case 0x4F: c->r[2] = card_read(a0, a1, a2); return;              /* _card_read(port, sector, dst) */
     case 0x50: return;                                              /* allow_new_card */
     case 0x51: c->r[2] = 0xFFFFFFFFu; return;                       /* Krom2RawAdd: no kanji ROM */
     case 0x56: c->r[2] = 0x00000674u; return;                       /* GetC0Table */

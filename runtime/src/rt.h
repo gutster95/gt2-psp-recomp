@@ -19,6 +19,7 @@ RecompFunc lookup(uint32_t addr);
 void run_program(PsxCpu *c);
 void raise_irq(int bit);
 void irq_abandon(void);
+void rt_callback(PsxCpu *c, uint32_t func);   /* call game code like an interrupt handler */
 uint64_t now_us(void);
 
 /* bios.c */
@@ -27,6 +28,7 @@ extern uint32_t g_hook_entry_int;     /* PS1 address of the HookEntryInt buffer,
 extern uint32_t g_irq_chain[4];       /* SysEnqIntRP queues (priority 0-3), PS1 addresses of first entry */
 extern int g_irq_enabled;             /* EnterCriticalSection/ExitCriticalSection state */
 void bios_return_from_exception(PsxCpu *c) __attribute__((noreturn));
+void bios_poll_events(PsxCpu *c);
 
 /* io.c */
 extern uint32_t g_i_stat, g_i_mask;

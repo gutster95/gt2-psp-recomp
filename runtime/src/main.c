@@ -9,6 +9,7 @@
 #include "gpu.h"
 #include "cdrom.h"
 #include "sio.h"
+#include "card.h"
 #include "ge.h"
 #include "prof.h"
 #include <stdio.h>
@@ -37,10 +38,10 @@ static int load_exe(void)
 /* Optional settings.txt next to the EBOOT, lines "name=0|1": widescreen, hires, pgxp, filter, hud_anchor. */
 static void load_settings(void)
 {
-    extern int g_hud_anchor, g_near_clip;
+    extern int g_hud_anchor, g_near_clip, g_pad_analog;
     static const struct { const char *name; int *var; } opts[] = {
         {"widescreen", &g_widescreen}, {"hires", &g_hires}, {"pgxp", &g_pgxp}, {"filter", &g_tex_filter},
-        {"hud_anchor", &g_hud_anchor}, {"near_clip", &g_near_clip},
+        {"hud_anchor", &g_hud_anchor}, {"near_clip", &g_near_clip}, {"analog", &g_pad_analog},
     };
     char path[300], line[64];
     snprintf(path, sizeof path, "%ssettings.txt", g_basedir);
@@ -79,6 +80,7 @@ int main(int argc, char **argv)
     io_init();
     cdrom_init();
     sio_init();
+    card_init();
     if (!load_exe()) fatal(0, "cannot load the game from GT2.PAK (EBOOT directory)");
 
     memset(&g_cpu, 0, sizeof g_cpu);

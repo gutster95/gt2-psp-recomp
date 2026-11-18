@@ -1,5 +1,9 @@
-/* SIO0: controller and memory card port (0x1F801040-0x1F80104F), nocash psx-spx protocol.
- * Port 1: digital pad fed from the PSP buttons. Port 2 and memory cards: not connected (no /ACK). */
+/* SIO0: controller port (0x1F801040-0x1F80104F), nocash psx-spx protocol.
+ * Port 1: DualShock (SCPH-1200) fed from the PSP controls, starting in analog mode (settings.txt analog=0: digital
+ * pad). The PSP stick is the left analog stick (with a dead zone); the right stick stays centred. GT2 drives the
+ * pad itself, including the DualShock config commands (0x43 config mode, 0x44 analog/digital, 0x45-0x4D queries).
+ * PSP mapping: L/R = L1/R1, SELECT+L / SELECT+R = L2/R2. Port 2: no pad. The memory card is handled at the BIOS
+ * level (card.c), so card accesses on SIO (0x81) see no device. */
 #include <stdio.h>
 #include <string.h>
 #include <pspctrl.h>
@@ -10,9 +14,17 @@ static uint16_t g_ctrl, g_mode, g_baud;
 static uint8_t g_rx;
 static int g_rx_full;
 static int g_irq;              /* JOY_STAT bit 9 */
+static int g_ack_pending;      /* /ACK of the last byte, signalled when its response is read */
 static int g_step;             /* byte index within the current transfer */
 static int g_device;           /* 0 none, 1 pad, 2 memory card (absent) */
 static uint8_t g_btn_lo = 0xFF, g_btn_hi = 0xFF;
+static uint8_t g_lx = 0x80, g_ly = 0x80;          /* left stick */
+int g_pad_analog = 1;          /* analog (DualShock) mode; settings.txt analog */
+static int g_config;           /* DualShock config mode */
+static uint8_t g_cmd;          /* command byte of the current transfer */
+static uint8_t g_resp[10];     /* response bytes from index 2 on */
+static int g_resp_len;         /* number of bytes after the ID byte */
+static uint8_t g_tx3;          /* first parameter byte (index 3) */
 
 /* Scripted input for testing: <basedir>/input.txt, lines "<vblank> <button> <duration-in-vblanks>".
  * Buttons: start select up down left right cross circle square triangle l1 r1 l2 r2. */
@@ -46,7 +58,7 @@ static void load_inject(void)
 void sio_init(void)
 {
     sceCtrlSetSamplingCycle(0);
-    sceCtrlSetSamplingMode(PSP_CTRL_MODE_DIGITAL);
+    sceCtrlSetSamplingMode(PSP_CTRL_MODE_ANALOG);
     load_inject();
 }
 
@@ -65,17 +77,29 @@ static void sample_buttons(void)
     if (b & PSP_CTRL_RIGHT) lo |= 0x20;
     if (b & PSP_CTRL_DOWN) lo |= 0x40;
     if (b & PSP_CTRL_LEFT) lo |= 0x80;
-    if (b & PSP_CTRL_LTRIGGER) hi |= 0x04;
-    if (b & PSP_CTRL_RTRIGGER) hi |= 0x08;
+    int shift = (b & PSP_CTRL_SELECT) && (b & (PSP_CTRL_LTRIGGER | PSP_CTRL_RTRIGGER));
+    if (shift) lo &= ~0x01;                        /* SELECT used as modifier: L2/R2 */
+    if (b & PSP_CTRL_LTRIGGER) hi |= shift ? 0x01 : 0x04;
+    if (b & PSP_CTRL_RTRIGGER) hi |= shift ? 0x02 : 0x08;
     if (b & PSP_CTRL_TRIANGLE) hi |= 0x10;
     if (b & PSP_CTRL_CIRCLE) hi |= 0x20;
     if (b & PSP_CTRL_CROSS) hi |= 0x40;
     if (b & PSP_CTRL_SQUARE) hi |= 0x80;
-    /* analog stick as d-pad */
-    if (d.Lx < 64) lo |= 0x80;
-    if (d.Lx > 192) lo |= 0x20;
-    if (d.Ly < 64) lo |= 0x10;
-    if (d.Ly > 192) lo |= 0x40;
+    if (g_pad_analog) {
+        /* left analog stick with a dead zone (the PSP nub rarely rests exactly at the centre) */
+        int ax = d.Lx - 128, ay = d.Ly - 128;
+        const int dz = 24;
+        ax = ax > dz ? (ax - dz) * 127 / (127 - dz) : ax < -dz ? (ax + dz) * 128 / (128 - dz) : 0;
+        ay = ay > dz ? (ay - dz) * 127 / (127 - dz) : ay < -dz ? (ay + dz) * 128 / (128 - dz) : 0;
+        g_lx = (uint8_t)(128 + (ax > 127 ? 127 : ax < -128 ? -128 : ax));
+        g_ly = (uint8_t)(128 + (ay > 127 ? 127 : ay < -128 ? -128 : ay));
+    } else {
+        /* digital pad: the stick works as d-pad */
+        if (d.Lx < 64) lo |= 0x80;
+        if (d.Lx > 192) lo |= 0x20;
+        if (d.Ly < 64) lo |= 0x10;
+        if (d.Ly > 192) lo |= 0x40;
+    }
     for (int i = 0; i < g_ninject; i++)
         if (g_vblank_count >= g_inject[i].at && g_vblank_count < g_inject[i].at + g_inject[i].len) {
             lo |= (uint8_t)g_inject[i].bits;
@@ -83,6 +107,37 @@ static void sample_buttons(void)
         }
     g_btn_lo = (uint8_t)~lo;
     g_btn_hi = (uint8_t)~hi;
+}
+
+/* Response after the ID byte for command g_cmd (index 2: 0x5A, then data). */
+static void build_response(void)
+{
+    static const uint8_t zero6[6] = {0};
+    uint8_t *r = g_resp;
+    r[0] = 0x5A;
+    if (g_config) {
+        g_resp_len = 7;
+        memcpy(r + 1, zero6, 6);
+        switch (g_cmd) {
+        case 0x45: { uint8_t m[6] = {0x03, 0x02, (uint8_t)(g_pad_analog ? 1 : 0), 0x02, 0x01, 0x00}; memcpy(r + 1, m, 6); break; }
+        case 0x47: { uint8_t m[6] = {0x00, 0x00, 0x02, 0x00, 0x01, 0x00}; memcpy(r + 1, m, 6); break; }
+        case 0x4D: memset(r + 1, 0xFF, 6); break;
+        case 0x42: case 0x43:
+            r[1] = g_btn_lo; r[2] = g_btn_hi; r[3] = 0x80; r[4] = 0x80; r[5] = g_lx; r[6] = g_ly;
+            break;
+        default: break;                             /* 0x44, 0x46, 0x4C: zeros / filled after the parameter */
+        }
+        return;
+    }
+    r[1] = g_btn_lo;
+    r[2] = g_btn_hi;
+    if (g_pad_analog) {
+        r[3] = 0x80; r[4] = 0x80;                   /* right stick: centred */
+        r[5] = g_lx; r[6] = g_ly;
+        g_resp_len = 7;
+    } else {
+        g_resp_len = 3;
+    }
 }
 
 static void transfer(uint8_t tx)
@@ -93,30 +148,61 @@ static void transfer(uint8_t tx)
     if (g_step == 0) {
         g_device = 0;
         if (tx == 0x01 && port == 0) { g_device = 1; ack = 1; }
-        else if (tx == 0x81) g_device = 2;              /* memory card: absent, no ack */
     } else if (g_device == 1) {
-        switch (g_step) {
-        case 1: rx = 0x41; ack = 1; if (tx == 0x42) sample_buttons(); break;
-        case 2: rx = 0x5A; ack = 1; break;
-        case 3: rx = g_btn_lo; ack = 1; break;
-        case 4: rx = g_btn_hi; ack = 0; break;
+        if (g_step == 1) {
+            g_cmd = tx;
+            if (tx == 0x42 || tx == 0x43) sample_buttons();
+            rx = g_config ? 0xF3 : g_pad_analog ? 0x73 : 0x41;
+            if (!g_config && tx != 0x42 && tx != 0x43) { g_device = 0; rx = 0xFF; }   /* config cmds need config mode */
+            else { build_response(); ack = 1; }
+        } else {
+            int i = g_step - 2;
+            if (g_step == 3) {
+                g_tx3 = tx;
+                if (g_config && g_cmd == 0x46) {
+                    uint8_t m[2][5] = {{0x00, 0x01, 0x02, 0x00, 0x0A}, {0x00, 0x01, 0x01, 0x01, 0x14}};
+                    memcpy(g_resp + 2, m[tx & 1], 5);
+                } else if (g_config && g_cmd == 0x4C) {
+                    g_resp[4] = (tx & 1) ? 0x07 : 0x04;
+                }
+            }
+            if (g_step == 4 && g_config && g_cmd == 0x44) {}   /* tx = lock flag: ignored */
+            rx = i < g_resp_len ? g_resp[i] : 0xFF;
+            ack = i < g_resp_len - 1;
+            if (i == g_resp_len - 1) {              /* last byte: apply the command */
+                if (g_cmd == 0x43) {
+                    int enter = g_tx3 == 1;
+                    if (enter != g_config) logf_("pad: %s config mode\n", enter ? "enter" : "leave");
+                    g_config = enter;
+                } else if (g_config && g_cmd == 0x44) {
+                    if ((g_tx3 == 1) != g_pad_analog) logf_("pad: %s mode\n", g_tx3 == 1 ? "analog" : "digital");
+                    g_pad_analog = g_tx3 == 1;
+                }
+            }
         }
     }
     g_step++;
     g_rx = rx;
     g_rx_full = 1;
-    if (ack) {
-        if (g_ctrl & 0x1000) { g_irq = 1; raise_irq(7); }
-    } else {
-        g_device = 0;
-    }
+    /* The device's /ACK pulse comes after the byte: libpad clears IRQ7, waits for RX, reads it and only then
+     * waits for the ACK interrupt - so the interrupt is raised when the received byte is read. */
+    if (ack) g_ack_pending = 1;
+    else g_device = 0;
 }
 
 uint32_t sio_read(uint32_t off, int size)
 {
     (void)size;
     switch (off) {
-    case 0x0: { uint8_t v = g_rx_full ? g_rx : 0xFF; g_rx_full = 0; return v; }
+    case 0x0: {
+        uint8_t v = g_rx_full ? g_rx : 0xFF;
+        g_rx_full = 0;
+        if (g_ack_pending) {
+            g_ack_pending = 0;
+            if (g_ctrl & 0x1000) { g_irq = 1; raise_irq(7); }
+        }
+        return v;
+    }
     case 0x4: return 0x5 | (g_rx_full ? 0x2 : 0) | (g_irq ? 0x200 : 0);    /* JOY_STAT */
     case 0x8: return g_mode;
     case 0xA: return g_ctrl;
@@ -132,7 +218,7 @@ void sio_write(uint32_t off, uint32_t v, int size)
     case 0x0: transfer((uint8_t)v); break;
     case 0x8: g_mode = (uint16_t)v; break;
     case 0xA:
-        if (v & 0x40) { g_ctrl = 0; g_irq = 0; g_rx_full = 0; g_step = 0; break; }   /* reset */
+        if (v & 0x40) { g_ctrl = 0; g_irq = 0; g_rx_full = 0; g_step = 0; g_ack_pending = 0; break; }   /* reset */
         if (v & 0x10) g_irq = 0;                                                    /* acknowledge */
         if (!(v & 0x2)) g_step = 0;                                                 /* deselect */
         else if (!(g_ctrl & 0x2)) g_step = 0;                                       /* new select */

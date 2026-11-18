@@ -44,7 +44,6 @@ static uint8_t g_buf[SECTOR_RAW];  /* sector buffer: last sector delivered by th
 static uint32_t g_buf_len;
 static int g_data_ready;           /* the sector buffer holds a sector not yet loaded into the FIFO (BFRD) */
 static int g_consumed = 1;         /* the game has taken (read out or discarded) the last delivered sector */
-static uint64_t g_overrun_at;      /* deliver anyway after this time (the game skips sectors it does not want) */
 static uint8_t g_last_hdr[8];
 
 typedef struct { uint64_t at; uint8_t type; uint8_t n; uint8_t b[12]; } Resp;
@@ -129,8 +128,15 @@ static int read_sector(uint32_t msf_sector)
     return 1;                      /* sector not in the pack (padding): zeros */
 }
 
+static void drop_sector(void)       /* a new read/pause/stop: an untaken sector is discarded */
+{
+    g_data_ready = 0;
+    g_consumed = 1;
+}
+
 static void stop_reading(void)
 {
+    drop_sector();
     g_reading = 0;
     g_stat &= ~0x60;
 }
@@ -145,6 +151,7 @@ static void command(uint8_t cmd)
         push_stat(ACK, 3);
         break;
     case 0x06: case 0x1B:                                                   /* ReadN / ReadS */
+        drop_sector();
         g_pos = g_setloc;
         g_reading = 1;
         g_stat = (g_stat & ~0x40) | 0x22;
@@ -228,7 +235,9 @@ static void deliver(void)
     }
     /* Data sectors come as fast as the game takes them: a new one only after the previous one was consumed, so the
      * interrupt handler is never overtaken in the middle of reading a sector. */
-    if (g_reading && t >= g_next_sector_at && !g_qn && (g_consumed || t >= g_overrun_at)) {
+    /* No overrun: a slow frame (or a slow PSP) must never let a new sector replace one the game has not taken yet,
+     * that desynchronises libcd's interrupt handler (it then waits forever for data). */
+    if (g_reading && t >= g_next_sector_at && !g_qn && g_consumed) {
         g_next_sector_at = t + ((g_mode & 0x40) ? ((g_mode & 0x80) ? 6667 : 13333) : 1500);
         if (!read_sector(g_pos)) {
             stop_reading();
@@ -249,7 +258,6 @@ static void deliver(void)
         else { memcpy(g_buf, g_sector + 24, 0x800); g_buf_len = 0x800; }
         g_data_ready = 1;
         g_consumed = 0;
-        g_overrun_at = t + 13333;
         memcpy(g_resp, &g_stat, 1);
         g_nresp = 1;
         g_resp_pos = 0;

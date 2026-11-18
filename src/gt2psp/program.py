@@ -23,6 +23,10 @@ RESIDENT_TEXT = (0x8005D600, 0x8008E020)
 OVERLAY_ENTRY_TABLE = 0x80091174
 NUM_OVERLAYS = 6
 SETJMP = 0x8007AD58
+
+# Function entries the heuristics cannot see: code addresses only ever passed at run time. Resident 0x8007ea68+8n:
+# nine 2-instruction stubs (`j 0x8007eaac; li a1, bit`) registered as memory card event callbacks via OpenEvent.
+EXTRA_STARTS = {"resident": {0x8007EA68 + 8 * i for i in range(9)}}
 LONGJMP = 0x8007AD90
 
 
@@ -248,9 +252,12 @@ def _build(files: Path, extra: dict[str, set[int]]) -> list[Module]:
         if m.entry is not None and in_text(m, m.entry):
             strong.add(m.entry)
         m.resume = {a for a in extra.get(m.name, ()) if in_text(m, a)}
+        strong |= {a for a in EXTRA_STARTS.get(m.name, ()) if in_text(m, a)}
         strong |= m.resume
         m.jtables = find_jump_tables(m.image, m.text)
         case_labels = {t for ts in m.jtables.values() for t in ts}
+        # a pointer table to the extra entries looks like a jump table; they are functions
+        case_labels -= EXTRA_STARTS.get(m.name, set())
         # Every code pointer that is not a jump-table case label is a function entry (possibly a second entry
         # into a function: splitting is always safe, control crossing the split becomes a tail call).
         ptrs |= {p for p in consts.get(m.name, set()) if in_text(m, p)}

@@ -294,7 +294,7 @@ stats:
         dumps = f != 0;
         if (f) fclose(f);
     }
-    if (dumps && (frame == 300 || frame == 900 || (frame >= 1800 && frame % 300 == 0 && frame <= 9000))) {
+    if (dumps && (frame >= 600 && frame % 150 == 0 && frame <= 9000)) {
         char path[300];
         snprintf(path, sizeof path, "%svram%d.bin", g_basedir, frame);
         ge_sync();
