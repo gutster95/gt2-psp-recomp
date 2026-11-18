@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <pspdisplay.h>
+#include <pspctrl.h>
 #include <pspge.h>
 #include "rt.h"
 #include "gpu.h"
@@ -67,6 +68,56 @@ static void vram_put(uint16_t px)
     g_xi++;
 }
 
+/* Screenshot on L+R+SELECT (real hardware debugging): snapN.bmp (the PSP screen) plus snapN_vram.bin (PS1 VRAM)
+ * and snapN_screen.bin (PSP screen in the vram2png layout) next to the EBOOT. */
+static void snapshot(void)
+{
+    static int n;
+    char path[300];
+    ge_sync();
+    const uint16_t *fb = ge_display_buffer();
+    snprintf(path, sizeof path, "%ssnap%d.bmp", g_basedir, n);
+    FILE *f = fopen(path, "wb");
+    if (f) {
+        static uint8_t hdr[54] = {'B', 'M'};
+        uint32_t img = 480 * 272 * 3;
+        *(uint32_t *)(void *)(hdr + 2) = 54 + img;
+        hdr[10] = 54; hdr[14] = 40;
+        *(uint32_t *)(void *)(hdr + 18) = 480;
+        *(uint32_t *)(void *)(hdr + 22) = 272;
+        hdr[26] = 1; hdr[28] = 24;
+        *(uint32_t *)(void *)(hdr + 34) = img;
+        fwrite(hdr, 1, 54, f);
+        static uint8_t row[480 * 3];
+        for (int y = 271; y >= 0; y--) {
+            for (int x = 0; x < 480; x++) {
+                uint16_t p = fb[y * 512 + x];
+                row[x * 3 + 2] = (uint8_t)((p & 31) << 3);
+                row[x * 3 + 1] = (uint8_t)(((p >> 5) & 31) << 3);
+                row[x * 3 + 0] = (uint8_t)(((p >> 10) & 31) << 3);
+            }
+            fwrite(row, 1, sizeof row, f);
+        }
+        fclose(f);
+    }
+    snprintf(path, sizeof path, "%ssnap%d_vram.bin", g_basedir, n);
+    f = fopen(path, "wb");
+    if (f) { fwrite(g_vram, 2, 1024 * 512, f); fclose(f); }
+    snprintf(path, sizeof path, "%ssnap%d_screen.bin", g_basedir, n);
+    f = fopen(path, "wb");
+    if (f) {
+        static uint16_t r[1024];
+        for (int y = 0; y < 512; y++) {
+            memset(r, 0, sizeof r);
+            if (y < 272) memcpy(r, fb + y * 512, 480 * 2);
+            fwrite(r, 2, 1024, f);
+        }
+        fclose(f);
+    }
+    logf_("snapshot %d written (snap%d.bmp)\n", n, n);
+    n++;
+}
+
 static void exec(const uint32_t *f)
 {
     uint32_t c = f[0], op = c >> 24;
@@ -75,6 +126,7 @@ static void exec(const uint32_t *f)
         int w = ((f[2] & 0x3FF) + 15) & ~15, h = (f[2] >> 16) & 0x1FF;
         uint16_t col = (uint16_t)(((c >> 3) & 0x1F) | (((c >> 11) & 0x1F) << 5) | (((c >> 19) & 0x1F) << 10));
         if (ge_fill(x, y, w, h, col)) return;
+        g_sync_why = 1;
         ge_sync();
         ge_vram_written(x, y, w, h);
         for (int j = 0; j < h; j++)
@@ -89,6 +141,7 @@ static void exec(const uint32_t *f)
         g_xi = 0;
         g_xfer_dir = (op >> 5) == 5 ? 1 : 2;
         if (g_xfer_dir == 2) ge_note_read(g_xx, g_xy, g_xw, g_xh);
+        g_sync_why = g_xfer_dir == 1 ? 2 : 3;
         ge_sync();                              /* the CPU accesses VRAM directly */
         if (g_xfer_dir == 1) ge_vram_written(g_xx, g_xy, g_xw, g_xh);
         return;
@@ -101,6 +154,7 @@ static void exec(const uint32_t *f)
         if (!h) h = 512;
         ge_note_read(sx, sy, w, h);
         if (ge_copy(sx, sy, dx, dy, w, h)) return;
+        g_sync_why = 4;
         ge_sync();
         ge_vram_written(dx, dy, w, h);
         for (int j = 0; j < h; j++)
@@ -315,6 +369,15 @@ stats:
             }
         }
     }
+    {
+        static int combo_down;
+        SceCtrlData pad;
+        sceCtrlPeekBufferPositive(&pad, 1);
+        unsigned want = PSP_CTRL_LTRIGGER | PSP_CTRL_RTRIGGER | PSP_CTRL_SELECT;
+        int down = (pad.Buttons & want) == want;
+        if (down && !combo_down) snapshot();
+        combo_down = down;
+    }
     if (frame == 100 || frame == 1000 || frame == 2000) g_log_prims = 24;
     if (++frame % 120 == 0) {
         extern uint32_t g_gpu_lists;
@@ -331,6 +394,17 @@ stats:
         logf_("ge: %u prims (%u perspective-correct), %u software, %u texture page copies, %u syncs (totals)\n",
               (unsigned)g_ge_prims, (unsigned)g_ge_pgxp, (unsigned)g_ge_sw_prims, (unsigned)g_ge_tex_uploads,
               (unsigned)g_ge_syncs);
+        {
+            extern uint32_t g_sync_stats[16];
+            static uint32_t last[16];
+            char buf[160];
+            int n = 0;
+            for (int i = 0; i < 11; i++) {
+                n += snprintf(buf + n, sizeof buf - n, " %u", (unsigned)(g_sync_stats[i] - last[i]));
+                last[i] = g_sync_stats[i];
+            }
+            logf_("ge syncs by reason (other fill upload readback copy list clut arena sw vtx present):%s\n", buf);
+        }
         extern uint32_t g_wide_clipped, g_wide_tris;
         logf_("widescreen clipper: %u polygons, %u triangles (totals)\n", (unsigned)g_wide_clipped,
               (unsigned)g_wide_tris);

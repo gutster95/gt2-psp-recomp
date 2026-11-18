@@ -7,6 +7,7 @@ extern int g_hires;                  /* displayed frames rendered at 480x272 int
 extern int g_widescreen;             /* 16:9: GTE projection X * 3/4, frames use the full 480 width */
 
 void ge_init(void);
+extern int g_sync_why;              /* 1 fill 2 upload 3 readback 4 copy 5 list 6 clut 7 arena 8 sw 9 vtx 10 present */
 void ge_sync(void);                  /* finish all queued GE work; call before the CPU touches VRAM */
 void ge_polygon(const uint32_t *w);
 void ge_rect(const uint32_t *w);

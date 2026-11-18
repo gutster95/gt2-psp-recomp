@@ -63,6 +63,8 @@ static inline void *valloc_v(int bytes)
 static int g_cur_fb = -1;             /* GE draw target: -1 PS1 VRAM, 0/1 hi-res frame buffers, 2 scaled present */
 static int g_scissor_is_width = 1;    /* sceGuScissor(x, y, w, h) semantics, checked at startup */
 uint32_t g_ge_prims, g_ge_sw_prims, g_ge_tex_uploads, g_ge_syncs, g_ge_pgxp;
+int g_sync_why;                       /* reason of the next ge_sync (statistics, see SYNC_* in ge.h) */
+uint32_t g_sync_stats[16];
 
 static inline int sx11(uint32_t v) { return ((int32_t)(v << 21)) >> 21; }
 
@@ -70,6 +72,7 @@ static inline int sx11(uint32_t v) { return ((int32_t)(v << 21)) >> 21; }
 
 static uint32_t g_page_ver[32];
 static uint32_t g_ge_pending;           /* pages the GE has drawn into since the last sync */
+static int16_t g_pend_box[32][4];       /* per pending page: bounding box (x0, y0, x1, y1) of the GE's drawing */
 
 static void touch(int x0, int y0, int x1, int y1, int by_ge)   /* inclusive */
 {
@@ -80,8 +83,19 @@ static void touch(int x0, int y0, int x1, int y1, int by_ge)   /* inclusive */
     if (x0 > x1 || y0 > y1) return;
     for (int py = y0 >> 8; py <= y1 >> 8; py++)
         for (int px = x0 >> 6; px <= x1 >> 6; px++) {
-            g_page_ver[py * 16 + px]++;
-            if (by_ge) g_ge_pending |= 1u << (py * 16 + px);
+            int pg = py * 16 + px;
+            g_page_ver[pg]++;
+            if (by_ge) {
+                int16_t *b = g_pend_box[pg];
+                if (!(g_ge_pending & (1u << pg))) { b[0] = (int16_t)x0; b[1] = (int16_t)y0; b[2] = (int16_t)x1; b[3] = (int16_t)y1; }
+                else {
+                    if (x0 < b[0]) b[0] = (int16_t)x0;
+                    if (y0 < b[1]) b[1] = (int16_t)y0;
+                    if (x1 > b[2]) b[2] = (int16_t)x1;
+                    if (y1 > b[3]) b[3] = (int16_t)y1;
+                }
+                g_ge_pending |= 1u << pg;
+            }
         }
 }
 
@@ -128,6 +142,8 @@ void ge_sync(void)
     g_clut_top = 0;
     g_nclut = 0;
     g_ge_syncs++;
+    g_sync_stats[g_sync_why & 15]++;
+    g_sync_why = 0;
 }
 
 /* Variants of the 3D-mode setup, probed at startup (selftest_3d): PPSSPP accepts all of them, real hardware
@@ -186,7 +202,7 @@ static void ge_begin(void)
 
 static void check_list(void)
 {
-    if (sceGuCheckList() > LIST_BYTES - 64 * 1024) ge_sync();
+    if (sceGuCheckList() > LIST_BYTES - 64 * 1024) { g_sync_why = 5; ge_sync(); }
 }
 
 static inline uint32_t c5to8(uint32_t v) { return (v << 3) | (v >> 2); }
@@ -194,13 +210,24 @@ static inline uint32_t c5to8(uint32_t v) { return (v << 3) | (v >> 2); }
 static const uint32_t *clut_get(int clx, int cly, int n)
 {
     int p = (cly >> 8) * 16 + (clx >> 6), p2 = (cly >> 8) * 16 + (((clx + n - 1) & 1023) >> 6);
-    if (g_ge_pending & ((1u << p) | (1u << p2))) { ge_sync(); ge_begin(); }   /* palette drawn by the GE */
+    /* palette row inside what the GE has drawn since the last sync: wait for it (page bounding boxes, so that a
+     * CLUT next to a frame buffer in the same 64x256 page does not force a sync per primitive) */
+    for (int k = 0; k < 2; k++) {
+        int pg = k ? p2 : p;
+        if (!(g_ge_pending & (1u << pg))) continue;
+        const int16_t *b = g_pend_box[pg];
+        int cx1 = clx + n - 1;
+        if (cly >= b[1] && cly <= b[3] && (cx1 > 1023 || (clx <= b[2] && cx1 >= b[0]))) {
+            g_sync_why = 6; ge_sync(); ge_begin();
+            break;
+        }
+    }
     uint32_t key = (n == 256 ? 0x80000000u : 0) | ((uint32_t)cly << 10) | (uint32_t)clx;
     uint32_t ver = g_page_ver[p] ^ (g_page_ver[p2] * 0x9E3779B1u);
     for (int i = 0; i < g_nclut; i++)
         if (g_cluts[i].key == key && g_cluts[i].ver == ver) { g_clut_transparent = g_cluts[i].transparent; return g_cluts[i].p; }
     uint32_t bytes = (uint32_t)(n * 4 + 63) & ~63u;
-    if (g_clut_top + bytes > CLUT_ARENA) { ge_sync(); ge_begin(); }
+    if (g_clut_top + bytes > CLUT_ARENA) { g_sync_why = 7; ge_sync(); ge_begin(); }
     uint32_t *dst = (uint32_t *)((uintptr_t)((uint8_t *)g_clut_arena + g_clut_top) | 0x40000000u);   /* uncached */
     g_clut_top += bytes;
     const uint16_t *src = g_vram + cly * 1024;
@@ -663,6 +690,7 @@ static void submit(int prim, int n, const GeVtx *v, int *box, int tex, int depth
     if (!vis1) return;
     int fk = frame_of(g_rs.clip_x0, g_rs.clip_y0);
     if (needs_sw(tex, depth) && sw) {
+        g_sync_why = 8;
         ge_sync();
         sw(w);
         touch(box[0], box[1], box[2], box[3], 0);
@@ -670,7 +698,7 @@ static void submit(int prim, int n, const GeVtx *v, int *box, int tex, int depth
         if (fk >= 0) mirror(box[0], box[1], box[2] - box[0] + 1, box[3] - box[1] + 1);
         return;
     }
-    if (g_vtop > VARENA - 1024) ge_sync();
+    if (g_vtop > VARENA - 1024) { g_sync_why = 9; ge_sync(); }
     ge_begin();
     if (fk >= 0) prepare_frame(fk);
     int ph = g_phase;
@@ -930,6 +958,7 @@ void ge_present(int dx, int dy, int w, int h, int blank)
     int k = blank ? -1 : frame_for_display(dx, dy, w, h);
     int show;
     if (k >= 0 && g_frames[k].drawn) {
+        g_sync_why = 10;
         ge_sync();
         show = k;
         g_frames[k ^ 1].band_clear = 1;
