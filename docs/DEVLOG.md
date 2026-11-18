@@ -358,3 +358,12 @@ is a stable 30 fps.
   the 1.5 ms sector spacing. 0.75 ms halves that and works; 0.1 ms breaks the game (a runaway read of 55k sectors at
   boot, the GT map is never reached) - libcd's read logic depends on sector timing. A libcd-level read path would
   save only these fractions of a second per load, so it is postponed until load times on the real PSP are known.
+
+## 2026-11-18 - Widescreen in menus, software fallback check
+
+* Navigated by script to the dealer car view (East City -> Mazda -> Demio), license test B-1 and the attract race.
+  The dealer screen (3D car + 2D menu) was torn apart by the HUD anchoring (breadcrumb bar, buttons and price shifted
+  to the edges in pieces). Anchoring now only runs in overlay 0 (races, incl. license tests); menus keep their 2D
+  layout in the 4:3 middle. Race and license HUD still anchored; the dealer car renders correctly.
+* Software fallbacks (15-bit textures, texture windows): 0 in ~10 M primitives over title, map, menus, dealer,
+  license test and replay. 24-bit display mode only occurs in the (unused) movie overlay. Nothing to do for now.

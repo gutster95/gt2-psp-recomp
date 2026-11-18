@@ -550,7 +550,8 @@ static void draw(int prim, int n, const GeVtx *v, int tex, int semi, int mode, i
     if (fk >= 0) {
         Frame *f = &g_frames[fk];
         bind(fk);
-        /* HUD anchoring: in a 3D scene, 2D elements in the left/right 40% of the 4:3 picture move to the 16:9
+        /* HUD anchoring (races only - overlay 0; menus with 3D content such as the dealer's car view keep their
+         * 2D layout in the 4:3 middle): in a 3D scene, 2D elements in the left/right 40% of the 4:3 picture move to the 16:9
          * edges by the band width (58.5 px); elements in the middle or wider than half the screen stay. */
         /* Text is drawn glyph by glyph: a glyph next to the previous 2D element on the same line belongs to the same
          * string and takes its shift, so strings are never torn apart. */
@@ -558,7 +559,7 @@ static void draw(int prim, int n, const GeVtx *v, int tex, int semi, int mode, i
         static int run_valid;
         float shift = 0;
         if (is3d) { f->n3d_cur++; run_valid = 0; }
-        else if (g_widescreen && g_hud_anchor && (f->n3d_last > 50 || f->n3d_cur > 50)) {
+        else if (g_widescreen && g_hud_anchor && g_cur_overlay == 0 && (f->n3d_last > 50 || f->n3d_cur > 50)) {
             float lo = v[0].x, hi = v[0].x, y0 = v[0].y, y1 = v[0].y;
             for (int i = 1; i < n; i++) {
                 if (v[i].x < lo) lo = v[i].x;
