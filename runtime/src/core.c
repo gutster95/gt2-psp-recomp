@@ -7,7 +7,7 @@
 #include "cdrom.h"
 #include "prof.h"
 
-uint8_t *g_ram;
+uint8_t g_ram[PSX_RAM_SIZE] __attribute__((aligned(64)));   /* fixed address: no pointer load per access */
 uint8_t g_scratch[1024] __attribute__((aligned(16)));
 uint32_t g_trace[TRACE_SIZE];
 uint32_t g_trace_pos;

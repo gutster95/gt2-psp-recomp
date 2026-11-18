@@ -283,7 +283,8 @@ class Translator:
         for ins in insns.values():
             if ins.kind in (K_BRANCH, K_JUMP) and ins.target is not None and start <= ins.target < end:
                 targets.add(ins.target)
-        out = [f"void {name}(PsxCpu *c)", "{", f"    TRACE(0x{start:08x}u);"]
+        # restrict: c->r[] is only reached through c, so the compiler may keep registers across memory stores
+        out = [f"void {name}(PsxCpu *restrict c)", "{", f"    TRACE(0x{start:08x}u);"]
         self.cur_mod = m.name
         pc = start
         while pc < end:

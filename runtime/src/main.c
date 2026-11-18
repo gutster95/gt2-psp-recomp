@@ -73,9 +73,8 @@ int main(int argc, char **argv)
     load_settings();
     prof_init();
 
-    g_ram = memalign(64, PSX_RAM_SIZE);
-    if (!g_ram) fatal(0, "out of memory (RAM)");
-    memset(g_ram, 0, PSX_RAM_SIZE);
+    extern void gte_init(void);
+    gte_init();
     gpu_init();
     io_init();
     cdrom_init();

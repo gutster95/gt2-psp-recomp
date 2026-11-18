@@ -45,6 +45,11 @@ static void report(void)
         logf_("  %08x %u%%\n", (unsigned)g_fn_addr[best], (unsigned)(g_fn_cnt[best] * 100 / g_total));
         g_fn_cnt[best] = 0;
     }
+    extern uint32_t g_gte_count[64];
+    logf_("  GTE commands per 10 s:");
+    for (int i = 0; i < 64; i++) if (g_gte_count[i]) logf_(" %02x:%u", i, (unsigned)g_gte_count[i]);
+    logf_("\n");
+    memset(g_gte_count, 0, sizeof(uint32_t) * 64);
     memset(g_ph, 0, sizeof g_ph);
     memset(g_fn_addr, 0, sizeof g_fn_addr);
     memset(g_fn_cnt, 0, sizeof g_fn_cnt);

@@ -17,8 +17,9 @@ enum { RT0, RT1, RT2, RT3, RT4, TRX, TRY, TRZ, L0, L1, L2, L3, L4, RBK, GBK, BBK
        LR0, LR1, LR2, LR3, LR4, RFC, GFC, BFC, OFX, OFY, H, DQA, DQB, ZSF3, ZSF4, FLAG };
 
 static uint32_t g_flag;
-uint32_t g_gte_rtpt, g_gte_err[32];   /* debug: RTPT count and error-flag histogram */
-static uint8_t g_unr[0x101];
+uint32_t g_gte_rtpt, g_gte_err[32], g_gte_count[64];   /* debug: RTPT count and error-flag histogram */
+uint8_t g_gte_unr[0x101];   /* UNR division table, also used by the inline fast paths (gte_fast.h) */
+#define g_unr g_gte_unr
 
 static void unr_init(void)
 {
@@ -27,6 +28,8 @@ static void unr_init(void)
         g_unr[i] = (uint8_t)(v < 0 ? 0 : v);
     }
 }
+
+void gte_init(void) { unr_init(); }   /* the inline fast paths need the table before the first command */
 
 static inline int16_t lo16(uint32_t v) { return (int16_t)(v & 0xFFFF); }
 static inline int16_t hi16(uint32_t v) { return (int16_t)(v >> 16); }
@@ -234,9 +237,10 @@ static void ncx(PsxCpu *c, int n, int sf, int lm, int mode)   /* mode 0 NCS, 1 N
 
 static void gte_cmd_impl(PsxCpu *c, uint32_t insn);
 
-void gte_cmd(PsxCpu *c, uint32_t insn)
+void gte_cmd_slow(PsxCpu *c, uint32_t insn)
 {
     PHASE_BEGIN(PH_GTE);
+    g_gte_count[insn & 63]++;
     gte_cmd_impl(c, insn);
     PHASE_END();
 }
@@ -374,7 +378,7 @@ static void gte_cmd_impl(PsxCpu *c, uint32_t insn)
 
 /* ---- register transfers ---------------------------------------------------------------------------------- */
 
-uint32_t gte_read_data(PsxCpu *c, int reg)
+uint32_t gte_read_data_slow(PsxCpu *c, int reg)
 {
     switch (reg) {
     case VZ0: case VZ1: case VZ2: case IR0: case IR1: case IR2: case IR3:
@@ -394,7 +398,7 @@ uint32_t gte_read_data(PsxCpu *c, int reg)
     return D[reg];
 }
 
-void gte_write_data(PsxCpu *c, int reg, uint32_t v)
+void gte_write_data_slow(PsxCpu *c, int reg, uint32_t v)
 {
     switch (reg) {
     case SXYP:
@@ -422,7 +426,7 @@ void gte_write_data(PsxCpu *c, int reg, uint32_t v)
     D[reg] = v;
 }
 
-uint32_t gte_read_ctrl(PsxCpu *c, int reg)
+uint32_t gte_read_ctrl_slow(PsxCpu *c, int reg)
 {
     switch (reg) {
     case RT4: case L4: case LR4: case H: case DQA: case ZSF3: case ZSF4:
@@ -431,7 +435,7 @@ uint32_t gte_read_ctrl(PsxCpu *c, int reg)
     return C[reg];
 }
 
-void gte_write_ctrl(PsxCpu *c, int reg, uint32_t v)
+void gte_write_ctrl_slow(PsxCpu *c, int reg, uint32_t v)
 {
     if (reg == FLAG) {
         v &= 0x7FFFF000u;
