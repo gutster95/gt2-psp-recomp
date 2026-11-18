@@ -326,3 +326,13 @@ is a stable 30 fps.
   ~0.1% of samples clip.
 * Cost (PPSSPP): heavy replay scenes 37-50 frames/120 vblanks with audio vs 50-60 without, after moving the mixer
   to a voice-by-voice block loop (first version: 31-45). settings.txt audio=0 turns sound off for comparisons.
+
+## 2026-11-18 - Audio fix: music dropouts ("constant hiss")
+
+* User: constant hissing. Measured separately (debug dump now SPU L/R + XA L/R): SPU spectrum normal; XA decoding
+  matches an independent Python decoder and has a normal music spectrum - but the XA output had a gap every ~90 ms
+  (368 gaps of 15-40 ms in 30 s): constant crackling.
+* Cause: the CD scheduled each XA sector one period after the delivery instead of after the previous due time, so
+  the stream drifted behind real time, and the mixer played without any buffer. Fix: fixed 75/150 Hz sector clock
+  for XA reads, a ~100 ms jitter buffer in the mixer, linear interpolation in the 37.8 -> 44.1 kHz resampler.
+  Result: 0 gaps.

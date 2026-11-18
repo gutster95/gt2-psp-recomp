@@ -240,7 +240,15 @@ static void deliver(void)
     /* No overrun: a slow frame (or a slow PSP) must never let a new sector replace one the game has not taken yet,
      * that desynchronises libcd's interrupt handler (it then waits forever for data). */
     if (g_reading && t >= g_next_sector_at && !g_qn && g_consumed) {
-        g_next_sector_at = t + ((g_mode & 0x40) ? ((g_mode & 0x80) ? 6667 : 13333) : 1500);
+        /* XA streaming runs on a fixed clock (75/150 sectors per second): the next sector is due one period after
+         * the previous due time, not after this delivery, otherwise the stream drifts behind real time and the music
+         * buffer runs dry. Data reads simply come every 1.5 ms. */
+        if (g_mode & 0x40) {
+            uint64_t period = (g_mode & 0x80) ? 6667 : 13333;
+            g_next_sector_at = (t - g_next_sector_at < 4 * period) ? g_next_sector_at + period : t + period;
+        } else {
+            g_next_sector_at = t + 1500;
+        }
         if (!read_sector(g_pos)) {
             stop_reading();
             uint8_t b[2] = {(uint8_t)(g_stat | 1), 0x10};

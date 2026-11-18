@@ -150,6 +150,7 @@ static inline int32_t volume(uint16_t r)
 
 /* Block mixer: voice by voice over the whole block (per-voice constants hoisted), accumulated in g_acc. */
 static int32_t g_acc[BLOCK * 2];
+static int16_t g_dbg[BLOCK * 4];          /* debug dump: SPU L/R, XA L/R before mixing */
 static int16_t g_vout[2][BLOCK];           /* output of the previous/current voice (pitch modulation) */
 static int16_t g_noise[BLOCK];
 
@@ -226,12 +227,26 @@ static void mix(int16_t *out, int n)
     int32_t mvl = volume(REG(0x1D80)), mvr = volume(REG(0x1D82));
     int32_t cdl = (int16_t)REG(0x1DB0), cdr = (int16_t)REG(0x1DB2);
     int cd_on = cnt & 1;
+    /* XA jitter buffer: start playing with ~2 sectors (~100 ms) buffered, stop when it runs dry (so a late sector
+     * gives one short pause instead of constant crackling) */
+    static int xa_playing;
+    uint32_t avail = g_xa_w - g_xa_r;
+    if (!xa_playing && avail >= 4032) xa_playing = 1;
     for (int s = 0; s < n; s++) {
+        if (xa_playing && g_xa_r == g_xa_w) xa_playing = 0;
         int32_t l = g_acc[s * 2] * mvl >> 15, r = g_acc[s * 2 + 1] * mvr >> 15;
-        if (cd_on && g_xa_r != g_xa_w) {           /* CD-XA music */
+        g_dbg[s * 4] = (int16_t)(l > 32767 ? 32767 : l < -32768 ? -32768 : l);
+        g_dbg[s * 4 + 1] = (int16_t)(r > 32767 ? 32767 : r < -32768 ? -32768 : r);
+        g_dbg[s * 4 + 2] = g_dbg[s * 4 + 3] = 0;
+        if (cd_on && xa_playing) {                 /* CD-XA music */
             int16_t *x = g_xa[g_xa_r & (XA_RING - 1)];
-            l += x[0] * cdl >> 15;
-            r += x[1] * cdr >> 15;
+            int16_t *y = (g_xa_r + 1 != g_xa_w) ? g_xa[(g_xa_r + 1) & (XA_RING - 1)] : x;
+            int32_t f = (int32_t)(g_xa_frac >> 4);                   /* 12-bit fraction */
+            int32_t xl = x[0] + ((y[0] - x[0]) * f >> 12), xr = x[1] + ((y[1] - x[1]) * f >> 12);
+            l += xl * cdl >> 15;
+            r += xr * cdr >> 15;
+            g_dbg[s * 4 + 2] = (int16_t)(xl * cdl >> 15);
+            g_dbg[s * 4 + 3] = (int16_t)(xr * cdr >> 15);
             g_xa_frac += g_xa_step;
             g_xa_r += g_xa_frac >> 16;
             g_xa_frac &= 0xFFFF;
@@ -261,7 +276,7 @@ static int audio_thread(SceSize args, void *argp)
     for (int k = 0;; k ^= 1) {
         mix(buf[k], BLOCK);
         if (dump && dump_blocks > 0) {
-            fwrite(buf[k], 4, BLOCK, dump);
+            fwrite(g_dbg, 8, BLOCK, dump);
             if (--dump_blocks == 0) { fclose(dump); dump = 0; }
         }
         sceAudioOutputBlocking(ch, PSP_AUDIO_VOLUME_MAX, buf[k]);
