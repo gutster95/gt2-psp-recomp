@@ -29,6 +29,7 @@
 #include "gpu.h"
 #include "raster.h"
 #include "ge.h"
+#include "prof.h"
 
 int g_use_ge = 1;
 
@@ -41,6 +42,7 @@ typedef struct { uint16_t u, v; uint32_t c; int16_t x, y, z, pad; } GeVtx;
 
 static uint32_t g_list[LIST_BYTES / 4] __attribute__((aligned(64)));
 static int g_open, g_shown;
+static int g_last_vtype = -1, g_draws;    /* draw_array state */
 static int g_cur_fb = -1;             /* GE draw target: -1 PS1 VRAM, 0/1 hi-res frame buffers, 2 scaled present */
 static int g_scissor_is_width = 1;    /* sceGuScissor(x, y, w, h) semantics, checked at startup */
 uint32_t g_ge_prims, g_ge_sw_prims, g_ge_tex_uploads, g_ge_syncs, g_ge_pgxp;
@@ -75,7 +77,7 @@ void ge_vram_written(int x, int y, int w, int h)
 /* ---- GE state cache ---------------------------------------------------------------------------------------- */
 
 static struct {
-    int tex, tfx, blend, atest, stencil, dither, tex_psm;
+    int tex, tfx, blend, atest, stencil, dither, tex_psm, filter;
     int sc[4];
     uintptr_t tex_ptr;
     const void *clut;
@@ -144,6 +146,7 @@ static void ge_begin(void)
     sceGuTexFilter(GU_NEAREST, GU_NEAREST);
     sceGuClutMode(GU_PSM_8888, 0, 0xFF, 0);
     invalidate_state();
+    g_last_vtype = -1;
     g_cur_fb = -1;
     g_open = 1;
 }
@@ -193,8 +196,11 @@ typedef struct { uint32_t key, ver[2], use; uint8_t *buf; } Slot;
 static Slot g_slots[NSLOTS];
 static uint32_t g_use_clock;
 
+void ge_note_read(int x, int y, int w, int h);
+
 static const uint8_t *tex_page(int depth, int tpx, int tpy)
 {
+    ge_note_read(tpx, tpy, depth == 0 ? 64 : 128, 256);
     int np = depth == 0 ? 1 : 2;
     int p0 = (tpy >> 8) * 16 + (tpx >> 6), p1 = (p0 & 16) | ((p0 + 1) & 15);
     uint32_t key = 1 + ((uint32_t)depth << 8) + (uint32_t)p0;
@@ -221,6 +227,13 @@ static const uint8_t *tex_page(int depth, int tpx, int tpy)
 }
 
 /* ---- render state -------------------------------------------------------------------------------------------- */
+
+static void set_filter(int lin)
+{
+    if (S.filter == lin) return;
+    S.filter = lin;
+    sceGuTexFilter(lin ? GU_LINEAR : GU_NEAREST, lin ? GU_LINEAR : GU_NEAREST);
+}
 
 static void set_tex(int on)
 {
@@ -318,17 +331,38 @@ static void setup_texture(int depth, int page, uint32_t clut)
 
 int g_hires = 1, g_widescreen = 1;
 
-typedef struct { int x, y, w, h, used, drawn, band_clear, n3d_cur, n3d_last; } Frame;
+typedef struct {
+    int x, y, w, h, used, drawn, band_clear, n3d_cur, n3d_last;
+    float kx2, ox2, kx3, ox3, ky, oy;   /* precomputed mappings PS1 -> PSP pixels (2D centre / 3D full width) */
+} Frame;
 int g_hud_anchor = 1;   /* widescreen: move HUD elements to the screen edges in 3D scenes (shifted, not stretched) */
 static Frame g_frames[2];
+static int g_frame_gen;   /* bumped whenever a frame's mapping changes */
+
+/* Displayed frames are drawn into PS1 VRAM (1x) as well only once the game reads them (as a texture, by a VRAM
+ * copy or a CPU readback); until then the 1x pass of frame primitives is skipped - about half the GE work. */
+int g_frames_read;
+
+void ge_note_read(int x, int y, int w, int h)
+{
+    if (g_frames_read || !g_hires) return;
+    for (int k = 0; k < 2; k++) {
+        const Frame *f = &g_frames[k];
+        if (f->used && x < f->x + f->w && x + w > f->x && y < f->y + f->h && y + h > f->y) {
+            g_frames_read = 1;
+            logf_("ge: game reads a displayed frame (%d,%d %dx%d): 1x frame rendering enabled\n", x, y, w, h);
+            return;
+        }
+    }
+}
 
 typedef struct { uint16_t u, v; uint32_t c; float x, y, z; } HVtx;
 typedef struct { float u, v; uint32_t c; float x, y, z; } PVtx;
 #define PFMT (GU_TEXTURE_32BITF | GU_COLOR_8888 | GU_VERTEX_32BITF | GU_TRANSFORM_3D)
 #define HFMT (GU_TEXTURE_16BIT | GU_COLOR_8888 | GU_VERTEX_32BITF | GU_TRANSFORM_2D)
 
-static inline float map_x(const Frame *f, float x) { return 240.0f + (x - f->x - f->w * 0.5f) * (363.0f / f->w); }
-static inline float map_x3(const Frame *f, float x) { return (x - f->x) * (480.0f / f->w); }
+static inline float map_x(const Frame *f, float x) { return f->ox2 + x * f->kx2; }
+static inline float map_x3(const Frame *f, float x) { return f->ox3 + x * f->kx3; }
 
 /* Recently GTE-projected screen coordinates (hash set, entries expire after a few vblanks) */
 #define XYSET 8192
@@ -373,7 +407,7 @@ static int xy_find(uint32_t xy)
 }
 
 static int is_3d_xy(uint32_t xy) { return xy_find(xy) >= 0; }
-static inline float map_y(const Frame *f, float y) { return (y - f->y) * (272.0f / f->h); }
+static inline float map_y(const Frame *f, float y) { return f->oy + y * f->ky; }
 
 static void bind(int target)
 {
@@ -399,12 +433,19 @@ static int clampi(int v, int lo, int hi) { return v < lo ? lo : v > hi ? hi : v;
 /* scissor in the hi-res buffer for the current drawing area */
 static void hires_scissor(const Frame *f, int is3d)
 {
-    float (*mx)(const Frame *, float) = is3d ? map_x3 : map_x;
-    int x0 = clampi((int)(mx(f, (float)g_rs.clip_x0) + 0.5f), 0, 479);
-    int x1 = clampi((int)(mx(f, (float)g_rs.clip_x1 + 1) + 0.5f) - 1, 0, 479);
-    int y0 = clampi((int)(map_y(f, (float)g_rs.clip_y0) + 0.5f), 0, 271);
-    int y1 = clampi((int)(map_y(f, (float)g_rs.clip_y1 + 1) + 0.5f) - 1, 0, 271);
-    set_scissor(x0, y0, x1, y1);
+    /* the mapped rectangle only changes with the drawing area: cache it */
+    static const Frame *lf;
+    static int lis3d = -1, lgen = -1, lc[4] = {-1, -1, -1, -1}, r[4];
+    if (f != lf || lgen != g_frame_gen || is3d != lis3d || lc[0] != g_rs.clip_x0 || lc[1] != g_rs.clip_y0 || lc[2] != g_rs.clip_x1 ||
+        lc[3] != g_rs.clip_y1) {
+        lf = f; lgen = g_frame_gen; lis3d = is3d; lc[0] = g_rs.clip_x0; lc[1] = g_rs.clip_y0; lc[2] = g_rs.clip_x1; lc[3] = g_rs.clip_y1;
+        float (*mx)(const Frame *, float) = is3d ? map_x3 : map_x;
+        r[0] = clampi((int)(mx(f, (float)g_rs.clip_x0) + 0.5f), 0, 479);
+        r[2] = clampi((int)(mx(f, (float)g_rs.clip_x1 + 1) + 0.5f) - 1, 0, 479);
+        r[1] = clampi((int)(map_y(f, (float)g_rs.clip_y0) + 0.5f), 0, 271);
+        r[3] = clampi((int)(map_y(f, (float)g_rs.clip_y1 + 1) + 0.5f) - 1, 0, 271);
+    }
+    set_scissor(r[0], r[1], r[2], r[3]);
 }
 
 static void flat_sprite(float x0, float y0, float x1, float y1, uint32_t c)
@@ -438,33 +479,52 @@ static void prepare_frame(int k)
 
 /* ---- drawing ------------------------------------------------------------------------------------------------- */
 
+/* Draw call without pspgu's sceGuDrawArray, which calls the kernel (sceGeListUpdateStallAddr) every time. The
+ * commands go straight into the list; every 32nd draw goes through sceGuDrawArray so the GE keeps running. */
+
+static void draw_array(int prim, int vtype, int n, const void *v)
+{
+    if (++g_draws >= 32) {
+        g_draws = 0;
+        g_last_vtype = vtype;
+        sceGuDrawArray(prim, vtype, n, 0, v);
+        return;
+    }
+    if (vtype != g_last_vtype) { sceGuSendCommandi(18, vtype); g_last_vtype = vtype; }
+    sceGuSendCommandi(16, (int)(((uintptr_t)v >> 8) & 0xF0000));
+    sceGuSendCommandi(1, (int)((uintptr_t)v & 0xFFFFFF));
+    sceGuSendCommandi(4, (prim << 16) | n);
+}
+
 static void passes(int prim, int fmt, int n, const void *gv, int tex, int semi, int mode)
 {
     if (!semi) {
         set_blend(-1);
         set_atest(tex ? 1 : 0);
-        sceGuDrawArray(prim, fmt, n, 0, gv);
+        draw_array(prim, fmt, n, gv);
     } else if (!tex) {
         set_blend(mode);
         set_atest(0);
-        sceGuDrawArray(prim, fmt, n, 0, gv);
+        draw_array(prim, fmt, n, gv);
     } else {
         set_blend(-1);
         set_atest(2);                    /* texels without the STP bit: opaque */
-        sceGuDrawArray(prim, fmt, n, 0, gv);
+        draw_array(prim, fmt, n, gv);
         set_blend(mode);
         set_atest(3);                    /* texels with the STP bit: blended */
-        sceGuDrawArray(prim, fmt, n, 0, gv);
+        draw_array(prim, fmt, n, gv);
     }
 }
 
 /* vis1: visible in the PS1 drawing area; fk: hi-res frame or -1 */
-static void draw(int prim, int n, const GeVtx *v, int tex, int semi, int mode, int vis1, int fk, int is3d)
+static void draw(int prim, int n, const GeVtx *v, int tex, int semi, int mode, int vis1, int fk, int is3d,
+                 const int *xyj)
 {
     set_mask();
     set_dither();
-    if (vis1) {
+    if (vis1 && (fk < 0 || g_frames_read)) {
         bind(-1);
+        set_filter(0);
         set_scissor(g_rs.clip_x0, g_rs.clip_y0, g_rs.clip_x1, g_rs.clip_y1);
         GeVtx *gv = sceGuGetMemory(n * (int)sizeof(GeVtx));
         memcpy(gv, v, n * sizeof(GeVtx));
@@ -503,12 +563,12 @@ static void draw(int prim, int n, const GeVtx *v, int tex, int semi, int mode, i
             }
         }
         hires_scissor(f, is3d || shift != 0);
-        if (is3d && g_pgxp && prim == GU_TRIANGLE_STRIP) {
+        if (is3d && g_pgxp && xyj && prim == GU_TRIANGLE_STRIP) {
             PVtx *pv = sceGuGetMemory(n * (int)sizeof(PVtx));
             int ok = 1;
             for (int i = 0; i < n && ok; i++) {
                 int rx = v[i].x - g_rs.off_x, ry = v[i].y - g_rs.off_y;
-                int j = xy_find(((uint32_t)(uint16_t)ry << 16) | (uint16_t)rx);
+                int j = xyj ? xyj[i] : -1;
                 if (j < 0 || g_xy_pz[j] < 1.0f || g_xy_px[j] - rx > 2 || rx - g_xy_px[j] > 2 ||
                     g_xy_py[j] - ry > 2 || ry - g_xy_py[j] > 2) { ok = 0; break; }
                 float z = g_xy_pz[j];
@@ -518,9 +578,8 @@ static void draw(int prim, int n, const GeVtx *v, int tex, int semi, int mode, i
             if (ok) {
                 /* bilinear only without transparent texels: filtering would pull their black into the edges */
                 int filt = tex && !semi && g_tex_filter && !g_clut_transparent;
-                if (filt) sceGuTexFilter(GU_LINEAR, GU_LINEAR);
+                set_filter(filt);
                 passes(prim, PFMT, n, pv, tex, semi, mode);
-                if (filt) sceGuTexFilter(GU_NEAREST, GU_NEAREST);
                 g_ge_pgxp++;
                 g_ge_prims++;
                 check_list();
@@ -536,6 +595,7 @@ static void draw(int prim, int n, const GeVtx *v, int tex, int semi, int mode, i
             hv[i].y = map_y(f, v[i].y);
             hv[i].z = 0;
         }
+        set_filter(0);
         passes(prim, HFMT, n, hv, tex, semi, mode);
     }
     g_ge_prims++;
@@ -563,7 +623,7 @@ static void mirror(int x, int y, int w, int h);
 
 /* Common tail of all primitives: decide targets, run the software fallback or the GE passes. */
 static void submit(int prim, int n, const GeVtx *v, int *box, int tex, int depth, int page, uint32_t clut, int raw,
-                   int semi, int mode, void (*sw)(const uint32_t *), const uint32_t *w, int is3d)
+                   int semi, int mode, void (*sw)(const uint32_t *), const uint32_t *w, int is3d, const int *xyj)
 {
     if (too_big(box)) return;
     int vis1 = clip_box(box);
@@ -579,9 +639,13 @@ static void submit(int prim, int n, const GeVtx *v, int *box, int tex, int depth
     }
     ge_begin();
     if (fk >= 0) prepare_frame(fk);
+    int ph = g_phase;
+    g_phase = PH_GE_TEX;
     if (tex) { setup_texture(depth, page, clut); set_tfx(raw); }
     set_tex(tex);
-    draw(prim, n, v, tex, semi, mode, vis1, fk, is3d && g_widescreen);
+    g_phase = PH_GE_DRAW;
+    draw(prim, n, v, tex, semi, mode, vis1, fk, is3d && g_widescreen, xyj);
+    g_phase = ph;
     if (vis1) touch(box[0], box[1], box[2], box[3], 1);
 }
 
@@ -591,14 +655,15 @@ void ge_polygon(const uint32_t *w)
 {
     uint32_t op = w[0] >> 24;
     int quad = op & 8, tex = (op & 4) != 0, gour = op & 0x10, semi = (op & 2) != 0, raw = op & 1;
-    int n = quad ? 4 : 3, k = 0, n3d = 0;
+    int n = quad ? 4 : 3, k = 0, n3d = 0, xyj[4];
     GeVtx v[4];
     uint32_t col = w[k++] & 0xFFFFFF, clut = 0, page = 0;
     int box[4] = {4096, 4096, -4096, -4096};
     for (int i = 0; i < n; i++) {
         if (i > 0 && gour) col = w[k++] & 0xFFFFFF;
         uint32_t xy = w[k++];
-        n3d += is_3d_xy(xy);
+        xyj[i] = xy_find(xy);
+        n3d += xyj[i] >= 0;
         int x = sx11(xy) + g_rs.off_x, y = sx11(xy >> 16) + g_rs.off_y;
         if (x < box[0]) box[0] = x;
         if (y < box[1]) box[1] = y;
@@ -617,7 +682,7 @@ void ge_polygon(const uint32_t *w)
     }
     if (tex) g_rs.texpage = (g_rs.texpage & ~0x9FFu) | (page & 0x9FF);
     int depth = (int)(page >> 7) & 3, mode = (g_rs.texpage >> 5) & 3;
-    submit(GU_TRIANGLE_STRIP, n, v, box, tex, depth, (int)page, clut, raw, semi, mode, raster_polygon, w, n3d >= 2);
+    submit(GU_TRIANGLE_STRIP, n, v, box, tex, depth, (int)page, clut, raw, semi, mode, raster_polygon, w, n3d >= 2, xyj);
 }
 
 void ge_rect(const uint32_t *w)
@@ -647,7 +712,7 @@ void ge_rect(const uint32_t *w)
         {(uint16_t)(u0 + ww), (uint16_t)(v0 + hh), 0xFF000000u | col, (int16_t)(x0 + ww), (int16_t)(y0 + hh), 0, 0},
     };
     submit(GU_SPRITES, 2, v, box, tex, depth, (int)(g_rs.texpage & 0x1F) | (depth << 7), clut, raw, semi, mode,
-           raster_rect, w, 0);
+           raster_rect, w, 0, 0);
 }
 
 void ge_line(int x0, int y0, uint32_t c0, int x1, int y1, uint32_t c1, int semi)
@@ -661,7 +726,7 @@ void ge_line(int x0, int y0, uint32_t c0, int x1, int y1, uint32_t c1, int semi)
         {0, 0, 0xFF000000u | c1, (int16_t)x1, (int16_t)y1, 0, 0},
     };
     int n3d = is_3d_xy(((uint32_t)y0r << 16) | (x0r & 0xFFFF)) + is_3d_xy(((uint32_t)y1r << 16) | (x1r & 0xFFFF));
-    submit(GU_LINES, 2, v, box, 0, 0, 0, 0, 0, semi, (g_rs.texpage >> 5) & 3, 0, 0, n3d >= 2);
+    submit(GU_LINES, 2, v, box, 0, 0, 0, 0, 0, semi, (g_rs.texpage >> 5) & 3, 0, 0, n3d >= 2, 0);
 }
 
 /* ---- fills, copies, uploads ---------------------------------------------------------------------------------- */
@@ -741,7 +806,7 @@ static void mirror(int x, int y, int w, int h)
             v[1] = (HVtx){(uint16_t)(s1 - ax), (uint16_t)(iy1 - iy0), 0xFFFFFFFFu, map_x(f, (float)s1), map_y(f, (float)iy1), 0};
             sceGuDrawArray(GU_SPRITES, HFMT, 2, 0, v);
         }
-        sceGuTexFilter(GU_NEAREST, GU_NEAREST);
+        sceGuTexFilter(GU_NEAREST, GU_NEAREST); S.filter = 0;
         sceGuTexWrap(GU_REPEAT, GU_REPEAT);
         check_list();
     }
@@ -778,7 +843,12 @@ static int frame_for_display(int dx, int dy, int w, int h)
     for (int k = 0; k < 2; k++)                  /* display mode changed: forget the old frames */
         if (g_frames[k].used && (g_frames[k].w != w || g_frames[k].h != h)) memset(g_frames, 0, sizeof g_frames);
     int k = !g_frames[0].used ? 0 : !g_frames[1].used ? 1 : (g_shown == 0 ? 1 : 0);
-    g_frames[k] = (Frame){dx, dy, w, h, 1, 0, 1, 0, 0};
+    Frame *f = &g_frames[k];
+    *f = (Frame){dx, dy, w, h, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0};
+    f->kx2 = 363.0f / w; f->ox2 = 240.0f - (dx + w * 0.5f) * f->kx2;
+    f->kx3 = 480.0f / w; f->ox3 = -dx * f->kx3;
+    f->ky = 272.0f / h; f->oy = -dy * f->ky;
+    g_frame_gen++;
     return k;
 }
 
@@ -814,7 +884,7 @@ static void present_scaled(int dx, int dy, int w, int h, int blank)
             gv[1] = (GeVtx){(uint16_t)(uo + s1 - s0), (uint16_t)h, 0xFFFFFFFFu, (int16_t)(ox + s1 * ow / w), (int16_t)oh, 0, 0};
             sceGuDrawArray(GU_SPRITES, VFMT, 2, 0, gv);
         }
-        sceGuTexFilter(GU_NEAREST, GU_NEAREST);
+        sceGuTexFilter(GU_NEAREST, GU_NEAREST); S.filter = 0;
         sceGuTexWrap(GU_REPEAT, GU_REPEAT);
     }
     ge_sync();
@@ -822,6 +892,7 @@ static void present_scaled(int dx, int dy, int w, int h, int blank)
 
 void ge_present(int dx, int dy, int w, int h, int blank)
 {
+    PHASE_BEGIN(PH_PRESENT);
     int k = blank ? -1 : frame_for_display(dx, dy, w, h);
     int show;
     if (k >= 0 && g_frames[k].drawn) {
@@ -836,6 +907,7 @@ void ge_present(int dx, int dy, int w, int h, int blank)
         sceDisplaySetFrameBuf((void *)(EDRAM + FB_OFF(show)), 512, PSP_DISPLAY_PIXEL_FORMAT_5551,
                               PSP_DISPLAY_SETBUF_NEXTFRAME);
     g_shown = show;
+    PHASE_END();
 }
 
 /* Startup check of the scissor semantics of this pspsdk (logged): a 100-pixel sprite is drawn with

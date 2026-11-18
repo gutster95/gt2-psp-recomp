@@ -88,6 +88,7 @@ static void exec(void)
         if (!g_xh) g_xh = 512;
         g_xi = 0;
         g_xfer_dir = (op >> 5) == 5 ? 1 : 2;
+        if (g_xfer_dir == 2) ge_note_read(g_xx, g_xy, g_xw, g_xh);
         ge_sync();                              /* the CPU accesses VRAM directly */
         if (g_xfer_dir == 1) ge_vram_written(g_xx, g_xy, g_xw, g_xh);
         return;
@@ -98,6 +99,7 @@ static void exec(void)
         int w = g_fifo[3] & 0x3FF, h = (g_fifo[3] >> 16) & 0x1FF;
         if (!w) w = 1024;
         if (!h) h = 512;
+        ge_note_read(sx, sy, w, h);
         if (ge_copy(sx, sy, dx, dy, w, h)) return;
         ge_sync();
         ge_vram_written(dx, dy, w, h);

@@ -14,6 +14,7 @@ void ge_line(int x0, int y0, uint32_t c0, int x1, int y1, uint32_t c1, int semi)
 int ge_fill(int x, int y, int w, int h, uint16_t col);           /* 0: not handled, caller uses the CPU */
 int ge_copy(int sx, int sy, int dx, int dy, int w, int h);       /* 0: not handled */
 void ge_vram_written(int x, int y, int w, int h);                /* CPU wrote VRAM: invalidate texture cache */
+void ge_note_read(int x, int y, int w, int h);                   /* game reads VRAM (texture/copy/readback) */
 void ge_upload_done(int x, int y, int w, int h);                 /* CPU upload finished: mirror to hi-res */
 void ge_present(int x, int y, int w, int h, int blank);          /* show the PS1 display area, flip */
 void ge_mark_3d(uint32_t xy);

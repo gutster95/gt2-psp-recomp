@@ -4,6 +4,7 @@
  * addition). Everything else (saturation, flags, UNR division, register quirks) follows the documentation. */
 #include "rt.h"
 #include "ge.h"
+#include "prof.h"
 
 #define D (c->gte_data)
 #define C (c->gte_ctrl)
@@ -42,6 +43,10 @@ static inline int32_t vx(PsxCpu *c, int n) { return lo16(D[VXY0 + n * 2]); }
 static inline int32_t vy(PsxCpu *c, int n) { return hi16(D[VXY0 + n * 2]); }
 static inline int32_t vz(PsxCpu *c, int n) { return lo16(D[VZ0 + n * 2]); }
 
+/* Performance: the PSP CPU is 32-bit. A 64-bit product of two 64-bit operands becomes a library call (__muldi3),
+ * a 64-bit division even more so. All products here are 32x32->64 (one MIPS mult) via M(), shifts are constant. */
+#define M(a, b) ((int64_t)(int32_t)(a) * (int32_t)(b))
+
 /* ---- MAC / IR / colour helpers ---------------------------------------------------------------------- */
 
 static inline int64_t mac_check(int i, int64_t v)
@@ -54,7 +59,7 @@ static inline int64_t mac_check(int i, int64_t v)
 static inline void set_mac(PsxCpu *c, int i, int64_t v, int shift)
 {
     mac_check(i, v);
-    D[MAC0 + i] = (uint32_t)(int32_t)(v >> shift);
+    D[MAC0 + i] = (uint32_t)(int32_t)(shift ? (v >> 12) : v);
 }
 
 static inline void set_mac0(PsxCpu *c, int64_t v)
@@ -120,12 +125,7 @@ static inline void push_sxy(PsxCpu *c, int64_t x, int64_t y)
     D[SXY2] = ((uint32_t)x & 0xFFFF) | ((uint32_t)y << 16);
 }
 
-static inline int clz16(uint32_t v)
-{
-    int n = 0;
-    for (uint32_t m = 0x8000; m && !(v & m); m >>= 1) n++;
-    return n;
-}
+static inline int clz16(uint32_t v) { return __builtin_clz(v) - 16; }   /* v != 0 */
 
 /* H / SZ3 with the hardware's unsigned Newton-Raphson division */
 static uint32_t divide(uint32_t h, uint32_t sz3)
@@ -149,10 +149,11 @@ static uint32_t divide(uint32_t h, uint32_t sz3)
 static void rtp(PsxCpu *c, int n, int sf, int lm, int last)
 {
     int shift = sf ? 12 : 0;
-    int64_t x = vx(c, n), y = vy(c, n), z = vz(c, n);
-    int64_t m1 = ((int64_t)(int32_t)C[TRX] << 12) + mat(c, RT0, 0, 0) * x + mat(c, RT0, 0, 1) * y + mat(c, RT0, 0, 2) * z;
-    int64_t m2 = ((int64_t)(int32_t)C[TRY] << 12) + mat(c, RT0, 1, 0) * x + mat(c, RT0, 1, 1) * y + mat(c, RT0, 1, 2) * z;
-    int64_t m3 = ((int64_t)(int32_t)C[TRZ] << 12) + mat(c, RT0, 2, 0) * x + mat(c, RT0, 2, 1) * y + mat(c, RT0, 2, 2) * z;
+    int32_t x = vx(c, n), y = vy(c, n), z = vz(c, n);
+    /* 16x16-bit products fit in 32 bits; only the sums with TR<<12 need 64 */
+    int64_t m1 = ((int64_t)(int32_t)C[TRX] << 12) + M(mat(c, RT0, 0, 0), x) + M(mat(c, RT0, 0, 1), y) + M(mat(c, RT0, 0, 2), z);
+    int64_t m2 = ((int64_t)(int32_t)C[TRY] << 12) + M(mat(c, RT0, 1, 0), x) + M(mat(c, RT0, 1, 1), y) + M(mat(c, RT0, 1, 2), z);
+    int64_t m3 = ((int64_t)(int32_t)C[TRZ] << 12) + M(mat(c, RT0, 2, 0), x) + M(mat(c, RT0, 2, 1), y) + M(mat(c, RT0, 2, 2), z);
     set_mac(c, 1, m1, shift);
     set_mac(c, 2, m2, shift);
     set_mac(c, 3, m3, shift);
@@ -169,46 +170,48 @@ static void rtp(PsxCpu *c, int n, int sf, int lm, int last)
     }
     push_sz(c, m3 >> 12);
     uint32_t q = divide(C[H] & 0xFFFF, D[SZ3]);
-    int64_t px = (int64_t)q * (int16_t)D[IR1];
-    if (g_widescreen && g_hires) px = px * 3 / 4;   /* 16:9: the 4:3 field of view fills 3/4 of the width */
+    int64_t px = M(q, (int16_t)D[IR1]);
+    if (g_widescreen && g_hires) px = (px * 3) >> 2;   /* 16:9: the 4:3 field of view fills 3/4 of the width */
     int64_t sx = px + (int32_t)C[OFX];
-    int64_t sy = (int64_t)q * (int16_t)D[IR2] + (int32_t)C[OFY];
+    int64_t sy = M(q, (int16_t)D[IR2]) + (int32_t)C[OFY];
     set_mac0(c, sx); set_mac0(c, sy);
     push_sxy(c, sx >> 16, sy >> 16);
-    ge_mark_3d_precise(D[SXY2], (float)sx / 65536.0f, (float)sy / 65536.0f, (float)D[SZ3]);
+    if (g_widescreen && g_hires)
+        ge_mark_3d_precise(D[SXY2], (float)(int32_t)sx * (1.0f / 65536.0f), (float)(int32_t)sy * (1.0f / 65536.0f),
+                           (float)(int32_t)D[SZ3]);
     if (last) {
-        int64_t p = (int64_t)q * (int16_t)C[DQA] + (int32_t)C[DQB];
+        int64_t p = M(q, (int16_t)C[DQA]) + (int32_t)C[DQB];
         set_mac0(c, p);
         set_ir0(c, p >> 12);
     }
 }
 
 /* MAC = BK*0x1000 + LR*IR (light colour); used by NC* commands */
-static void mul_mat_vec(PsxCpu *c, int m, int64_t v1, int64_t v2, int64_t v3, int64_t t1, int64_t t2, int64_t t3,
+static void mul_mat_vec(PsxCpu *c, int m, int32_t v1, int32_t v2, int32_t v3, int32_t t1, int32_t t2, int32_t t3,
                         int sf, int lm)
 {
     int shift = sf ? 12 : 0;
-    set_mac(c, 1, (t1 << 12) + mat(c, m, 0, 0) * v1 + mat(c, m, 0, 1) * v2 + mat(c, m, 0, 2) * v3, shift);
-    set_mac(c, 2, (t2 << 12) + mat(c, m, 1, 0) * v1 + mat(c, m, 1, 1) * v2 + mat(c, m, 1, 2) * v3, shift);
-    set_mac(c, 3, (t3 << 12) + mat(c, m, 2, 0) * v1 + mat(c, m, 2, 1) * v2 + mat(c, m, 2, 2) * v3, shift);
+    set_mac(c, 1, ((int64_t)t1 << 12) + M(mat(c, m, 0, 0), v1) + M(mat(c, m, 0, 1), v2) + M(mat(c, m, 0, 2), v3), shift);
+    set_mac(c, 2, ((int64_t)t2 << 12) + M(mat(c, m, 1, 0), v1) + M(mat(c, m, 1, 1), v2) + M(mat(c, m, 1, 2), v3), shift);
+    set_mac(c, 3, ((int64_t)t3 << 12) + M(mat(c, m, 2, 0), v1) + M(mat(c, m, 2, 1), v2) + M(mat(c, m, 2, 2), v3), shift);
     macs_to_irs(c, lm);
 }
 
-static inline int64_t ir(PsxCpu *c, int i) { return (int16_t)D[IR0 + i]; }
+static inline int32_t ir(PsxCpu *c, int i) { return (int16_t)D[IR0 + i]; }
 
 /* depth cue: MAC = MAC + (FC - MAC) * IR0, starting from MAC1-3 in "<<12" units */
 static void depth_cue_from(PsxCpu *c, int64_t m1, int64_t m2, int64_t m3, int sf, int lm)
 {
     int shift = sf ? 12 : 0;
-    int64_t i0 = ir(c, 0);
+    int32_t i0 = ir(c, 0);
     /* (FC<<12 - MAC) saturated through IR with lm=0, then MAC += IR*IR0 */
     set_mac(c, 1, ((int64_t)(int32_t)C[RFC] << 12) - m1, shift);
     set_mac(c, 2, ((int64_t)(int32_t)C[GFC] << 12) - m2, shift);
     set_mac(c, 3, ((int64_t)(int32_t)C[BFC] << 12) - m3, shift);
     macs_to_irs(c, 0);
-    set_mac(c, 1, ir(c, 1) * i0 + m1, shift);
-    set_mac(c, 2, ir(c, 2) * i0 + m2, shift);
-    set_mac(c, 3, ir(c, 3) * i0 + m3, shift);
+    set_mac(c, 1, M(ir(c, 1), i0) + m1, shift);
+    set_mac(c, 2, M(ir(c, 2), i0) + m2, shift);
+    set_mac(c, 3, M(ir(c, 3), i0) + m3, shift);
     macs_to_irs(c, lm);
 }
 
@@ -217,8 +220,8 @@ static void ncx(PsxCpu *c, int n, int sf, int lm, int mode)   /* mode 0 NCS, 1 N
     mul_mat_vec(c, L0, vx(c, n), vy(c, n), vz(c, n), 0, 0, 0, sf, lm);
     mul_mat_vec(c, LR0, ir(c, 1), ir(c, 2), ir(c, 3), (int32_t)C[RBK], (int32_t)C[GBK], (int32_t)C[BBK], sf, lm);
     if (mode) {
-        int64_t r = D[RGBC] & 0xFF, g = (D[RGBC] >> 8) & 0xFF, b = (D[RGBC] >> 16) & 0xFF;
-        int64_t m1 = (r * ir(c, 1)) << 4, m2 = (g * ir(c, 2)) << 4, m3 = (b * ir(c, 3)) << 4;
+        int32_t r = D[RGBC] & 0xFF, g = (D[RGBC] >> 8) & 0xFF, b = (D[RGBC] >> 16) & 0xFF;
+        int32_t m1 = (r * ir(c, 1)) << 4, m2 = (g * ir(c, 2)) << 4, m3 = (b * ir(c, 3)) << 4;
         if (mode == 2) depth_cue_from(c, m1, m2, m3, sf, lm);
         else {
             int shift = sf ? 12 : 0;
@@ -229,7 +232,16 @@ static void ncx(PsxCpu *c, int n, int sf, int lm, int mode)   /* mode 0 NCS, 1 N
     push_color(c);
 }
 
+static void gte_cmd_impl(PsxCpu *c, uint32_t insn);
+
 void gte_cmd(PsxCpu *c, uint32_t insn)
+{
+    PHASE_BEGIN(PH_GTE);
+    gte_cmd_impl(c, insn);
+    PHASE_END();
+}
+
+static void gte_cmd_impl(PsxCpu *c, uint32_t insn)
 {
     static int init;
     if (!init) { unr_init(); init = 1; }
@@ -240,21 +252,19 @@ void gte_cmd(PsxCpu *c, uint32_t insn)
     case 0x01: rtp(c, 0, sf, lm, 1); break;                              /* RTPS */
     case 0x30:                                                           /* RTPT */
         rtp(c, 0, sf, lm, 0); rtp(c, 1, sf, lm, 0); rtp(c, 2, sf, lm, 1);
-        g_gte_rtpt++;
-        if (g_flag & 0x7F87E000u) for (int b = 12; b < 31; b++) if (g_flag & (1u << b)) g_gte_err[b]++;
         break;
     case 0x06: {                                                         /* NCLIP */
-        int64_t x0 = lo16(D[SXY0]), y0 = hi16(D[SXY0]), x1 = lo16(D[SXY1]), y1 = hi16(D[SXY1]);
-        int64_t x2 = lo16(D[SXY2]), y2 = hi16(D[SXY2]);
-        set_mac0(c, x0 * y1 + x1 * y2 + x2 * y0 - x0 * y2 - x1 * y0 - x2 * y1);
+        int32_t x0 = lo16(D[SXY0]), y0 = hi16(D[SXY0]), x1 = lo16(D[SXY1]), y1 = hi16(D[SXY1]);
+        int32_t x2 = lo16(D[SXY2]), y2 = hi16(D[SXY2]);
+        set_mac0(c, M(x0, y1) + M(x1, y2) + M(x2, y0) - M(x0, y2) - M(x1, y0) - M(x2, y1));
         break;
     }
     case 0x0C: {                                                         /* OP (outer product) */
-        int64_t d1 = lo16(C[RT0]), d2 = lo16(C[RT2]), d3 = lo16(C[RT4]);
-        int64_t i1 = ir(c, 1), i2 = ir(c, 2), i3 = ir(c, 3);
-        set_mac(c, 1, i3 * d2 - i2 * d3, shift);
-        set_mac(c, 2, i1 * d3 - i3 * d1, shift);
-        set_mac(c, 3, i2 * d1 - i1 * d2, shift);
+        int32_t d1 = lo16(C[RT0]), d2 = lo16(C[RT2]), d3 = lo16(C[RT4]);
+        int32_t i1 = ir(c, 1), i2 = ir(c, 2), i3 = ir(c, 3);
+        set_mac(c, 1, M(i3, d2) - M(i2, d3), shift);
+        set_mac(c, 2, M(i1, d3) - M(i3, d1), shift);
+        set_mac(c, 3, M(i2, d1) - M(i1, d2), shift);
         macs_to_irs(c, lm);
         break;
     }
@@ -278,17 +288,17 @@ void gte_cmd(PsxCpu *c, uint32_t insn)
         break;
     case 0x12: {                                                         /* MVMVA */
         int mx = (insn >> 17) & 3, vv = (insn >> 15) & 3, tv = (insn >> 13) & 3;
-        int64_t v1, v2, v3, t1 = 0, t2 = 0, t3 = 0;
+        int32_t v1, v2, v3, t1 = 0, t2 = 0, t3 = 0;
         if (vv < 3) { v1 = vx(c, vv); v2 = vy(c, vv); v3 = vz(c, vv); }
         else { v1 = ir(c, 1); v2 = ir(c, 2); v3 = ir(c, 3); }
         if (tv == 0) { t1 = (int32_t)C[TRX]; t2 = (int32_t)C[TRY]; t3 = (int32_t)C[TRZ]; }
         else if (tv == 1) { t1 = (int32_t)C[RBK]; t2 = (int32_t)C[GBK]; t3 = (int32_t)C[BBK]; }
         else if (tv == 2) { t1 = (int32_t)C[RFC]; t2 = (int32_t)C[GFC]; t3 = (int32_t)C[BFC]; }
         if (mx == 3) {                                                   /* garbage matrix (hardware bug) */
-            int64_t r = (D[RGBC] & 0xFF) << 4, rt13 = lo16(C[RT1]), rt22 = lo16(C[RT2]);
-            set_mac(c, 1, (t1 << 12) - r * v1 + r * v2 + ir(c, 0) * v3, shift);
-            set_mac(c, 2, (t2 << 12) + rt13 * (v1 + v2 + v3), shift);
-            set_mac(c, 3, (t3 << 12) + rt22 * (v1 + v2 + v3), shift);
+            int32_t r = (D[RGBC] & 0xFF) << 4, rt13 = lo16(C[RT1]), rt22 = lo16(C[RT2]);
+            set_mac(c, 1, ((int64_t)t1 << 12) - M(r, v1) + M(r, v2) + M(ir(c, 0), v3), shift);
+            set_mac(c, 2, ((int64_t)t2 << 12) + M(rt13, v1 + v2 + v3), shift);
+            set_mac(c, 3, ((int64_t)t3 << 12) + M(rt22, v1 + v2 + v3), shift);
             macs_to_irs(c, lm);
         } else {
             mul_mat_vec(c, mx == 0 ? RT0 : mx == 1 ? L0 : LR0, v1, v2, v3, t1, t2, t3, sf, lm);
@@ -303,27 +313,27 @@ void gte_cmd(PsxCpu *c, uint32_t insn)
     case 0x20: ncx(c, 0, sf, lm, 0); ncx(c, 1, sf, lm, 0); ncx(c, 2, sf, lm, 0); break;   /* NCT */
     case 0x14: case 0x1C: {                                              /* CDP / CC */
         mul_mat_vec(c, LR0, ir(c, 1), ir(c, 2), ir(c, 3), (int32_t)C[RBK], (int32_t)C[GBK], (int32_t)C[BBK], sf, lm);
-        int64_t r = D[RGBC] & 0xFF, g = (D[RGBC] >> 8) & 0xFF, b = (D[RGBC] >> 16) & 0xFF;
-        int64_t m1 = (r * ir(c, 1)) << 4, m2 = (g * ir(c, 2)) << 4, m3 = (b * ir(c, 3)) << 4;
+        int32_t r = D[RGBC] & 0xFF, g = (D[RGBC] >> 8) & 0xFF, b = (D[RGBC] >> 16) & 0xFF;
+        int32_t m1 = (r * ir(c, 1)) << 4, m2 = (g * ir(c, 2)) << 4, m3 = (b * ir(c, 3)) << 4;
         if ((insn & 63) == 0x14) depth_cue_from(c, m1, m2, m3, sf, lm);
         else { set_mac(c, 1, m1, shift); set_mac(c, 2, m2, shift); set_mac(c, 3, m3, shift); macs_to_irs(c, lm); }
         push_color(c);
         break;
     }
     case 0x28:                                                           /* SQR */
-        set_mac(c, 1, ir(c, 1) * ir(c, 1), shift);
-        set_mac(c, 2, ir(c, 2) * ir(c, 2), shift);
-        set_mac(c, 3, ir(c, 3) * ir(c, 3), shift);
+        set_mac(c, 1, M(ir(c, 1), ir(c, 1)), shift);
+        set_mac(c, 2, M(ir(c, 2), ir(c, 2)), shift);
+        set_mac(c, 3, M(ir(c, 3), ir(c, 3)), shift);
         macs_to_irs(c, lm);
         break;
     case 0x29: {                                                         /* DCPL */
-        int64_t r = D[RGBC] & 0xFF, g = (D[RGBC] >> 8) & 0xFF, b = (D[RGBC] >> 16) & 0xFF;
+        int32_t r = D[RGBC] & 0xFF, g = (D[RGBC] >> 8) & 0xFF, b = (D[RGBC] >> 16) & 0xFF;
         depth_cue_from(c, (r * ir(c, 1)) << 4, (g * ir(c, 2)) << 4, (b * ir(c, 3)) << 4, sf, lm);
         push_color(c);
         break;
     }
     case 0x2D: {                                                         /* AVSZ3 */
-        int64_t v = (int64_t)(int16_t)C[ZSF3] * (D[SZ1] + D[SZ2] + D[SZ3]);
+        int64_t v = M((int16_t)C[ZSF3], D[SZ1] + D[SZ2] + D[SZ3]);
         set_mac0(c, v);
         int64_t o = v >> 12;
         if (o < 0) { o = 0; g_flag |= 1u << 18; } else if (o > 0xFFFF) { o = 0xFFFF; g_flag |= 1u << 18; }
@@ -331,7 +341,7 @@ void gte_cmd(PsxCpu *c, uint32_t insn)
         break;
     }
     case 0x2E: {                                                         /* AVSZ4 */
-        int64_t v = (int64_t)(int16_t)C[ZSF4] * (D[SZ0] + D[SZ1] + D[SZ2] + D[SZ3]);
+        int64_t v = M((int16_t)C[ZSF4], D[SZ0] + D[SZ1] + D[SZ2] + D[SZ3]);
         set_mac0(c, v);
         int64_t o = v >> 12;
         if (o < 0) { o = 0; g_flag |= 1u << 18; } else if (o > 0xFFFF) { o = 0xFFFF; g_flag |= 1u << 18; }
@@ -339,16 +349,16 @@ void gte_cmd(PsxCpu *c, uint32_t insn)
         break;
     }
     case 0x3D:                                                           /* GPF */
-        set_mac(c, 1, ir(c, 0) * ir(c, 1), shift);
-        set_mac(c, 2, ir(c, 0) * ir(c, 2), shift);
-        set_mac(c, 3, ir(c, 0) * ir(c, 3), shift);
+        set_mac(c, 1, M(ir(c, 0), ir(c, 1)), shift);
+        set_mac(c, 2, M(ir(c, 0), ir(c, 2)), shift);
+        set_mac(c, 3, M(ir(c, 0), ir(c, 3)), shift);
         macs_to_irs(c, lm);
         push_color(c);
         break;
     case 0x3E:                                                           /* GPL */
-        set_mac(c, 1, ((int64_t)(int32_t)D[MAC1] << shift) + ir(c, 0) * ir(c, 1), shift);
-        set_mac(c, 2, ((int64_t)(int32_t)D[MAC2] << shift) + ir(c, 0) * ir(c, 2), shift);
-        set_mac(c, 3, ((int64_t)(int32_t)D[MAC3] << shift) + ir(c, 0) * ir(c, 3), shift);
+        set_mac(c, 1, (shift ? ((int64_t)(int32_t)D[MAC1] << 12) : (int64_t)(int32_t)D[MAC1]) + M(ir(c, 0), ir(c, 1)), shift);
+        set_mac(c, 2, (shift ? ((int64_t)(int32_t)D[MAC2] << 12) : (int64_t)(int32_t)D[MAC2]) + M(ir(c, 0), ir(c, 2)), shift);
+        set_mac(c, 3, (shift ? ((int64_t)(int32_t)D[MAC3] << 12) : (int64_t)(int32_t)D[MAC3]) + M(ir(c, 0), ir(c, 3)), shift);
         macs_to_irs(c, lm);
         push_color(c);
         break;
@@ -435,8 +445,8 @@ void gte_write_ctrl(PsxCpu *c, int reg, uint32_t v)
 void gte_view_space(PsxCpu *c, int x, int y, int z, int32_t out[3])
 {
     for (int i = 0; i < 3; i++) {
-        int64_t m = ((int64_t)(int32_t)C[TRX + i] << 12) + (int64_t)mat(c, RT0, i, 0) * x +
-                    (int64_t)mat(c, RT0, i, 1) * y + (int64_t)mat(c, RT0, i, 2) * z;
+        int64_t m = ((int64_t)(int32_t)C[TRX + i] << 12) + M(mat(c, RT0, i, 0), x) + M(mat(c, RT0, i, 1), y) +
+                    M(mat(c, RT0, i, 2), z);
         out[i] = (int32_t)(m >> 12);
     }
 }

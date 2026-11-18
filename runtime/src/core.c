@@ -5,6 +5,7 @@
 #include "rt.h"
 #include "funcs.h"
 #include "cdrom.h"
+#include "prof.h"
 
 uint8_t *g_ram;
 uint8_t g_scratch[1024] __attribute__((aligned(16)));
@@ -77,6 +78,7 @@ void hle_longjmp(PsxCpu *c)
     logf_("longjmp buf=%08x -> ra=%08x v0=%08x sp=%08x\n", (unsigned)b, (unsigned)c->r[31],
           (unsigned)c->r[2], (unsigned)c->r[29]);
     irq_abandon();                          /* a longjmp out of an interrupt handler ends it */
+    g_phase = PH_GAME;
     longjmp(g_top, 1);
 }
 
@@ -182,6 +184,7 @@ void bios_return_from_exception(PsxCpu *c)
 
 void rt_poll(PsxCpu *c)
 {
+    PHASE_BEGIN(PH_IRQ);
     g_poll_budget = 2000;
     g_n_polls++;
     uint64_t t = now_us();
@@ -200,4 +203,5 @@ void rt_poll(PsxCpu *c)
     }
     if (!g_in_irq && g_irq_enabled && (c->cop0[12] & 0x401) == 0x401 && (g_i_stat & g_i_mask))
         call_irq_handlers(c);
+    PHASE_END();
 }

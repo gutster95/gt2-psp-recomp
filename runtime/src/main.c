@@ -10,6 +10,7 @@
 #include "cdrom.h"
 #include "sio.h"
 #include "ge.h"
+#include "prof.h"
 #include <stdio.h>
 
 PSP_MODULE_INFO("GT2PSP", 0, 0, 1);
@@ -70,6 +71,7 @@ int main(int argc, char **argv)
     scePowerSetClockFrequency(333, 333, 166);   /* default is 222 MHz */
     logf_("GT2 PSP runtime, base dir '%s'\n", dir);
     load_settings();
+    prof_init();
 
     g_ram = memalign(64, PSX_RAM_SIZE);
     if (!g_ram) fatal(0, "out of memory (RAM)");

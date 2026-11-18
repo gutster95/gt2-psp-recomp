@@ -5,6 +5,7 @@
 #include "gpu.h"
 #include "cdrom.h"
 #include "sio.h"
+#include "prof.h"
 
 uint32_t g_i_stat, g_i_mask;
 /* indexed by address - 0x1F800000, so offsets below read like the hardware addresses */
@@ -61,6 +62,7 @@ static void dma_run(int ch)
     switch (ch) {
     case 2: /* GPU */
         if ((chcr & 0x600) == 0x400) {          /* linked list */
+            PHASE_BEGIN(PH_GPU);
             g_gpu_lists++;
             uint64_t t0 = now_us();
             uint32_t a = madr, guard = 0;
@@ -73,6 +75,7 @@ static void dma_run(int ch)
                 a = hdr & 0x1FFFFC;
             }
             g_gpu_us += now_us() - t0;
+            PHASE_END();
         } else {                                /* block / sync mode */
             uint32_t words = (bcr & 0xFFFF) * ((bcr >> 16) ? (bcr >> 16) : 1);
             if (chcr & 1) {
