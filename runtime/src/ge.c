@@ -345,6 +345,7 @@ static void set_atest(int m)                    /* 0 off, 1 texel not transparen
     if (m == 0) { cmd(0x22, 0); return; }
     cmd(0x22, 1);
     if (m == 1) cmd(0xDB, GU_GREATER | (0 << 8) | (0xFF << 16));
+    else if (m == 4) cmd(0xDB, GU_GREATER | (0x30 << 8) | (0xFF << 16));   /* filtered texture with transparent texels */
     else if (m == 2) cmd(0xDB, GU_EQUAL | (0xC0 << 8) | (0xC0 << 16));
     else cmd(0xDB, GU_EQUAL | (0x40 << 8) | (0xC0 << 16));
 }
@@ -668,10 +669,16 @@ static void draw(int prim, int n, const GeVtx *v, int tex, int semi, int mode, i
                 pv[i] = (PVtx){v[i].u / 256.0f, v[i].v / 256.0f, v[i].c, hx * g_tix * z, hy * g_tiy * z, z};
             }
             if (ok) {
-                /* bilinear only without transparent texels: filtering would pull their black into the edges */
-                int filt = tex && !semi && g_tex_filter && !g_clut_transparent;
+                /* bilinear for opaque textures; with transparent texels too, but then only where the filtered alpha
+                 * is mostly opaque (the transparent texels' black would otherwise darken the edges a lot) */
+                int filt = tex && !semi && g_tex_filter;
                 set_filter(filt);
-                passes(prim, PFMT, n, pv, tex, semi, mode);
+                if (filt && g_clut_transparent) {
+                    set_blend(-1);
+                    set_atest(4);
+                    draw_array(prim, PFMT, n, pv);
+                } else
+                    passes(prim, PFMT, n, pv, tex, semi, mode);
                 g_ge_pgxp++;
                 g_ge_prims++;
                 check_list();
