@@ -1025,6 +1025,47 @@ static void present_scaled(int tgt, int dx, int dy, int w, int h, int blank)
     ge_sync();
 }
 
+/* ---- FPS counter (top right, settings.txt fps=0 hides it) ---------------------------------------------------
+ * Counts the pictures the game actually presents (new frames), drawn by the CPU into the finished display buffer
+ * with a 3x5 pixel font at 2x scale. */
+int g_show_fps = 1;
+static int g_fps_value = -1, g_fps_count;
+static uint64_t g_fps_t0;
+static const uint16_t FONT35[10] = {   /* 3x5 digits, 15 bits, row by row from the top */
+    075557, 026227, 071747, 071717, 055711, 074717, 074757, 071111, 075757, 075717};
+
+static void draw_fps(int buf)
+{
+    if (!g_show_fps || g_fps_value < 0) return;
+    uint16_t *fb = (uint16_t *)(0x40000000u | (EDRAM + FB_OFF(buf)));
+    int v = g_fps_value > 99 ? 99 : g_fps_value;
+    int digits[2] = {v / 10, v % 10}, x0 = 480 - 2 * 8 - 4, y0 = 4;
+    for (int y = -1; y < 11; y++)              /* black box behind the digits */
+        for (int x = -1; x < 16; x++) fb[(y0 + y) * 512 + x0 + x] = 0x8000;
+    for (int d = 0; d < 2; d++) {
+        if (d == 0 && digits[0] == 0) continue;
+        uint16_t g = FONT35[digits[d]];
+        for (int r = 0; r < 5; r++)
+            for (int c = 0; c < 3; c++)
+                if (g & (1 << (14 - (r * 3 + c))))
+                    for (int yy = 0; yy < 2; yy++)
+                        for (int xx = 0; xx < 2; xx++)
+                            fb[(y0 + r * 2 + yy) * 512 + x0 + d * 8 + c * 2 + xx] = 0xFFFF;
+    }
+}
+
+static void fps_frame(void)
+{
+    uint64_t t = now_us();
+    if (!g_fps_t0) g_fps_t0 = t;
+    g_fps_count++;
+    if (t - g_fps_t0 >= 1000000) {
+        g_fps_value = (int)((g_fps_count * 1000000ull + (t - g_fps_t0) / 2) / (t - g_fps_t0));
+        g_fps_count = 0;
+        g_fps_t0 = t;
+    }
+}
+
 void ge_present(int dx, int dy, int w, int h, int blank)
 {
     PHASE_BEGIN(PH_PRESENT);
@@ -1034,6 +1075,7 @@ void ge_present(int dx, int dy, int w, int h, int blank)
         g_sync_why = 10;
         ge_sync();
         show = k;
+        if (k != g_shown) { fps_frame(); draw_fps(k); }
         g_frames[k ^ 1].band_clear = 1;
     } else {
         /* without hi-res frames, buffers 0 and 1 are free: alternate between them (double buffering, no wait for
@@ -1048,6 +1090,8 @@ void ge_present(int dx, int dy, int w, int h, int blank)
         int tgt = g_hires ? 2 : (g_shown == 0 ? 1 : 0);
         present_scaled(tgt, dx, dy, w, h, blank);
         show = tgt;
+        fps_frame();
+        draw_fps(tgt);
     }
     if (show != g_shown) {
         sceDisplaySetFrameBuf((void *)(EDRAM + FB_OFF(show)), 512, PSP_DISPLAY_PIXEL_FORMAT_5551,

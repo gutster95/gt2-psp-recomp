@@ -122,44 +122,55 @@ static void key_on(int i)
     decode_block(v);
 }
 
-/* one ADSR step (psx-spx "SPU ADSR"): mode 1 = exponential, step = +7..+4 or -8..-5 */
-static void env_step(Voice *v, int exp_mode, int decrease, int shift, int step)
+/* Batched ADSR: up to 16 steps (4 for exponential decrease, whose step depends on the level) in one go, for a
+ * window of `ticks` SPU ticks starting with a step (env_wait == 0). Returns the ticks consumed. Fast envelopes
+ * step every tick - one call per tick and voice was a large part of the mixer's CPU time. */
+static int env_steps(Voice *v, int exp_mode, int decrease, int shift, int step, int ticks)
 {
-    if (v->env_wait > 0) { v->env_wait--; return; }
     int32_t cycles = 1 << (shift > 11 ? shift - 11 : 0);
     int32_t st = step << (shift < 11 ? 11 - shift : 0);
     if (exp_mode && !decrease && v->env > 0x6000) cycles *= 4;
-    if (exp_mode && decrease) st = st * v->env / 0x8000;
-    v->env += st;
+    int k = 1 + (ticks - 1) / cycles;
+    if (exp_mode && decrease) {
+        st = st * v->env / 0x8000;
+        if (k > 4) k = 4;
+    } else if (k > 16) k = 16;
+    v->env += st * k;
     if (v->env > 0x7FFF) v->env = 0x7FFF;
     if (v->env < 0) v->env = 0;
     v->env_wait = cycles - 1;
+    return (k - 1) * cycles + 1;
 }
 
-static void envelope(Voice *v, int i)
+static void envelope_ticks(Voice *v, int i, int ticks)
 {
     uint32_t base = 0x1C00 + i * 16;
     uint16_t lo = REG(base + 8), hi = REG(base + 10);
-    switch (v->phase) {
-    case 1:
-        env_step(v, lo >> 15, 0, (lo >> 10) & 31, 7 - ((lo >> 8) & 3));
-        if (v->env >= 0x7FFF) { v->phase = 2; v->env_wait = 0; }
-        break;
-    case 2: {
-        env_step(v, 1, 1, (lo >> 4) & 15, -8);
-        int32_t sl = ((lo & 15) + 1) * 0x800;
-        if (v->env <= sl) { v->phase = 3; v->env_wait = 0; }
-        break;
-    }
-    case 3: {
-        int dec = (hi >> 14) & 1, stp = (hi >> 6) & 3;
-        env_step(v, hi >> 15, dec, (hi >> 8) & 31, dec ? -8 + stp : 7 - stp);
-        break;
-    }
-    case 4:
-        env_step(v, (hi >> 5) & 1, 1, hi & 31, -8);
-        if (v->env <= 0) { v->phase = 0; v->env = 0; }
-        break;
+    while (ticks > 0 && v->phase) {
+        if (v->env_wait >= ticks) { v->env_wait -= ticks; return; }
+        ticks -= v->env_wait;
+        v->env_wait = 0;
+        switch (v->phase) {
+        case 1:
+            ticks -= env_steps(v, lo >> 15, 0, (lo >> 10) & 31, 7 - ((lo >> 8) & 3), ticks);
+            if (v->env >= 0x7FFF) { v->phase = 2; v->env_wait = 0; }
+            break;
+        case 2: {
+            ticks -= env_steps(v, 1, 1, (lo >> 4) & 15, -8, ticks);
+            int32_t sl = ((lo & 15) + 1) * 0x800;
+            if (v->env <= sl) { v->phase = 3; v->env_wait = 0; }
+            break;
+        }
+        case 3: {
+            int dec = (hi >> 14) & 1, stp = (hi >> 6) & 3;
+            ticks -= env_steps(v, hi >> 15, dec, (hi >> 8) & 31, dec ? -8 + stp : 7 - stp, ticks);
+            break;
+        }
+        case 4:
+            ticks -= env_steps(v, (hi >> 5) & 1, 1, hi & 31, -8, ticks);
+            if (v->env <= 0) { v->phase = 0; v->env = 0; }
+            break;
+        }
     }
 }
 
@@ -273,12 +284,7 @@ static void mix_spu(int16_t *out, int n)
             v->counter = counter;
             v->prev = prev;
             v->cur = cur;
-            for (int t = (end - s) * SPU_DIV; t > 0 && v->phase;) {     /* envelope: SPU ticks of this chunk */
-                if (v->env_wait >= t) { v->env_wait -= t; break; }
-                t -= v->env_wait + 1;
-                v->env_wait = 0;
-                envelope(v, i);
-            }
+            envelope_ticks(v, i, (end - s) * SPU_DIV);              /* envelope: SPU ticks of this chunk */
             if (!v->phase) {                                /* voice ended (release done or loop end) */
                 if (need_out) for (int t = end; t < n; t++) vo[t] = 0;
                 break;
