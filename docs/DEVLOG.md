@@ -336,3 +336,12 @@ is a stable 30 fps.
   the stream drifted behind real time, and the mixer played without any buffer. Fix: fixed 75/150 Hz sector clock
   for XA reads, a ~100 ms jitter buffer in the mixer, linear interpolation in the 37.8 -> 44.1 kHz resampler.
   Result: 0 gaps.
+
+## 2026-11-18 - Audio cost
+
+* Mixer CPU measured in the audio thread (logged every 5 s): ~25-29% with 15-19 voices at 44.1 kHz in PPSSPP.
+  Chunked envelope and a decoded-block cache (looping engine samples) did not change it measurably; the cost is
+  per output sample and voice (interpolation, gains, pitch counter with up to 4x pitch).
+* SPU voices are now mixed at 22.05 kHz into a PSP SRC channel (hardware resampling to 44.1 kHz), the XA music runs
+  at 44.1 kHz on a separate PSP channel (hardware-mixed). Mixer ~20%; heavy replay scenes 36-57 frames/120 vb.
+  Real PSP numbers pending.
