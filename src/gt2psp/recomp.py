@@ -77,6 +77,7 @@ OVERRIDE[("ovl0", 0x800295F0)] = "c->r[6] = g_widescreen ? 80u : 60u;"
 _NO_FLUSH = {"POLL", "gte_cmd", "gte_read_data", "gte_write_data", "gte_read_ctrl", "gte_write_ctrl", "op_div",
              "op_divu", "cop0_read", "cop0_write", "cop0_rfe"}
 _CALLEE_SAVED = {16, 17, 18, 19, 20, 21, 22, 23, 28, 29, 30}
+_RETURN_REGS = {2, 3, 29, 31}
 _REG = re.compile(r"c->r\[(\d+)\]")
 _WRITE = re.compile(r"c->r\[(\d+)\] = ")
 _CALL = re.compile(r"\b([A-Za-z_]\w*)\(c[,)]")
@@ -101,6 +102,10 @@ def registers_to_locals(body: list[str]) -> list[str]:
     # calling convention, which the game's compiled code and the PsyQ libraries follow (setjmp/longjmp unwind through
     # the host and resume from c->r, which the flush before every call keeps exact).
     reload = " ".join(f"r{n} = c->r[{n}];" for n in used if n not in _CALLEE_SAVED)
+    # A plain return (jr ra) only has to hand back what the caller can rely on: v0/v1, sp and ra. Callee-saved
+    # registers were restored by the function itself (their values equal c->r[] from the entry), argument and
+    # temporary registers are undefined after a call.
+    ret_flush = " ".join(f"c->r[{n}] = r{n};" for n in written if n in _RETURN_REGS)
 
     def wrap_calls(line: str) -> str:
         out, i = [], 0
@@ -141,7 +146,7 @@ def registers_to_locals(body: list[str]) -> list[str]:
         line = wrap_calls(_REG.sub(lambda m: "r" + m.group(1) if m.group(1) != "0" else "0u", line))
         # remaining plain returns (jr ra): write back first
         if "return;" in line and "{ " + flush not in line:
-            line = line.replace("return;", f"{{ {flush} return; }}")
+            line = line.replace("return;", f"{{ {ret_flush} return; }}")
         res.append(line)
     decl = "    uint32_t " + ", ".join(f"r{n} = c->r[{n}]" for n in used) + ";"
     return [decl] + res
