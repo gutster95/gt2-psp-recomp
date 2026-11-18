@@ -76,6 +76,7 @@ OVERRIDE[("ovl0", 0x800295F0)] = "c->r[6] = g_widescreen ? 80u : 60u;"
 # calls to them need no register write-back (see registers_to_locals).
 _NO_FLUSH = {"POLL", "gte_cmd", "gte_read_data", "gte_write_data", "gte_read_ctrl", "gte_write_ctrl", "op_div",
              "op_divu", "cop0_read", "cop0_write", "cop0_rfe"}
+_CALLEE_SAVED = {16, 17, 18, 19, 20, 21, 22, 23, 28, 29, 30}
 _REG = re.compile(r"c->r\[(\d+)\]")
 _WRITE = re.compile(r"c->r\[(\d+)\] = ")
 _CALL = re.compile(r"\b([A-Za-z_]\w*)\(c[,)]")
@@ -96,7 +97,10 @@ def registers_to_locals(body: list[str]) -> list[str]:
         return body
     written = sorted({int(n) for n in _WRITE.findall(text)} - {0})
     flush = " ".join(f"c->r[{n}] = r{n};" for n in written)
-    reload = " ".join(f"r{n} = c->r[{n}];" for n in used)
+    # After a call only caller-saved registers can have changed: s0-s7, gp, sp and fp are preserved by the MIPS
+    # calling convention, which the game's compiled code and the PsyQ libraries follow (setjmp/longjmp unwind through
+    # the host and resume from c->r, which the flush before every call keeps exact).
+    reload = " ".join(f"r{n} = c->r[{n}];" for n in used if n not in _CALLEE_SAVED)
 
     def wrap_calls(line: str) -> str:
         out, i = [], 0
