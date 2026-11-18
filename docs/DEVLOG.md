@@ -345,3 +345,16 @@ is a stable 30 fps.
 * SPU voices are now mixed at 22.05 kHz into a PSP SRC channel (hardware resampling to 44.1 kHz), the XA music runs
   at 44.1 kHz on a separate PSP channel (hardware-mixed). Mixer ~20%; heavy replay scenes 36-57 frames/120 vb.
   Real PSP numbers pending.
+
+## 2026-11-18 - Movies (MDEC) and the CD layer: findings
+
+* Movies: the Simulation disc has none. No STR/video sectors; overlay 5 is the shared `psxMovieLoop` player (movies
+  24/25/26 of the disc's movie table); forcing it at boot makes it stream from LBA 50880, which on this disc is plain
+  GT2.VOL data. The game never loads overlay 5 on this disc (the opening movie is on the Arcade disc).
+* MDEC is otherwise only used by overlay 2 (Arcade menu, not reachable from the Simulation disc). Added `mdec.c`
+  anyway (cmd 1/2/3, lazy macroblock decoding, DMA0/DMA1, deferred DMA1): only the two table uploads at boot run
+  through it on this disc, decoding itself is untested.
+* CD layer: measured every read (`cd: read of N data sectors took X ms`). Loads read 30-280 sectors, 0.05-0.4 s at
+  the 1.5 ms sector spacing. 0.75 ms halves that and works; 0.1 ms breaks the game (a runaway read of 55k sectors at
+  boot, the GT map is never reached) - libcd's read logic depends on sector timing. A libcd-level read path would
+  save only these fractions of a second per load, so it is postponed until load times on the real PSP are known.

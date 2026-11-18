@@ -1,5 +1,6 @@
 /* Core of the runtime: program start, dispatch of computed calls, setjmp/longjmp (unwind & resume),
  * overlay tracking and interrupt delivery. See docs/ARCHITECTURE.md. */
+#include <stdio.h>
 #include <string.h>
 #include <psprtc.h>
 #include "rt.h"
@@ -112,7 +113,8 @@ void run_program(PsxCpu *c)
 void f_8005dad8(PsxCpu *c)
 {
     int n = (int)c->r[4];
-    logf_("overlay load %d (entry %08x)\n", n, (unsigned)mem_r32(0x80091174u + 4 * n));
+    logf_("overlay load %d (entry %08x) at vblank %u\n", n, (unsigned)mem_r32(0x80091174u + 4 * n),
+          (unsigned)g_vblank_count);
     f_8005dad8_impl(c);
     g_cur_overlay = n;
 }

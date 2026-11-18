@@ -71,7 +71,8 @@ PowerShell `Set-Content -Encoding utf8` writes a BOM. CMake globs: build.sh re-r
   "race replay" was the attract demo); memory card = PSP save data (XMB "Saved Data", savedata.c via sceUtilitySavedata; card.c BIOS events).
   Test input: input.txt (`<vblank> <button> <len>`), e.g. start/cross reaches the GT mode world map.
 * **Audio**: SPU (24 voices, ADSR, no reverb) + CD-XA music, PSP audio thread (spu.c).
-* Not implemented yet: reverb, MDEC (movies),
+* MDEC: software decoder (`mdec.c`); the Simulation disc has no movies (they are on the Arcade disc).
+* Not implemented yet: reverb,
   15-bit textures / texture windows on the GE (software fallback).
 
 ## Next steps
@@ -79,5 +80,5 @@ PowerShell `Set-Content -Encoding utf8` writes a BOM. CMake globs: build.sh re-r
 1. Test on the PSP-3000 (user, manually) and fix what differs from PPSSPP.
 2. Replace the CD-controller adapter by a libcd-level read path (no CD timing at all); speed up generated code.
 3. SPU emulation + PSP audio; XA-ADPCM of MUSIC.DAT pre-converted on the PC.
-4. MDEC movies pre-converted on the PC; saves as memory stick files; DualShock analog for steering.
+4. (done: saves as PSP save data, DualShock analog; no movies on this disc)
 5. Texture replacement / graphics options on top of the GE texture cache.

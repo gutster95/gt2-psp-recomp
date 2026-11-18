@@ -8,6 +8,7 @@
 #include "card.h"
 #include "spu.h"
 #include "prof.h"
+#include "mdec.h"
 
 uint32_t g_i_stat, g_i_mask;
 /* indexed by address - 0x1F800000, so offsets below read like the hardware addresses */
@@ -88,6 +89,12 @@ static void dma_run(int ch)
             }
         }
         break;
+    case 0: /* MDEC in */
+        mdec_dma_in(madr, (bcr & 0xFFFF) * ((bcr >> 16) ? (bcr >> 16) : 1));
+        break;
+    case 1: /* MDEC out: deferred while the decode command is still receiving its input */
+        if (!mdec_dma_out(madr, (bcr & 0xFFFF) * ((bcr >> 16) ? (bcr >> 16) : 1))) return;
+        break;
     case 3: /* CD-ROM */
         cdrom_dma(madr, (bcr & 0xFFFF) * ((bcr >> 16) ? (bcr >> 16) : 1));
         break;
@@ -108,6 +115,12 @@ static void dma_run(int ch)
         break;
     }
     IO32(base + 8) = chcr & ~0x11000000u;
+    dma_irq(ch);
+}
+
+void io_dma_done(int ch)
+{
+    IO32(0x1088 + ch * 0x10) &= ~0x11000000u;
     dma_irq(ch);
 }
 
@@ -149,6 +162,7 @@ static uint32_t io_read(uint32_t a, int size)
     case 0x1070: v = g_i_stat; break;
     case 0x1074: v = g_i_mask; break;
     case 0x1810: v = gpu_read(); break;
+    case 0x1820: case 0x1824: v = mdec_read(off & 4); break;
     case 0x1814: v = gpu_status() | ((g_vblank_count & 1) << 31); break;
     case 0x1100: case 0x1110: case 0x1120: v = timer_count((off - 0x1100) >> 4); break;
     default:
@@ -181,6 +195,7 @@ static void io_write(uint32_t a, uint32_t v, int size)
     case 0x1070: g_i_stat &= v; return;           /* acknowledge */
     case 0x1074: g_i_mask = v & 0x7FF; return;
     case 0x1810: gpu_gp0(v); return;
+    case 0x1820: case 0x1824: mdec_write(off & 4, v); return;
     case 0x1814: gpu_gp1(v); return;
     case 0x10F4: {                                 /* DICR: writing 1 to flag bits clears them */
         uint32_t d = IO32(0x10F4);

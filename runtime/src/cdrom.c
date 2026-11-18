@@ -38,6 +38,9 @@ static uint8_t g_filter_file, g_filter_chan;
 static uint32_t g_setloc = LEADIN, g_pos = LEADIN;     /* MSF-absolute sector numbers */
 static int g_reading;
 static uint64_t g_next_sector_at;
+static uint32_t g_period_us = 1500;        /* data sector spacing; much faster breaks the game's CD code (see DEVLOG) */
+static uint32_t g_st_sectors;              /* statistics of the current read */
+static uint64_t g_st_start;
 
 static uint8_t g_sector[SECTOR_RAW];
 static uint8_t g_data[SECTOR_RAW];
@@ -136,8 +139,17 @@ static void drop_sector(void)       /* a new read/pause/stop: an untaken sector 
     g_consumed = 1;
 }
 
+static void read_stats(void)
+{
+    if (g_st_sectors >= 32)
+        logf_("cd: read of %u data sectors took %u ms\n", (unsigned)g_st_sectors,
+              (unsigned)((now_us() - g_st_start) / 1000));
+    g_st_sectors = 0;
+}
+
 static void stop_reading(void)
 {
+    read_stats();
     drop_sector();
     g_reading = 0;
     g_stat &= ~0x60;
@@ -153,6 +165,7 @@ static void command(uint8_t cmd)
         push_stat(ACK, 3);
         break;
     case 0x06: case 0x1B:                                                   /* ReadN / ReadS */
+        read_stats();
         drop_sector();
         g_pos = g_setloc;
         g_reading = 1;
@@ -247,7 +260,7 @@ static void deliver(void)
             uint64_t period = (g_mode & 0x80) ? 6667 : 13333;
             g_next_sector_at = (t - g_next_sector_at < 4 * period) ? g_next_sector_at + period : t + period;
         } else {
-            g_next_sector_at = t + 1500;
+            g_next_sector_at = t + g_period_us;
         }
         if (!read_sector(g_pos)) {
             stop_reading();
@@ -266,6 +279,7 @@ static void deliver(void)
             return;
         }
         /* into the sector buffer; the data FIFO is only (re)loaded by the request register */
+        if (!g_st_sectors++) g_st_start = t;
         if (g_mode & 0x20) { memcpy(g_buf, g_sector + 12, 0x924); g_buf_len = 0x924; }
         else { memcpy(g_buf, g_sector + 24, 0x800); g_buf_len = 0x800; }
         g_data_ready = 1;

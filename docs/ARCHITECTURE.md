@@ -120,3 +120,9 @@ tools/             (ignored) local toolchain (pspdev inside a project-local WSL 
 * `Recomps/GT2-PC-Port-Mod-Kit-0.4.3.1` (local only, not in this repo): a PC port for disc v1.0 that ships
   compiled WebAssembly modules and extensive explainer pages. Used as a reference for game structure only;
   our target disc is Rev 2, which it does not support.
+
+## MDEC
+
+`runtime/src/mdec.c` decodes the run-length/DCT macroblock format in software behind the MDEC registers and DMA
+channels 0/1 (input buffered per command, output decoded lazily one macroblock at a time; a DMA1 started before the
+input is complete is finished when it is). The Simulation disc has no movies; see DEVLOG 2026-11-18.
