@@ -20,6 +20,7 @@
  *
  * Not on the GE yet (software rasterizer after a sync): 15-bit direct textures, texture windows. */
 #include <string.h>
+#include <math.h>
 #include <malloc.h>
 #include <pspgu.h>
 #include <pspge.h>
@@ -174,6 +175,8 @@ static const struct { float zs; int clip, inv; float xs, ys; int conv; } TVAR[] 
 };
 #define NTVAR ((int)(sizeof TVAR / sizeof TVAR[0]))
 static int g_tvar;
+#define VPX 0                    /* 3D viewport centre in the hi-res frame (240/136 made it worse on hardware) */
+#define VPY 0
 static float g_tix = 1, g_tiy = 1;   /* 1 / viewport scale of the chosen variant */
 
 static void ge_begin(void)
@@ -191,7 +194,7 @@ static void ge_begin(void)
     sceGuSetMatrix(GU_PROJECTION, TVAR[g_tvar].conv ? &ident : &proj);
     sceGuSetMatrix(GU_VIEW, &ident);
     sceGuSetMatrix(GU_MODEL, &ident);
-    sceGuViewport(2048, 2048, (int)(2 * TVAR[g_tvar].xs), -(int)(2 * TVAR[g_tvar].ys));
+    sceGuViewport(2048 + VPX, 2048 + VPY, (int)(2 * TVAR[g_tvar].xs), -(int)(2 * TVAR[g_tvar].ys));
     if (TVAR[g_tvar].inv) sceGuDepthRange(65535, 0); else sceGuDepthRange(0, 65535);
     if (TVAR[g_tvar].clip) sceGuEnable(GU_CLIP_PLANES); else sceGuDisable(GU_CLIP_PLANES);
     sceGuTexScale(1.0f, 1.0f);
@@ -404,7 +407,10 @@ static void setup_texture(int depth, int page, uint32_t clut)
  * test of the game (all in PS1 screen space) covers 16:9; 3D primitives - recognised by vertices the GTE produced
  * in the last frames - are then stretched over the full 480 pixels. */
 
-int g_hires = 1, g_widescreen = 1;
+/* Widescreen and the perspective-correct 3D pass are off by default: on the real PSP the GE's transform mode drops
+ * or distorts parts of the 3D scene (fine in PPSSPP); everything is drawn in through mode then (settings.txt can
+ * enable them for experiments). */
+int g_hires = 1, g_widescreen = 0;
 
 typedef struct {
     int x, y, w, h, used, drawn, band_clear, n3d_cur, n3d_last;
@@ -450,7 +456,7 @@ static inline uint32_t xy_hash(uint32_t k) { return (k * 0x9E3779B1u) >> 19; }
 
 /* Precise data per projected vertex (PGXP-style): sub-pixel screen position and view depth, used to draw 3D
  * primitives perspective-correct and without the integer jitter of PS1 coordinates. */
-int g_pgxp = 1;          /* perspective-correct, sub-pixel 3D in the hi-res pass */
+int g_pgxp = 0;          /* perspective-correct, sub-pixel 3D in the hi-res pass */
 int g_tex_filter = 1;    /* bilinear filtering of opaque 3D textures in the hi-res pass */
 
 void ge_mark_3d_precise(uint32_t xy, float x, float y, float z)
@@ -666,9 +672,20 @@ static void draw(int prim, int n, const GeVtx *v, int tex, int semi, int mode, i
                     e->py - ry > 2 || ry - e->py > 2) { ok = 0; break; }
                 float z = e->pz;
                 float hx = map_x3(f, e->px + g_rs.off_x), hy = map_y(f, e->py + g_rs.off_y);
-                pv[i] = (PVtx){v[i].u / 256.0f, v[i].v / 256.0f, v[i].c, hx * g_tix * z, hy * g_tiy * z, z};
+                pv[i] = (PVtx){v[i].u / 256.0f, v[i].v / 256.0f, v[i].c, (hx - VPX) * g_tix * z, (hy - VPY) * g_tiy * z, z};
             }
             if (ok) {
+                /* Perspective-correct interpolation depends only on the ratios of w. The real GE interpolates u/w
+                 * with limited precision: with w in the thousands the texture coordinates of near walls collapse into
+                 * a few steps (huge blocky texels, PSP only - PPSSPP is exact). Scale w around 1 (geometric mean of
+                 * the extremes), so neither the near nor the far end needs a large or a tiny 1/w. */
+                float zmax = pv[0].z, zmin = pv[0].z;
+                for (int i = 1; i < n; i++) {
+                    if (pv[i].z > zmax) zmax = pv[i].z;
+                    if (pv[i].z < zmin) zmin = pv[i].z;
+                }
+                float k = 1.0f / sqrtf(zmin * zmax);
+                for (int i = 0; i < n; i++) { pv[i].x *= k; pv[i].y *= k; pv[i].z *= k; }
                 /* bilinear for opaque textures; with transparent texels too, but then only where the filtered alpha
                  * is mostly opaque (the transparent texels' black would otherwise darken the edges a lot) */
                 int filt = tex && !semi && g_tex_filter;
@@ -1070,8 +1087,8 @@ static int draw_test_3d(int t)
             float ix = 1.0f / TVAR[g_tvar].xs, iy = 1.0f / TVAR[g_tvar].ys;
             for (int i = 0; i < 3; i++) {
                 float w = tw[t - 1][i];
-                if (TVAR[g_tvar].conv) v[i] = (PVtx){0, 0, 0xFF0000FFu, tx[i] * ix, ty[i] * iy, 0};
-                else v[i] = (PVtx){0, 0, 0xFF0000FFu, tx[i] * ix * w, ty[i] * iy * w, w};
+                if (TVAR[g_tvar].conv) v[i] = (PVtx){0, 0, 0xFF0000FFu, (tx[i] - VPX) * ix, (ty[i] - VPY) * iy, 0};
+                else v[i] = (PVtx){0, 0, 0xFF0000FFu, (tx[i] - VPX) * ix * w, (ty[i] - VPY) * iy * w, w};
             }
             sceGuDrawArray(GU_TRIANGLES, PFMT, 3, 0, v);
         }
