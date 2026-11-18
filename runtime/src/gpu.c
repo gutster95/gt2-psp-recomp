@@ -79,14 +79,15 @@ static void snapshot(void)
     snprintf(path, sizeof path, "%ssnap%d.bmp", g_basedir, n);
     FILE *f = fopen(path, "wb");
     if (f) {
-        static uint8_t hdr[54] = {'B', 'M'};
+        static uint8_t hdr[54];
         uint32_t img = 480 * 272 * 3;
-        *(uint32_t *)(void *)(hdr + 2) = 54 + img;
-        hdr[10] = 54; hdr[14] = 40;
-        *(uint32_t *)(void *)(hdr + 18) = 480;
-        *(uint32_t *)(void *)(hdr + 22) = 272;
-        hdr[26] = 1; hdr[28] = 24;
-        *(uint32_t *)(void *)(hdr + 34) = img;
+        static const struct { int off; uint32_t v; } F[] = {   /* byte-wise: unaligned stores trap on the PSP */
+            {2, 54 + 480 * 272 * 3}, {10, 54}, {14, 40}, {18, 480}, {22, 272}, {26, 1}, {28, 24}, {34, 480 * 272 * 3}};
+        memset(hdr, 0, sizeof hdr);
+        hdr[0] = 'B'; hdr[1] = 'M';
+        for (unsigned i = 0; i < sizeof F / sizeof F[0]; i++)
+            for (int b = 0; b < 4; b++) hdr[F[i].off + b] = (uint8_t)(F[i].v >> (8 * b));
+        (void)img;
         fwrite(hdr, 1, 54, f);
         static uint8_t row[480 * 3];
         for (int y = 271; y >= 0; y--) {

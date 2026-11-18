@@ -468,9 +468,23 @@ static int xy_find(uint32_t xy)
 static int is_3d_xy(uint32_t xy) { return xy_find(xy) >= 0; }
 static inline float map_y(const Frame *f, float y) { return f->oy + y * f->ky; }
 
+/* Display swaps take effect at the next vblank (SETBUF_NEXTFRAME): until then the previously shown buffer is still
+ * scanned out. Drawing into it earlier shows half-drawn frames on real hardware (PPSSPP's GE finishes instantly). */
+static int g_prev_shown = -1;
+static int g_swap_vcount;
+
+static void wait_scanout_done(int target)
+{
+    if (target == g_prev_shown) {
+        if (sceDisplayGetVcount() == (unsigned)g_swap_vcount) sceDisplayWaitVblankStart();
+        g_prev_shown = -1;
+    }
+}
+
 static void bind(int target)
 {
     if (g_cur_fb == target) return;
+    if (target >= 0) wait_scanout_done(target);
     g_cur_fb = target;
     if (target < 0) sceGuDrawBufferList(GU_PSM_5551, (void *)0, 1024);
     else sceGuDrawBufferList(GU_PSM_5551, (void *)FB_OFF(target), 512);
@@ -918,6 +932,12 @@ static int frame_for_display(int dx, int dy, int w, int h)
 static void present_scaled(int dx, int dy, int w, int h, int blank)
 {
     const int ow = 363, oh = 272, ox = (480 - ow) / 2;
+    int on_screen = g_shown == 2;
+    if (on_screen) {                /* redrawing the shown buffer: the game's queued drawing first, then the clear and
+                                     * blit right at the start of the vblank (no double buffer left for 1x screens) */
+        ge_sync();
+        sceDisplayWaitVblankStart();
+    }
     ge_begin();
     bind(2);
     set_scissor(0, 0, 479, 271);
@@ -966,9 +986,12 @@ void ge_present(int dx, int dy, int w, int h, int blank)
         present_scaled(dx, dy, w, h, blank);
         show = 2;
     }
-    if (show != g_shown)
+    if (show != g_shown) {
         sceDisplaySetFrameBuf((void *)(EDRAM + FB_OFF(show)), 512, PSP_DISPLAY_PIXEL_FORMAT_5551,
                               PSP_DISPLAY_SETBUF_NEXTFRAME);
+        g_prev_shown = g_shown;
+        g_swap_vcount = (int)sceDisplayGetVcount();
+    }
     g_shown = show;
     PHASE_END();
 }
