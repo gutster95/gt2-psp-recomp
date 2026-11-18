@@ -383,3 +383,17 @@ is a stable 30 fps.
   ~20% (separate thread). Steps: generated code with -Os and without trace 12.0; the 1x pass of frame primitives
   stayed on for the whole session after a stale title frame matched a texture read - reset on display mode change
   13.3; cached vertex arena with writeback before stall-address updates 13.5.
+
+## 2026-11-18 - Correct picture and 22 fps on the PSP-3000
+
+* The coarse/blocky areas on hardware came from GE transform mode (the perspective-correct widescreen pass):
+  geometry dropped or distorted on the real GE, exact in PPSSPP. Verified against PCSX-Redux (OpenBIOS + the
+  original disc, Lua screenshots every 30 vsyncs: build/ref/shots.lua) - the new reference for the PS1 picture.
+  Widescreen, PGXP and hi-res frames are now off by default (settings.txt can enable them).
+* Default is native 1x rendering into PS1 VRAM, scaled to the screen: double-buffered in PSP buffers 0/1, and the
+  blit is skipped while nothing was written into the displayed area (it ran every vblank with a GE sync: 45% wait).
+* Race (attract replay) on hardware: 18.3 fps (1x) -> 20.2 (no 3D-vertex lookups) -> 22.0 (batched ADSR envelope,
+  mixer 15-20% -> 8-12% CPU) -> 22.2 (returns flush only v0/v1/sp/ra). Measured without gain: -O2 for the generated
+  code (15.8 fps vs 18.3 with -Os: the 16 KB I-cache favours small code), out-of-line scratchpad/IO accessors
+  (17.8), no POLL in storing loops (22.2, reverted).
+* FPS counter top right (settings fps=0). PSPLink workflow: scripts/psp-run.sh.
