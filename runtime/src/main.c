@@ -71,6 +71,7 @@ int main(int argc, char **argv)
     }
     log_init(dir);
     scePowerSetClockFrequency(333, 333, 166);   /* default is 222 MHz */
+    logf_("CPU %d MHz, bus %d MHz\n", scePowerGetCpuClockFrequencyInt(), scePowerGetBusClockFrequencyInt());
     logf_("GT2 PSP runtime, base dir '%s'\n", dir);
     load_settings();
     prof_init();
