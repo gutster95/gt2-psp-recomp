@@ -69,6 +69,16 @@ tools/             (ignored) local toolchain (pspdev inside a project-local WSL 
   * Fills and VRAM copies run on the GE; CPU uploads/readbacks sync the GE first. 15-bit textures and texture
     windows still use the software rasterizer (after a sync).
   * Presentation: the GE scales the display area (4:3, 363x272, bilinear) into the back buffer, then flips.
+  * Hi-res + 16:9 (`g_hires`, `g_widescreen`): a displayed PS1 framebuffer region becomes a "frame" bound to
+    one of two PSP display buffers. Primitives drawn into a frame are drawn twice: 1x into PS1 VRAM (readback,
+    render-to-texture stay exact) and mapped (float through-mode vertices) at 480x272 into the frame's display
+    buffer; presenting a frame is a flip. The 4:3 picture maps to the centre 363x272. Widescreen: gte.c scales
+    projected X by 3/4 so the 4:3 field of view covers 3/4 of the width; frame-wide drawing areas get the full
+    480-pixel scissor; 2D stays 4:3 in the centre; side bands are cleared before the first draw after a flip.
+    Fills/copies/uploads/software-rasterized areas inside a frame are mirrored (scaled blit from 1x VRAM).
+    Frames not drawn in hi-res fall back to the scaled 1x presentation (buffer 2 at 0x188000).
+  * The state cache is invalidated at every list start (the GE keeps state across lists); "unknown" must not
+    collide with a valid value (blend -1 = opaque caused additive accumulation on the title screen).
   * pspgu keeps its own scissor state and re-sends it: use sceGuScissor (startup check of its width semantics),
     never raw scissor commands.
 * Game data: the PC tool `python -m gt2psp pack <cue>` converts the user's own disc once into `GT2.PAK`

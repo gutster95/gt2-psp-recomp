@@ -209,3 +209,15 @@ Step 1 done:
 * 640-wide display modes are presented in 256-texel strips (GE texture width limit 512).
 * Result (PPSSPP, hardware renderer): race replay 60 display lists per 120 vblanks = the game's 30 fps,
   title 60 fps; 0 software fallbacks, 38 texture page copies in total. Screens: `build/milestone3-ge-race.png`.
+
+## 2026-11-18 - Native 480x272 rendering and 16:9 widescreen
+
+* Displayed frames are rendered a second time at PSP resolution straight into the display buffers (design in
+  ARCHITECTURE.md); 1x VRAM stays exact. Title screen now native-resolution 4:3 pillarbox
+  (`build/milestone4-hires-title.png`); race replay fills 16:9 (`build/milestone4-widescreen-race.png`).
+* Widescreen = GTE hack: RTPS/RTPT projected X * 3/4. HUD stays 4:3 in the centre.
+* Bug fixed on the way: state-cache sentinel -1 collided with "blend off", leaving additive blending enabled
+  from the previous list (blown-out title).
+* Known issue: near ground polygons at the 16:9 edges are missing (black steps): the game discards polygons
+  that lie outside the 4:3 screen. The cull/subdivision code still has to be found and widened.
+* PPSSPP (software GE) cost: ~45 instead of 60 lists per 120 vblanks in the race; real PSP numbers pending.

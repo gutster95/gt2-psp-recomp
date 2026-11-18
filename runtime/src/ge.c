@@ -40,7 +40,8 @@ int g_use_ge = 1;
 typedef struct { uint16_t u, v; uint32_t c; int16_t x, y, z, pad; } GeVtx;
 
 static uint32_t g_list[LIST_BYTES / 4] __attribute__((aligned(64)));
-static int g_open, g_fb;
+static int g_open, g_shown;
+static int g_cur_fb = -1;             /* GE draw target: -1 PS1 VRAM, 0/1 hi-res frame buffers, 2 scaled present */
 static int g_scissor_is_width = 1;    /* sceGuScissor(x, y, w, h) semantics, checked at startup */
 uint32_t g_ge_prims, g_ge_sw_prims, g_ge_tex_uploads, g_ge_syncs;
 
@@ -80,7 +81,9 @@ static struct {
     const void *clut;
 } S;
 
-static void invalidate_state(void) { memset(&S, 0xFF, sizeof S); }
+/* -1 is a valid value for blend (opaque), so "unknown" is -99 there; everything else uses -1. The GE keeps its
+ * state across display lists, so after a restart nothing may be assumed. */
+static void invalidate_state(void) { memset(&S, 0xFF, sizeof S); S.blend = -99; }
 
 /* ---- CLUT conversion (per batch arena; the GE copies a CLUT on load, entries stay valid until the sync) ----- */
 
@@ -129,6 +132,7 @@ static void ge_begin(void)
     sceGuTexFilter(GU_NEAREST, GU_NEAREST);
     sceGuClutMode(GU_PSM_8888, 0, 0xFF, 0);
     invalidate_state();
+    g_cur_fb = -1;
     g_open = 1;
 }
 
@@ -273,12 +277,6 @@ static void set_dither(void)
     if (d) sceGuEnable(GU_DITHER); else sceGuDisable(GU_DITHER);
 }
 
-static void common_state(void)
-{
-    set_scissor(g_rs.clip_x0, g_rs.clip_y0, g_rs.clip_x1, g_rs.clip_y1);
-    set_mask();
-    set_dither();
-}
 
 static void setup_texture(int depth, int page, uint32_t clut)
 {
@@ -293,34 +291,143 @@ static void setup_texture(int depth, int page, uint32_t clut)
     }
 }
 
-static void draw(int prim, int n, const GeVtx *v, int tex, int semi, int mode)
+/* ---- hi-res frames ----------------------------------------------------------------------------------------------
+ * A "frame" is a PS1 framebuffer region that has been displayed (display start + size). Primitives whose drawing
+ * area lies in a frame are drawn twice: into the PS1 VRAM (exact 1x image for readback and render-to-texture) and,
+ * mapped to PSP resolution, into one of the two PSP display buffers. Presenting a frame is then just a flip.
+ * Mapping: the 4:3 PS1 picture covers the centre 363x272; with the widescreen GTE hack (gte.c: projected X * 3/4)
+ * 3D geometry continues into the 480-pixel width, 2D (HUD, menus) stays 4:3 in the centre. */
+
+int g_hires = 1, g_widescreen = 1;
+
+typedef struct { int x, y, w, h, used, drawn, band_clear; } Frame;
+static Frame g_frames[2];
+
+typedef struct { uint16_t u, v; uint32_t c; float x, y, z; } HVtx;
+#define HFMT (GU_TEXTURE_16BIT | GU_COLOR_8888 | GU_VERTEX_32BITF | GU_TRANSFORM_2D)
+
+static inline float map_x(const Frame *f, float x) { return 240.0f + (x - f->x - f->w * 0.5f) * (363.0f / f->w); }
+static inline float map_y(const Frame *f, float y) { return (y - f->y) * (272.0f / f->h); }
+
+static void bind(int target)
 {
-    GeVtx *gv = sceGuGetMemory(n * (int)sizeof(GeVtx));
-    memcpy(gv, v, n * sizeof(GeVtx));
+    if (g_cur_fb == target) return;
+    g_cur_fb = target;
+    if (target < 0) sceGuDrawBufferList(GU_PSM_5551, (void *)0, 1024);
+    else sceGuDrawBufferList(GU_PSM_5551, (void *)FB_OFF(target), 512);
+    S.sc[0] = -2;                                  /* scissor must be re-sent for the new target */
+}
+
+static int frame_of(int x, int y)
+{
+    if (!g_hires) return -1;
+    for (int k = 0; k < 2; k++) {
+        const Frame *f = &g_frames[k];
+        if (f->used && x >= f->x && x < f->x + f->w && y >= f->y && y < f->y + f->h) return k;
+    }
+    return -1;
+}
+
+static int clampi(int v, int lo, int hi) { return v < lo ? lo : v > hi ? hi : v; }
+
+/* scissor in the hi-res buffer for the current drawing area */
+static void hires_scissor(const Frame *f)
+{
+    int full = g_rs.clip_x0 <= f->x && g_rs.clip_y0 <= f->y && g_rs.clip_x1 >= f->x + f->w - 1 &&
+               g_rs.clip_y1 >= f->y + f->h - 1;
+    if (full && g_widescreen) { set_scissor(0, 0, 479, 271); return; }
+    int x0 = clampi((int)(map_x(f, (float)g_rs.clip_x0) + 0.5f), 0, 479);
+    int x1 = clampi((int)(map_x(f, (float)g_rs.clip_x1 + 1) + 0.5f) - 1, 0, 479);
+    int y0 = clampi((int)(map_y(f, (float)g_rs.clip_y0) + 0.5f), 0, 271);
+    int y1 = clampi((int)(map_y(f, (float)g_rs.clip_y1 + 1) + 0.5f) - 1, 0, 271);
+    set_scissor(x0, y0, x1, y1);
+}
+
+static void flat_sprite(float x0, float y0, float x1, float y1, uint32_t c)
+{
+    HVtx *v = sceGuGetMemory(2 * (int)sizeof(HVtx));
+    v[0] = (HVtx){0, 0, c, x0, y0, 0};
+    v[1] = (HVtx){0, 0, c, x1, y1, 0};
+    sceGuDrawArray(GU_SPRITES, HFMT, 2, 0, v);
+}
+
+/* Before the first draw into a frame after it was shown: clear the widescreen side bands, which 2D-only screens
+ * never overwrite. */
+static void prepare_frame(int k)
+{
+    Frame *f = &g_frames[k];
+    f->drawn = 1;
+    if (!f->band_clear) return;
+    f->band_clear = 0;
+    if (!g_widescreen) return;
+    bind(k);
+    set_scissor(0, 0, 479, 271);
+    set_tex(0); set_blend(-1); set_atest(0);
+    S.stencil = -1;
+    sceGuStencilFunc(GU_ALWAYS, 0, 0xFF);
+    sceGuStencilOp(GU_KEEP, GU_KEEP, GU_REPLACE);
+    flat_sprite(0, 0, map_x(f, (float)f->x), 272, 0xFF000000u);
+    flat_sprite(map_x(f, (float)(f->x + f->w)), 0, 480, 272, 0xFF000000u);
+}
+
+/* ---- drawing ------------------------------------------------------------------------------------------------- */
+
+static void passes(int prim, int fmt, int n, const void *gv, int tex, int semi, int mode)
+{
     if (!semi) {
         set_blend(-1);
         set_atest(tex ? 1 : 0);
-        sceGuDrawArray(prim, VFMT, n, 0, gv);
+        sceGuDrawArray(prim, fmt, n, 0, gv);
     } else if (!tex) {
         set_blend(mode);
         set_atest(0);
-        sceGuDrawArray(prim, VFMT, n, 0, gv);
+        sceGuDrawArray(prim, fmt, n, 0, gv);
     } else {
         set_blend(-1);
         set_atest(2);                    /* texels without the STP bit: opaque */
-        sceGuDrawArray(prim, VFMT, n, 0, gv);
+        sceGuDrawArray(prim, fmt, n, 0, gv);
         set_blend(mode);
         set_atest(3);                    /* texels with the STP bit: blended */
-        sceGuDrawArray(prim, VFMT, n, 0, gv);
+        sceGuDrawArray(prim, fmt, n, 0, gv);
+    }
+}
+
+/* vis1: visible in the PS1 drawing area; fk: hi-res frame or -1 */
+static void draw(int prim, int n, const GeVtx *v, int tex, int semi, int mode, int vis1, int fk)
+{
+    set_mask();
+    set_dither();
+    if (vis1) {
+        bind(-1);
+        set_scissor(g_rs.clip_x0, g_rs.clip_y0, g_rs.clip_x1, g_rs.clip_y1);
+        GeVtx *gv = sceGuGetMemory(n * (int)sizeof(GeVtx));
+        memcpy(gv, v, n * sizeof(GeVtx));
+        passes(prim, VFMT, n, gv, tex, semi, mode);
+    }
+    if (fk >= 0) {
+        const Frame *f = &g_frames[fk];
+        bind(fk);
+        hires_scissor(f);
+        HVtx *hv = sceGuGetMemory(n * (int)sizeof(HVtx));
+        for (int i = 0; i < n; i++) {
+            hv[i].u = v[i].u;
+            hv[i].v = v[i].v;
+            hv[i].c = v[i].c;
+            hv[i].x = map_x(f, v[i].x);
+            hv[i].y = map_y(f, v[i].y);
+            hv[i].z = 0;
+        }
+        passes(prim, HFMT, n, hv, tex, semi, mode);
     }
     g_ge_prims++;
     check_list();
 }
 
-/* Clip the bounding box to the drawing area; 0 if nothing is drawn (also drops primitives the PS1 rejects). */
+static int too_big(const int *b) { return b[2] - b[0] >= 1024 || b[3] - b[1] >= 512; }
+
+/* Clip the bounding box to the drawing area; 0 if nothing of it is inside. */
 static int clip_box(int *b)
 {
-    if (b[2] - b[0] >= 1024 || b[3] - b[1] >= 512) return 0;
     if (b[0] < g_rs.clip_x0) b[0] = g_rs.clip_x0;
     if (b[1] < g_rs.clip_y0) b[1] = g_rs.clip_y0;
     if (b[2] > g_rs.clip_x1) b[2] = g_rs.clip_x1;
@@ -331,6 +438,34 @@ static int clip_box(int *b)
 static int needs_sw(int tex, int depth)
 {
     return tex && (depth >= 2 || g_rs.tw_mask_x || g_rs.tw_mask_y);
+}
+
+static void mirror(int x, int y, int w, int h);
+
+/* Common tail of all primitives: decide targets, run the software fallback or the GE passes. */
+static void submit(int prim, int n, const GeVtx *v, int *box, int tex, int depth, int page, uint32_t clut, int raw,
+                   int semi, int mode, void (*sw)(const uint32_t *), const uint32_t *w)
+{
+    if (too_big(box)) return;
+    int vis1 = clip_box(box);
+    int fk = frame_of(g_rs.clip_x0, g_rs.clip_y0);
+    if (fk >= 0 && !vis1 && !g_widescreen) fk = -1;
+    if (!vis1 && fk < 0) return;
+    if (needs_sw(tex, depth) && sw) {
+        if (!vis1) return;
+        ge_sync();
+        sw(w);
+        touch(box[0], box[1], box[2], box[3], 0);
+        g_ge_sw_prims++;
+        if (fk >= 0) mirror(box[0], box[1], box[2] - box[0] + 1, box[3] - box[1] + 1);
+        return;
+    }
+    ge_begin();
+    if (fk >= 0) prepare_frame(fk);
+    if (tex) { setup_texture(depth, page, clut); set_tfx(raw); }
+    set_tex(tex);
+    draw(prim, n, v, tex, semi, mode, vis1, fk);
+    if (vis1) touch(box[0], box[1], box[2], box[3], 1);
 }
 
 /* ---- primitives ---------------------------------------------------------------------------------------------- */
@@ -364,20 +499,7 @@ void ge_polygon(const uint32_t *w)
     }
     if (tex) g_rs.texpage = (g_rs.texpage & ~0x9FFu) | (page & 0x9FF);
     int depth = (int)(page >> 7) & 3, mode = (g_rs.texpage >> 5) & 3;
-    if (!clip_box(box)) return;
-    if (needs_sw(tex, depth)) {
-        ge_sync();
-        raster_polygon(w);
-        touch(box[0], box[1], box[2], box[3], 0);
-        g_ge_sw_prims++;
-        return;
-    }
-    ge_begin();
-    if (tex) { setup_texture(depth, (int)page, clut); set_tfx(raw); }
-    set_tex(tex);
-    common_state();
-    draw(GU_TRIANGLE_STRIP, n, v, tex, semi, mode);
-    touch(box[0], box[1], box[2], box[3], 1);
+    submit(GU_TRIANGLE_STRIP, n, v, box, tex, depth, (int)page, clut, raw, semi, mode, raster_polygon, w);
 }
 
 void ge_rect(const uint32_t *w)
@@ -402,24 +524,12 @@ void ge_rect(const uint32_t *w)
     if (!ww || !hh) return;
     int depth = (g_rs.texpage >> 7) & 3, mode = (g_rs.texpage >> 5) & 3;
     int box[4] = {x0, y0, x0 + ww - 1, y0 + hh - 1};
-    if (!clip_box(box)) return;
-    if (needs_sw(tex, depth)) {
-        ge_sync();
-        raster_rect(w);
-        touch(box[0], box[1], box[2], box[3], 0);
-        g_ge_sw_prims++;
-        return;
-    }
-    ge_begin();
-    if (tex) { setup_texture(depth, (int)(g_rs.texpage & 0x1F) | (depth << 7), clut); set_tfx(raw); }
-    set_tex(tex);
-    common_state();
     GeVtx v[2] = {
         {(uint16_t)u0, (uint16_t)v0, 0xFF000000u | col, (int16_t)x0, (int16_t)y0, 0, 0},
         {(uint16_t)(u0 + ww), (uint16_t)(v0 + hh), 0xFF000000u | col, (int16_t)(x0 + ww), (int16_t)(y0 + hh), 0, 0},
     };
-    draw(GU_SPRITES, 2, v, tex, semi, mode);
-    touch(box[0], box[1], box[2], box[3], 1);
+    submit(GU_SPRITES, 2, v, box, tex, depth, (int)(g_rs.texpage & 0x1F) | (depth << 7), clut, raw, semi, mode,
+           raster_rect, w);
 }
 
 void ge_line(int x0, int y0, uint32_t c0, int x1, int y1, uint32_t c1, int semi)
@@ -427,39 +537,99 @@ void ge_line(int x0, int y0, uint32_t c0, int x1, int y1, uint32_t c1, int semi)
     x0 = sx11(x0) + g_rs.off_x; y0 = sx11(y0) + g_rs.off_y;
     x1 = sx11(x1) + g_rs.off_x; y1 = sx11(y1) + g_rs.off_y;
     int box[4] = {x0 < x1 ? x0 : x1, y0 < y1 ? y0 : y1, x0 > x1 ? x0 : x1, y0 > y1 ? y0 : y1};
-    if (!clip_box(box)) return;
-    ge_begin();
-    set_tex(0);
-    common_state();
     GeVtx v[2] = {
         {0, 0, 0xFF000000u | c0, (int16_t)x0, (int16_t)y0, 0, 0},
         {0, 0, 0xFF000000u | c1, (int16_t)x1, (int16_t)y1, 0, 0},
     };
-    draw(GU_LINES, 2, v, 0, semi, (g_rs.texpage >> 5) & 3);
-    touch(box[0], box[1], box[2], box[3], 1);
+    submit(GU_LINES, 2, v, box, 0, 0, 0, 0, 0, semi, (g_rs.texpage >> 5) & 3, 0, 0);
+}
+
+/* ---- fills, copies, uploads ---------------------------------------------------------------------------------- */
+
+static void fill_state(void)
+{
+    set_tex(0);
+    set_blend(-1);
+    set_atest(0);
+    S.stencil = -1;
+    sceGuStencilFunc(GU_ALWAYS, 0, 0xFF);
+    sceGuStencilOp(GU_KEEP, GU_KEEP, GU_REPLACE);
+    S.dither = 0;
+    sceGuDisable(GU_DITHER);
 }
 
 int ge_fill(int x, int y, int w, int h, uint16_t col)
 {
     if (!g_use_ge || !w || !h || x + w > 1024 || y + h > 512) return 0;
     ge_begin();
-    set_tex(0);
-    set_blend(-1);
-    set_atest(0);
+    fill_state();
+    bind(-1);
     set_scissor(x, y, x + w - 1, y + h - 1);     /* fill ignores the drawing area and the mask bit */
-    S.stencil = -1;
-    sceGuStencilFunc(GU_ALWAYS, 0, 0xFF);
-    sceGuStencilOp(GU_KEEP, GU_KEEP, GU_REPLACE);
-    S.dither = 0;
-    sceGuDisable(GU_DITHER);
     uint32_t c = 0xFF000000u | ((uint32_t)((col >> 10) & 31) << 19) | ((uint32_t)((col >> 5) & 31) << 11) | ((uint32_t)(col & 31) << 3);
     GeVtx *gv = sceGuGetMemory(2 * (int)sizeof(GeVtx));
     gv[0] = (GeVtx){0, 0, c, (int16_t)x, (int16_t)y, 0, 0};
     gv[1] = (GeVtx){0, 0, c, (int16_t)(x + w), (int16_t)(y + h), 0, 0};
     sceGuDrawArray(GU_SPRITES, VFMT, 2, 0, gv);
     touch(x, y, x + w - 1, y + h - 1, 1);
+    for (int k = 0; k < 2; k++) {                /* same fill in the hi-res frames it touches */
+        Frame *f = &g_frames[k];
+        if (!g_hires || !f->used || x >= f->x + f->w || x + w <= f->x || y >= f->y + f->h || y + h <= f->y) continue;
+        int whole = x <= f->x && y <= f->y && x + w >= f->x + f->w && y + h >= f->y + f->h;
+        f->drawn = 1;
+        bind(k);
+        if (whole && g_widescreen) {
+            f->band_clear = 0;
+            set_scissor(0, 0, 479, 271);
+            flat_sprite(0, 0, 480, 272, c);
+        } else {
+            set_scissor(0, 0, 479, 271);
+            flat_sprite(map_x(f, (float)x), map_y(f, (float)y), map_x(f, (float)(x + w)), map_y(f, (float)(y + h)), c);
+        }
+    }
     check_list();
     return 1;
+}
+
+/* Copy a VRAM rectangle (written by the CPU, a GE copy or the software rasterizer) into the hi-res frames. */
+static void mirror(int x, int y, int w, int h)
+{
+    for (int k = 0; k < 2; k++) {
+        Frame *f = &g_frames[k];
+        if (!g_hires || !f->used) continue;
+        int ix0 = x > f->x ? x : f->x, iy0 = y > f->y ? y : f->y;
+        int ix1 = x + w < f->x + f->w ? x + w : f->x + f->w, iy1 = y + h < f->y + f->h ? y + h : f->y + f->h;
+        if (ix0 >= ix1 || iy0 >= iy1) continue;
+        ge_begin();
+        f->drawn = 1;
+        bind(k);
+        set_scissor(0, 0, 479, 271);
+        set_blend(-1); set_atest(0); set_tex(1);
+        S.stencil = -1;
+        sceGuStencilFunc(GU_ALWAYS, 0, 0xFF);
+        sceGuStencilOp(GU_KEEP, GU_KEEP, GU_REPLACE);
+        sceGuTexMode(GU_PSM_5551, 0, 0, 0);
+        sceGuTexFunc(GU_TFX_REPLACE, GU_TCC_RGB);
+        sceGuTexFilter(GU_LINEAR, GU_LINEAR);
+        sceGuTexWrap(GU_CLAMP, GU_CLAMP);
+        sceGuTexFlush();
+        S.tfx = -1; S.tex_ptr = 0; S.tex_psm = -1;
+        for (int s0 = ix0; s0 < ix1; s0 += 256) {
+            int s1 = s0 + 256 < ix1 ? s0 + 256 : ix1, ax = s0 & ~7;
+            sceGuTexImage(0, 512, 512, 1024, (void *)(EDRAM + (unsigned)iy0 * 2048 + (unsigned)ax * 2));
+            HVtx *v = sceGuGetMemory(2 * (int)sizeof(HVtx));
+            v[0] = (HVtx){(uint16_t)(s0 - ax), 0, 0xFFFFFFFFu, map_x(f, (float)s0), map_y(f, (float)iy0), 0};
+            v[1] = (HVtx){(uint16_t)(s1 - ax), (uint16_t)(iy1 - iy0), 0xFFFFFFFFu, map_x(f, (float)s1), map_y(f, (float)iy1), 0};
+            sceGuDrawArray(GU_SPRITES, HFMT, 2, 0, v);
+        }
+        sceGuTexFilter(GU_NEAREST, GU_NEAREST);
+        sceGuTexWrap(GU_REPEAT, GU_REPEAT);
+        check_list();
+    }
+}
+
+void ge_upload_done(int x, int y, int w, int h)
+{
+    if (x + w <= 1024 && y + h <= 512) mirror(x, y, w, h);
 }
 
 int ge_copy(int sx, int sy, int dx, int dy, int w, int h)
@@ -470,28 +640,41 @@ int ge_copy(int sx, int sy, int dx, int dy, int w, int h)
     sceGuCopyImage(GU_PSM_5551, sx, sy, w, h, 1024, (void *)EDRAM, dx, dy, 1024, (void *)EDRAM);
     sceGuTexSync();
     touch(dx, dy, dx + w - 1, dy + h - 1, 1);
+    mirror(dx, dy, w, h);
     check_list();
     return 1;
 }
 
 /* ---- presentation ------------------------------------------------------------------------------------------- */
 
-void ge_present(int dx, int dy, int w, int h, int blank)
+/* Find or register the frame for a display start; -1 if hi-res is off. */
+static int frame_for_display(int dx, int dy, int w, int h)
 {
-    /* the PS1 picture is 4:3 whatever its resolution: 363x272, centred, bilinear */
+    if (!g_hires) return -1;
+    for (int k = 0; k < 2; k++) {
+        Frame *f = &g_frames[k];
+        if (f->used && f->x == dx && f->y == dy && f->w == w && f->h == h) return k;
+    }
+    for (int k = 0; k < 2; k++)                  /* display mode changed: forget the old frames */
+        if (g_frames[k].used && (g_frames[k].w != w || g_frames[k].h != h)) memset(g_frames, 0, sizeof g_frames);
+    int k = !g_frames[0].used ? 0 : !g_frames[1].used ? 1 : (g_shown == 0 ? 1 : 0);
+    g_frames[k] = (Frame){dx, dy, w, h, 1, 0, 1};
+    return k;
+}
+
+/* Fallback: scale the 1x display area from PS1 VRAM into buffer 2 (frames never drawn in hi-res, 24-bit, ...). */
+static void present_scaled(int dx, int dy, int w, int h, int blank)
+{
     const int ow = 363, oh = 272, ox = (480 - ow) / 2;
     ge_begin();
-    sceGuDrawBufferList(GU_PSM_5551, (void *)FB_OFF(g_fb), 512);
+    bind(2);
     set_scissor(0, 0, 479, 271);
-    sceGuDisable(GU_STENCIL_TEST);
     sceGuDisable(GU_DITHER);
+    S.dither = 0;
     set_blend(-1);
     set_atest(0);
     set_tex(0);
-    GeVtx *bg = sceGuGetMemory(2 * (int)sizeof(GeVtx));
-    bg[0] = (GeVtx){0, 0, 0xFF000000u, 0, 0, 0, 0};
-    bg[1] = (GeVtx){0, 0, 0xFF000000u, 480, 272, 0, 0};
-    sceGuDrawArray(GU_SPRITES, VFMT, 2, 0, bg);
+    flat_sprite(0, 0, 480, 272, 0xFF000000u);
     if (!blank) {
         int ax = dx & ~7, uo = dx - ax;
         set_tex(1);
@@ -500,7 +683,8 @@ void ge_present(int dx, int dy, int w, int h, int blank)
         sceGuTexFilter(GU_LINEAR, GU_LINEAR);
         sceGuTexWrap(GU_CLAMP, GU_CLAMP);
         sceGuTexFlush();
-        /* GE textures are at most 512 wide: 640-pixel modes are drawn as two strips */
+        S.tfx = -1; S.tex_ptr = 0; S.tex_psm = -1;
+        /* GE textures are at most 512 wide: 640-pixel modes are drawn in strips */
         for (int s0 = 0; s0 < w; s0 += 256) {
             int s1 = s0 + 256 < w ? s0 + 256 : w;
             sceGuTexImage(0, 512, h > 256 ? 512 : 256, 1024,
@@ -513,16 +697,29 @@ void ge_present(int dx, int dy, int w, int h, int blank)
         sceGuTexFilter(GU_NEAREST, GU_NEAREST);
         sceGuTexWrap(GU_REPEAT, GU_REPEAT);
     }
-    sceGuDrawBufferList(GU_PSM_5551, (void *)0, 1024);
-    sceGuEnable(GU_STENCIL_TEST);
     ge_sync();
-    sceDisplaySetFrameBuf((void *)(EDRAM + FB_OFF(g_fb)), 512, PSP_DISPLAY_PIXEL_FORMAT_5551, PSP_DISPLAY_SETBUF_NEXTFRAME);
-    g_fb ^= 1;
+}
+
+void ge_present(int dx, int dy, int w, int h, int blank)
+{
+    int k = blank ? -1 : frame_for_display(dx, dy, w, h);
+    int show;
+    if (k >= 0 && g_frames[k].drawn) {
+        ge_sync();
+        show = k;
+        g_frames[k ^ 1].band_clear = 1;
+    } else {
+        present_scaled(dx, dy, w, h, blank);
+        show = 2;
+    }
+    if (show != g_shown)
+        sceDisplaySetFrameBuf((void *)(EDRAM + FB_OFF(show)), 512, PSP_DISPLAY_PIXEL_FORMAT_5551,
+                              PSP_DISPLAY_SETBUF_NEXTFRAME);
+    g_shown = show;
 }
 
 /* Startup check of the scissor semantics of this pspsdk (logged): a 100-pixel sprite is drawn with
  * sceGuScissor(40, 0, 20, 512); width semantics clip it to 20 columns. */
-
 static void selftest(void)
 {
     ge_begin();
@@ -554,11 +751,12 @@ void ge_init(void)
         sceKernelDcacheWritebackInvalidateRange(g_slots[i].buf, 65536);
     }
     sceKernelDcacheWritebackInvalidateRange(g_clut_arena, sizeof g_clut_arena);
-    sceDisplaySetFrameBuf((void *)(EDRAM + FB_OFF(0)), 512, PSP_DISPLAY_PIXEL_FORMAT_5551, PSP_DISPLAY_SETBUF_NEXTFRAME);
+    g_shown = 2;
+    sceDisplaySetFrameBuf((void *)(EDRAM + FB_OFF(2)), 512, PSP_DISPLAY_PIXEL_FORMAT_5551, PSP_DISPLAY_SETBUF_NEXTFRAME);
 }
 
 /* Debug: the display buffer shown last (480x272 inside a 512-pixel stride, 5551). */
 const uint16_t *ge_display_buffer(void)
 {
-    return (const uint16_t *)(0x40000000u | (EDRAM + FB_OFF(g_fb ^ 1)));
+    return (const uint16_t *)(0x40000000u | (EDRAM + FB_OFF(g_shown)));
 }

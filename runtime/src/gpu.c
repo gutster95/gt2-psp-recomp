@@ -30,7 +30,7 @@ static int g_log_prims;
 void gpu_init(void)
 {
     sceDisplaySetMode(0, 480, 272);
-    memset((void *)0x44000000u, 0, 0x188000);       /* PS1 VRAM + both display buffers */
+    memset((void *)0x44000000u, 0, 0x1CC000);       /* PS1 VRAM + three display buffers */
     g_vram = (uint16_t *)0x44000000u;
     ge_init();
 }
@@ -104,6 +104,7 @@ static void exec(void)
         for (int j = 0; j < h; j++)
             for (int i = 0; i < w; i++)
                 g_vram[((dy + j) & 511) * 1024 + ((dx + i) & 1023)] = g_vram[((sy + j) & 511) * 1024 + ((sx + i) & 1023)];
+        ge_upload_done(dx, dy, w, h);
         return;
     }
     switch (op) {
@@ -177,7 +178,7 @@ void gpu_gp0(uint32_t v)
     if (g_xfer_dir == 1) {
         vram_put((uint16_t)v);
         if (g_xi < g_xw * g_xh) vram_put((uint16_t)(v >> 16));
-        if (g_xi >= g_xw * g_xh) g_xfer_dir = 0;
+        if (g_xi >= g_xw * g_xh) { g_xfer_dir = 0; ge_upload_done(g_xx, g_xy, g_xw, g_xh); }
         return;
     }
     if (g_polyline) {
@@ -254,7 +255,7 @@ void gpu_present(void)
         ge_present((int)g_disp_x, (int)g_disp_y, w, h, disabled);
         goto stats;
     }
-    uint16_t *fb = (uint16_t *)(0x44100000u);       /* uncached display buffer 0, 512-pixel stride */
+    uint16_t *fb = (uint16_t *)(0x44188000u);          /* uncached display buffer 0, 512-pixel stride */
     /* The PS1 picture is 4:3 whatever the resolution: scale it to 363x272, centred (nearest neighbour). */
     const int ow = 363, oh = 272, ox = (480 - ow) / 2;
     static int xmap[363];
@@ -267,7 +268,7 @@ void gpu_present(void)
         for (int x = 0; x < ow; x++) dst[ox + x] = src[xmap[x]] | 0x8000;
         memset(dst + ox + ow, 0, (480 - ox - ow) * 2);
     }
-    sceDisplaySetFrameBuf((void *)0x04100000, 512, PSP_DISPLAY_PIXEL_FORMAT_5551, PSP_DISPLAY_SETBUF_NEXTFRAME);
+    sceDisplaySetFrameBuf((void *)0x04188000, 512, PSP_DISPLAY_PIXEL_FORMAT_5551, PSP_DISPLAY_SETBUF_NEXTFRAME);
 stats:
     if (frame == 300 || frame == 900 || frame == 2100) {   /* debug: raw VRAM snapshots */
         char path[300];

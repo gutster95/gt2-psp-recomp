@@ -3,6 +3,7 @@
  * Simplification: MAC1-3 overflow flags are checked on the final 44-bit sum only (not after every partial
  * addition). Everything else (saturation, flags, UNR division, register quirks) follows the documentation. */
 #include "rt.h"
+#include "ge.h"
 
 #define D (c->gte_data)
 #define C (c->gte_ctrl)
@@ -167,7 +168,9 @@ static void rtp(PsxCpu *c, int n, int sf, int lm, int last)
     }
     push_sz(c, m3 >> 12);
     uint32_t q = divide(C[H] & 0xFFFF, D[SZ3]);
-    int64_t sx = (int64_t)q * (int16_t)D[IR1] + (int32_t)C[OFX];
+    int64_t px = (int64_t)q * (int16_t)D[IR1];
+    if (g_widescreen && g_hires) px = px * 3 / 4;   /* 16:9: the 4:3 field of view fills 3/4 of the width */
+    int64_t sx = px + (int32_t)C[OFX];
     int64_t sy = (int64_t)q * (int16_t)D[IR2] + (int32_t)C[OFY];
     set_mac0(c, sx); set_mac0(c, sy);
     push_sxy(c, sx >> 16, sy >> 16);
