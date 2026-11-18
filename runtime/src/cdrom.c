@@ -10,6 +10,7 @@
 #include <pspiofilemgr.h>
 #include "rt.h"
 #include "cdrom.h"
+#include "spu.h"
 
 #define SECTOR_RAW 2352
 #define LEADIN 150                 /* 2 s pregap: LBA 0 = 00:02:00 */
@@ -31,6 +32,7 @@ static uint8_t g_resp[16], g_nresp, g_resp_pos;
 static uint8_t g_int_enable = 0x1F, g_int_flag;
 static uint8_t g_stat = 0x02;      /* motor on */
 static uint8_t g_mode;
+static int g_muted;                /* Mute command: XA audio off */
 static uint8_t g_filter_file, g_filter_chan;
 
 static uint32_t g_setloc = LEADIN, g_pos = LEADIN;     /* MSF-absolute sector numbers */
@@ -168,7 +170,7 @@ static void command(uint8_t cmd)
         push_stat(ACK, 3);
         push_stat(20000, 2);
         break;
-    case 0x0B: case 0x0C: push_stat(ACK, 3); break;                         /* Mute / Demute */
+    case 0x0B: case 0x0C: g_muted = cmd == 0x0B; push_stat(ACK, 3); break;  /* Mute / Demute */
     case 0x0D: g_filter_file = g_params[0]; g_filter_chan = g_params[1]; push_stat(ACK, 3); break;
     case 0x0E: g_mode = g_params[0]; push_stat(ACK, 3); break;              /* Setmode */
     case 0x0F: { uint8_t b[5] = {g_stat, g_mode, 0, g_filter_file, g_filter_chan}; push(ACK, 3, b, 5); break; }
@@ -249,8 +251,10 @@ static void deliver(void)
         memcpy(g_last_hdr, g_sector + 12, 8);
         uint8_t submode = g_sector[18];
         if ((g_mode & 0x40) && (submode & 0x04)) {
-            /* XA-ADPCM audio sector: goes to the SPU on real hardware. TODO: decode for music. */
+            /* XA-ADPCM audio sector (music): goes to the SPU, no data interrupt. With the filter (mode bit 3)
+             * only the selected file/channel of the interleaved stream plays. */
             if ((g_mode & 0x08) && (g_sector[16] != g_filter_file || g_sector[17] != g_filter_chan)) return;
+            if (!g_muted) spu_xa_sector(g_sector);
             return;
         }
         /* into the sector buffer; the data FIFO is only (re)loaded by the request register */

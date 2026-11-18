@@ -312,3 +312,17 @@ is a stable 30 fps.
   background from the vblank tick once the game has not written a sector for 1 s (snapshot of the image).
 * A GT2CARD1.MCD from the previous build is taken over once. Verified in PPSSPP: save result 0, reload gives the
   identical image (checksum logged on save and load).
+
+## 2026-11-18 - Audio: SPU and CD-XA music
+
+* spu.c: SPU at register level (psx-spx): 24 ADPCM voices from 512 KB sound RAM (DMA4 and data FIFO), ADSR
+  envelopes, pitch + pitch modulation, noise, voice/main volumes, key on/off latched and applied per block, ENDX,
+  current-envelope reads. Not emulated: reverb (dry output), volume sweeps (fixed), SPU IRQ.
+* CD-XA: cdrom.c passes XA-ADPCM sectors (mode bit 6, filter file/channel) to spu_xa_sector, which decodes them
+  (4/8 bit, mono/stereo, 37.8/18.9 kHz) into a ring buffer; the mixer resamples to 44.1 kHz and adds it with the
+  SPU CD volume. GT2 streams its music this way (MUSIC.DAT, stereo 37.8 kHz, channel interleave).
+* Output: PSP thread, 1024-sample blocks, sceAudioOutputBlocking at 44.1 kHz.
+* Debug: audiodump.txt -> audio.raw (first 3 min). Check: output is structured (lag-1 autocorrelation ~0.98),
+  ~0.1% of samples clip.
+* Cost (PPSSPP): heavy replay scenes 37-50 frames/120 vblanks with audio vs 50-60 without, after moving the mixer
+  to a voice-by-voice block loop (first version: 31-45). settings.txt audio=0 turns sound off for comparisons.

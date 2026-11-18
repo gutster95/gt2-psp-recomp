@@ -27,6 +27,7 @@ runtime/             PSP runtime (C): include/gt2rt.h (interface for generated c
   src/widescreen.c   game patch: near-plane clipping for the overlay 0 scenery renderer
   src/ge.c           GE renderer (PS1 VRAM in eDRAM, texture page cache, presentation)
   src/card.c savedata.c  memory card: BIOS sector functions + events, stored as PSP save data
+  src/spu.c          SPU + CD-XA decoding, PSP audio output thread
   src/core.c         dispatcher, setjmp/longjmp unwind & resume, overlay hook, IRQ delivery, watchdog
   src/bios.c io.c cdrom.c sio.c gpu.c raster.c gte.c log.c files.c main.c
 scripts/             wsl-setup.sh, build.sh, run-ppsspp.ps1, compile-generated.sh, vram2png.py
@@ -69,7 +70,8 @@ PowerShell `Set-Content -Encoding utf8` writes a BOM. CMake globs: build.sh re-r
 * **Input + memory card**: DualShock analog emulation (libpad works now - before, all input was ignored and the
   "race replay" was the attract demo); memory card = PSP save data (XMB "Saved Data", savedata.c via sceUtilitySavedata; card.c BIOS events).
   Test input: input.txt (`<vblank> <button> <len>`), e.g. start/cross reaches the GT mode world map.
-* Not implemented yet: SPU audio, XA music, MDEC (movies),
+* **Audio**: SPU (24 voices, ADSR, no reverb) + CD-XA music, PSP audio thread (spu.c).
+* Not implemented yet: reverb, MDEC (movies),
   15-bit textures / texture windows on the GE (software fallback).
 
 ## Next steps

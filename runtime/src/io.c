@@ -6,6 +6,7 @@
 #include "cdrom.h"
 #include "sio.h"
 #include "card.h"
+#include "spu.h"
 #include "prof.h"
 
 uint32_t g_i_stat, g_i_mask;
@@ -90,6 +91,9 @@ static void dma_run(int ch)
     case 3: /* CD-ROM */
         cdrom_dma(madr, (bcr & 0xFFFF) * ((bcr >> 16) ? (bcr >> 16) : 1));
         break;
+    case 4: /* SPU: sound RAM transfer (block mode: BS words x BA blocks) */
+        spu_dma(madr, (bcr & 0xFFFF) * ((bcr >> 16) ? (bcr >> 16) : 1), chcr & 1);
+        break;
     case 6: { /* OTC: reverse-clear ordering table */
         uint32_t n = bcr & 0xFFFF ? bcr & 0xFFFF : 0x10000;
         uint32_t a = madr;
@@ -136,6 +140,11 @@ static uint32_t io_read(uint32_t a, int size)
     uint32_t v;
     if (off >= 0x1800 && off < 0x1804) return cdrom_read(off - 0x1800);
     if (off >= 0x1040 && off < 0x1050) return sio_read(off - 0x1040, size);
+    if (off >= 0x1C00 && off < 0x2000) {
+        if (size == 4) return spu_read16(off) | (spu_read16(off + 2) << 16);
+        v = spu_read16(off);
+        return size == 1 ? (v >> ((off & 1) * 8)) & 0xFF : v;
+    }
     switch (off & ~3u) {
     case 0x1070: v = g_i_stat; break;
     case 0x1074: v = g_i_mask; break;
@@ -143,7 +152,6 @@ static uint32_t io_read(uint32_t a, int size)
     case 0x1814: v = gpu_status() | ((g_vblank_count & 1) << 31); break;
     case 0x1100: case 0x1110: case 0x1120: v = timer_count((off - 0x1100) >> 4); break;
     default:
-        if (off == 0x1DAE) { v = IO16(0x1DAA) & 0x3F; break; }   /* SPUSTAT mirrors SPUCNT */
         v = size == 4 ? IO32(off & ~3u) : size == 2 ? IO16(off & ~1u) : g_io[off];
         seen(off, "read", v);
         return v;
@@ -164,6 +172,11 @@ static void io_write(uint32_t a, uint32_t v, int size)
     uint32_t off = p - 0x1F800000u;
     if (off >= 0x1800 && off < 0x1804) { cdrom_write(off - 0x1800, v); return; }
     if (off >= 0x1040 && off < 0x1050) { sio_write(off - 0x1040, v, size); return; }
+    if (off >= 0x1C00 && off < 0x2000) {
+        if (size == 4) { spu_write16(off, v & 0xFFFF); spu_write16(off + 2, v >> 16); }
+        else spu_write16(off, v);
+        return;
+    }
     switch (off & ~3u) {
     case 0x1070: g_i_stat &= v; return;           /* acknowledge */
     case 0x1074: g_i_mask = v & 0x7FF; return;
