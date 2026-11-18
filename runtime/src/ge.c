@@ -133,11 +133,17 @@ void ge_sync(void)
 /* Variants of the 3D-mode setup, probed at startup (selftest_3d): PPSSPP accepts all of them, real hardware
  * drew nothing with variant 0. zs = clip z per unit of w (ndc z), clip = GU_CLIP_PLANES (depth clamp), inv = depth
  * range 65535..0. */
-static const struct { float zs; int clip, inv; } TVAR[] = {
-    {0, 0, 0}, {0.5f, 0, 0}, {0.5f, 1, 0}, {0, 1, 0}, {0.5f, 0, 1}, {-0.5f, 0, 0}, {0.5f, 1, 1},
+/* xs/ys = viewport scale (vertices are fed as (x/xs*w, y/ys*w, w)); conv = diagnostic only: identity projection,
+ * no perspective trick (vertices in NDC, w = 1) - shows whether transform mode draws at all. */
+static const struct { float zs; int clip, inv; float xs, ys; int conv; } TVAR[] = {
+    {0, 0, 0, 1, 1, 0},      {0.5f, 0, 0, 1, 1, 0},     {0.5f, 1, 0, 1, 1, 0},     {0, 1, 0, 1, 1, 0},
+    {0.5f, 0, 1, 1, 1, 0},   {-0.5f, 0, 0, 1, 1, 0},    {0.5f, 1, 1, 1, 1, 0},     {0.5f, 0, 0, 256, 256, 0},
+    {0, 0, 0, 256, 256, 0},  {0.5f, 1, 0, 256, 256, 0}, {0.5f, 1, 1, 256, 256, 0}, {0.5f, 0, 0, 64, 64, 0},
+    {0, 0, 0, 512, 256, 1},  {0, 1, 0, 512, 256, 1},    {0, 1, 1, 512, 256, 1},
 };
 #define NTVAR ((int)(sizeof TVAR / sizeof TVAR[0]))
 static int g_tvar;
+static float g_tix = 1, g_tiy = 1;   /* 1 / viewport scale of the chosen variant */
 
 static void ge_begin(void)
 {
@@ -151,10 +157,10 @@ static void ge_begin(void)
      * homogeneous coordinate, the viewport has scale 1, so screen = (x, y) and attributes interpolate with 1/w. */
     static ScePspFMatrix4 ident = {{1, 0, 0, 0}, {0, 1, 0, 0}, {0, 0, 1, 0}, {0, 0, 0, 1}};
     ScePspFMatrix4 proj = {{1, 0, 0, 0}, {0, 1, 0, 0}, {0, 0, TVAR[g_tvar].zs, 1}, {0, 0, 0, 0}};
-    sceGuSetMatrix(GU_PROJECTION, &proj);
+    sceGuSetMatrix(GU_PROJECTION, TVAR[g_tvar].conv ? &ident : &proj);
     sceGuSetMatrix(GU_VIEW, &ident);
     sceGuSetMatrix(GU_MODEL, &ident);
-    sceGuViewport(2048, 2048, 2, -2);
+    sceGuViewport(2048, 2048, (int)(2 * TVAR[g_tvar].xs), -(int)(2 * TVAR[g_tvar].ys));
     if (TVAR[g_tvar].inv) sceGuDepthRange(65535, 0); else sceGuDepthRange(0, 65535);
     if (TVAR[g_tvar].clip) sceGuEnable(GU_CLIP_PLANES); else sceGuDisable(GU_CLIP_PLANES);
     sceGuTexScale(1.0f, 1.0f);
@@ -600,7 +606,7 @@ static void draw(int prim, int n, const GeVtx *v, int tex, int semi, int mode, i
                     g_xy_py[j] - ry > 2 || ry - g_xy_py[j] > 2) { ok = 0; break; }
                 float z = g_xy_pz[j];
                 float hx = map_x3(f, g_xy_px[j] + g_rs.off_x), hy = map_y(f, g_xy_py[j] + g_rs.off_y);
-                pv[i] = (PVtx){v[i].u / 256.0f, v[i].v / 256.0f, v[i].c, hx * z, hy * z, z};
+                pv[i] = (PVtx){v[i].u / 256.0f, v[i].v / 256.0f, v[i].c, hx * g_tix * z, hy * g_tiy * z, z};
             }
             if (ok) {
                 /* bilinear only without transparent texels: filtering would pull their black into the edges */
@@ -978,7 +984,12 @@ static int draw_test_3d(int t)
             sceGuDrawArray(GU_TRIANGLES, HFMT, 3, 0, v);
         } else {
             PVtx *v = sceGuGetMemory(3 * (int)sizeof(PVtx));
-            for (int i = 0; i < 3; i++) { float w = tw[t - 1][i]; v[i] = (PVtx){0, 0, 0xFF0000FFu, tx[i] * w, ty[i] * w, w}; }
+            float ix = 1.0f / TVAR[g_tvar].xs, iy = 1.0f / TVAR[g_tvar].ys;
+            for (int i = 0; i < 3; i++) {
+                float w = tw[t - 1][i];
+                if (TVAR[g_tvar].conv) v[i] = (PVtx){0, 0, 0xFF0000FFu, tx[i] * ix, ty[i] * iy, 0};
+                else v[i] = (PVtx){0, 0, 0xFF0000FFu, tx[i] * ix * w, ty[i] * iy * w, w};
+            }
             sceGuDrawArray(GU_TRIANGLES, PFMT, 3, 0, v);
         }
         ge_sync();
@@ -999,14 +1010,14 @@ static void selftest_3d(void)
 {
     g_tvar = 0;
     int ref = draw_test_3d(0), found = -1;
-    for (int v = 0; v < NTVAR && found < 0; v++) {
+    for (int v = 0; v < NTVAR; v++) {          /* all variants are logged (hardware diagnosis) */
         g_tvar = v;
         int ok = 1;
-        for (int t = 1; t < 4 && ok; t++) {
+        for (int t = 1; t < (TVAR[v].conv ? 2 : 4); t++) {
             int h = draw_test_3d(t);
             if (h < ref - ref / 50 || h > ref + ref / 50) ok = 0;
         }
-        if (ok) found = v;
+        if (ok && found < 0 && !TVAR[v].conv) found = v;
     }
     if (found < 0) {
         g_tvar = 0;
@@ -1014,6 +1025,8 @@ static void selftest_3d(void)
         logf_("ge selftest 3d: no working variant - perspective-correct pass disabled\n");
     } else {
         g_tvar = found;
+        g_tix = 1.0f / TVAR[found].xs;
+        g_tiy = 1.0f / TVAR[found].ys;
         logf_("ge selftest 3d: using variant %d\n", found);
     }
     memset(g_vram, 0, 1024 * 2 * 256);
