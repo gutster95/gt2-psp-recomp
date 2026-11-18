@@ -311,9 +311,10 @@ stats:
               "disp %u,%u mode %02x\n", frame, (unsigned)dt_ms, (unsigned)((g_gpu_us - last_gpu) / 1000),
               (unsigned)(g_gpu_lists - last_lists), (unsigned)(g_prims - last_prims),
               (unsigned)g_disp_x, (unsigned)g_disp_y, (unsigned)g_disp_mode);
-        extern uint32_t g_ge_prims, g_ge_sw_prims, g_ge_tex_uploads, g_ge_syncs;
-        logf_("ge: %u prims, %u software, %u texture page copies, %u syncs (totals)\n", (unsigned)g_ge_prims,
-              (unsigned)g_ge_sw_prims, (unsigned)g_ge_tex_uploads, (unsigned)g_ge_syncs);
+        extern uint32_t g_ge_prims, g_ge_sw_prims, g_ge_tex_uploads, g_ge_syncs, g_ge_pgxp;
+        logf_("ge: %u prims (%u perspective-correct), %u software, %u texture page copies, %u syncs (totals)\n",
+              (unsigned)g_ge_prims, (unsigned)g_ge_pgxp, (unsigned)g_ge_sw_prims, (unsigned)g_ge_tex_uploads,
+              (unsigned)g_ge_syncs);
         extern uint32_t g_wide_clipped, g_wide_tris;
         logf_("widescreen clipper: %u polygons, %u triangles (totals)\n", (unsigned)g_wide_clipped,
               (unsigned)g_wide_tris);

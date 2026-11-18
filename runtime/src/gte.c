@@ -175,7 +175,7 @@ static void rtp(PsxCpu *c, int n, int sf, int lm, int last)
     int64_t sy = (int64_t)q * (int16_t)D[IR2] + (int32_t)C[OFY];
     set_mac0(c, sx); set_mac0(c, sy);
     push_sxy(c, sx >> 16, sy >> 16);
-    ge_mark_3d(D[SXY2]);
+    ge_mark_3d_precise(D[SXY2], (float)sx / 65536.0f, (float)sy / 65536.0f, (float)D[SZ3]);
     if (last) {
         int64_t p = (int64_t)q * (int16_t)C[DQA] + (int32_t)C[DQB];
         set_mac0(c, p);

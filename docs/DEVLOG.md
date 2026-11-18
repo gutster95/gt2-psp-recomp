@@ -243,3 +243,15 @@ Step 1 done:
 * Implemented as recompiler OVERRIDEs (active when `g_widescreen`), on top of the GTE X*3/4 squeeze + 3D stretch.
   Objects at the 16:9 edges no longer pop in/out. Menu screens (car selection, GT mode) have further viewport
   values in Silent's cheat - to be ported when those screens are reached.
+
+## 2026-11-18 - Visual quality: perspective-correct, sub-pixel 3D and texture filtering
+
+* Research: no GT2 texture pack exists (GT3 on PS2 only); DuckStation packs would not fit anyway. Anti-aliasing on
+  the GE only via supersampling, which needs more than the 2 MB eDRAM (PSP-3000 has 4 MB, access unclear).
+* Implemented PGXP-style rendering in the hi-res pass (design in ARCHITECTURE.md) + bilinear filtering of opaque
+  3D textures. Before/after: `build/cmp-2100.png`, `build/cmp-3900.png` - road and walls no longer warp/jitter.
+* A self-test confirms the GE 3D path covers exactly the same pixels as through mode for extreme w.
+* Filtering transparent textures (trees) produced dark seams: now skipped for CLUTs with transparent entries.
+* Black garbage polygons appeared in some frames with the near-plane clipper enabled; it is now off by default.
+* PPSSPP (software GE) speed is the same with and without PGXP/filtering; real PSP numbers still pending.
+* `settings.txt` added for toggling all enhancements without rebuilding.

@@ -83,6 +83,14 @@ tools/             (ignored) local toolchain (pspdev inside a project-local WSL 
     renderer (0x80018d1c, 8 loops with prebuilt packets) calls `wide_clip_track` (widescreen.c) for polygons the
     GTE rejects (vertex near/behind the camera): near-plane + guard-band clipping in view space, emitted as
     triangles into a packet ring in kernel RAM, linked into the same OT slot.
+  * PGXP-style precision (`g_pgxp`): the GTE stores the sub-pixel screen position and view depth of every
+    projected vertex in the 3D hash set. In the hi-res pass, 3D polygons whose vertices are all found are drawn in
+    GE 3D mode with vertices (x*w, y*w, w) and a projection that moves w into the homogeneous coordinate (viewport
+    scale 1): exact screen positions, perspective-correct texture/colour interpolation (no PS1 affine warping).
+    ~90% of 3D polygons take this path. Opaque 3D textures without transparent CLUT entries are filtered
+    bilinearly (`g_tex_filter`); transparent ones stay nearest (filtering would pull black into the edges).
+  * `settings.txt` next to the EBOOT toggles widescreen, hires, pgxp, filter, hud_anchor, near_clip (0/1).
+    The overlay 0 near-plane clipper (widescreen.c) is off by default: suspected of producing garbage polygons.
   * The state cache is invalidated at every list start (the GE keeps state across lists); "unknown" must not
     collide with a valid value (blend -1 = opaque caused additive accumulation on the title screen).
   * pspgu keeps its own scissor state and re-sends it: use sceGuScissor (startup check of its width semantics),

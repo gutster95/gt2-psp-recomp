@@ -43,7 +43,7 @@ static uint32_t g_list[LIST_BYTES / 4] __attribute__((aligned(64)));
 static int g_open, g_shown;
 static int g_cur_fb = -1;             /* GE draw target: -1 PS1 VRAM, 0/1 hi-res frame buffers, 2 scaled present */
 static int g_scissor_is_width = 1;    /* sceGuScissor(x, y, w, h) semantics, checked at startup */
-uint32_t g_ge_prims, g_ge_sw_prims, g_ge_tex_uploads, g_ge_syncs;
+uint32_t g_ge_prims, g_ge_sw_prims, g_ge_tex_uploads, g_ge_syncs, g_ge_pgxp;
 
 static inline int sx11(uint32_t v) { return ((int32_t)(v << 21)) >> 21; }
 
@@ -90,7 +90,8 @@ static void invalidate_state(void) { memset(&S, 0xFF, sizeof S); S.blend = -99; 
 #define CLUT_ARENA (128 * 1024)
 static uint32_t g_clut_arena[CLUT_ARENA / 4] __attribute__((aligned(64)));
 static uint32_t g_clut_top;
-typedef struct { uint32_t key, ver; const uint32_t *p; } ClutEnt;
+typedef struct { uint32_t key, ver; const uint32_t *p; int transparent; } ClutEnt;
+static int g_clut_transparent;   /* the CLUT of the current texture has transparent entries (no filtering) */
 #define NCLUT 64
 static ClutEnt g_cluts[NCLUT];
 static int g_nclut, g_clut_rr;
@@ -117,7 +118,18 @@ static void ge_begin(void)
     sceGuSendCommandi(0x15, 0);                          /* drawing region: the whole PS1 VRAM */
     sceGuSendCommandi(0x16, (511 << 10) | 1023);
     sceGuOffset(2048, 2048);
-    sceGuViewport(2048, 2048, 1024, 512);
+    /* 3D mode (perspective-correct hi-res pass): vertices are (x*w, y*w, w); the projection moves w into the
+     * homogeneous coordinate, the viewport has scale 1, so screen = (x, y) and attributes interpolate with 1/w. */
+    static ScePspFMatrix4 ident = {{1, 0, 0, 0}, {0, 1, 0, 0}, {0, 0, 1, 0}, {0, 0, 0, 1}};
+    static ScePspFMatrix4 proj = {{1, 0, 0, 0}, {0, 1, 0, 0}, {0, 0, 0, 1}, {0, 0, 0, 0}};
+    sceGuSetMatrix(GU_PROJECTION, &proj);
+    sceGuSetMatrix(GU_VIEW, &ident);
+    sceGuSetMatrix(GU_MODEL, &ident);
+    sceGuViewport(2048, 2048, 2, -2);
+    sceGuDepthRange(0, 65535);
+    sceGuDisable(GU_CLIP_PLANES);
+    sceGuTexScale(1.0f, 1.0f);
+    sceGuTexOffset(0.0f, 0.0f);
     sceGuDisable(GU_DEPTH_TEST);
     sceGuDepthMask(GU_TRUE);
     sceGuDisable(GU_CULL_FACE);
@@ -150,14 +162,16 @@ static const uint32_t *clut_get(int clx, int cly, int n)
     uint32_t key = (n == 256 ? 0x80000000u : 0) | ((uint32_t)cly << 10) | (uint32_t)clx;
     uint32_t ver = g_page_ver[p] ^ (g_page_ver[p2] * 0x9E3779B1u);
     for (int i = 0; i < g_nclut; i++)
-        if (g_cluts[i].key == key && g_cluts[i].ver == ver) return g_cluts[i].p;
+        if (g_cluts[i].key == key && g_cluts[i].ver == ver) { g_clut_transparent = g_cluts[i].transparent; return g_cluts[i].p; }
     uint32_t bytes = (uint32_t)(n * 4 + 63) & ~63u;
     if (g_clut_top + bytes > CLUT_ARENA) { ge_sync(); ge_begin(); }
     uint32_t *dst = (uint32_t *)((uintptr_t)((uint8_t *)g_clut_arena + g_clut_top) | 0x40000000u);   /* uncached */
     g_clut_top += bytes;
     const uint16_t *src = g_vram + cly * 1024;
+    int transparent = 0;
     for (int i = 0; i < n; i++) {
         uint32_t t = src[(clx + i) & 1023];
+        transparent |= t == 0;
         uint32_t a = t == 0 ? 0 : (t & 0x8000) ? 0x70 : 0xFF;
         dst[i] = (a << 24) | (c5to8((t >> 10) & 31) << 16) | (c5to8((t >> 5) & 31) << 8) | c5to8(t & 31);
     }
@@ -167,6 +181,8 @@ static const uint32_t *clut_get(int clx, int cly, int n)
     e->key = key;
     e->ver = ver;
     e->p = dst;
+    e->transparent = transparent;
+    g_clut_transparent = transparent;
     return dst;
 }
 
@@ -307,6 +323,8 @@ int g_hud_anchor = 1;   /* widescreen: move HUD elements to the screen edges in 
 static Frame g_frames[2];
 
 typedef struct { uint16_t u, v; uint32_t c; float x, y, z; } HVtx;
+typedef struct { float u, v; uint32_t c; float x, y, z; } PVtx;
+#define PFMT (GU_TEXTURE_32BITF | GU_COLOR_8888 | GU_VERTEX_32BITF | GU_TRANSFORM_3D)
 #define HFMT (GU_TEXTURE_16BIT | GU_COLOR_8888 | GU_VERTEX_32BITF | GU_TRANSFORM_2D)
 
 static inline float map_x(const Frame *f, float x) { return 240.0f + (x - f->x - f->w * 0.5f) * (363.0f / f->w); }
@@ -319,29 +337,42 @@ static uint16_t g_xy_stamp[XYSET];
 static inline uint16_t xy_now(void) { return (uint16_t)(g_vblank_count >> 1); }
 static inline uint32_t xy_hash(uint32_t k) { return (k * 0x9E3779B1u) >> 19; }
 
-void ge_mark_3d(uint32_t xy)
+/* Precise data per projected vertex (PGXP-style): sub-pixel screen position and view depth, used to draw 3D
+ * primitives perspective-correct and without the integer jitter of PS1 coordinates. */
+static float g_xy_px[XYSET], g_xy_py[XYSET], g_xy_pz[XYSET];
+int g_pgxp = 1;          /* perspective-correct, sub-pixel 3D in the hi-res pass */
+int g_tex_filter = 1;    /* bilinear filtering of opaque 3D textures in the hi-res pass */
+
+void ge_mark_3d_precise(uint32_t xy, float x, float y, float z)
 {
     if (!g_widescreen || !g_hires) return;
     uint16_t now = xy_now();
-    uint32_t h = xy_hash(xy);
+    uint32_t h = xy_hash(xy), j = h;
     for (int i = 0; i < 8; i++) {
-        uint32_t j = (h + i) & (XYSET - 1);
-        if (g_xy_key[j] == xy || (uint16_t)(now - g_xy_stamp[j]) > 3) { g_xy_key[j] = xy; g_xy_stamp[j] = now; return; }
+        uint32_t k = (h + i) & (XYSET - 1);
+        if (g_xy_key[k] == xy || (uint16_t)(now - g_xy_stamp[k]) > 3) { j = k; break; }
     }
-    g_xy_key[h] = xy;
-    g_xy_stamp[h] = now;
+    g_xy_key[j] = xy;
+    g_xy_stamp[j] = now;
+    g_xy_px[j] = x;
+    g_xy_py[j] = y;
+    g_xy_pz[j] = z;
 }
 
-static int is_3d_xy(uint32_t xy)
+void ge_mark_3d(uint32_t xy) { ge_mark_3d_precise(xy, 0, 0, 0); }
+
+static int xy_find(uint32_t xy)
 {
     uint16_t now = xy_now();
     uint32_t h = xy_hash(xy);
     for (int i = 0; i < 8; i++) {
         uint32_t j = (h + i) & (XYSET - 1);
-        if (g_xy_key[j] == xy && (uint16_t)(now - g_xy_stamp[j]) <= 3) return 1;
+        if (g_xy_key[j] == xy && (uint16_t)(now - g_xy_stamp[j]) <= 3) return (int)j;
     }
-    return 0;
+    return -1;
 }
+
+static int is_3d_xy(uint32_t xy) { return xy_find(xy) >= 0; }
 static inline float map_y(const Frame *f, float y) { return (y - f->y) * (272.0f / f->h); }
 
 static void bind(int target)
@@ -472,6 +503,30 @@ static void draw(int prim, int n, const GeVtx *v, int tex, int semi, int mode, i
             }
         }
         hires_scissor(f, is3d || shift != 0);
+        if (is3d && g_pgxp && prim == GU_TRIANGLE_STRIP) {
+            PVtx *pv = sceGuGetMemory(n * (int)sizeof(PVtx));
+            int ok = 1;
+            for (int i = 0; i < n && ok; i++) {
+                int rx = v[i].x - g_rs.off_x, ry = v[i].y - g_rs.off_y;
+                int j = xy_find(((uint32_t)(uint16_t)ry << 16) | (uint16_t)rx);
+                if (j < 0 || g_xy_pz[j] < 1.0f || g_xy_px[j] - rx > 2 || rx - g_xy_px[j] > 2 ||
+                    g_xy_py[j] - ry > 2 || ry - g_xy_py[j] > 2) { ok = 0; break; }
+                float z = g_xy_pz[j];
+                float hx = map_x3(f, g_xy_px[j] + g_rs.off_x), hy = map_y(f, g_xy_py[j] + g_rs.off_y);
+                pv[i] = (PVtx){v[i].u / 256.0f, v[i].v / 256.0f, v[i].c, hx * z, hy * z, z};
+            }
+            if (ok) {
+                /* bilinear only without transparent texels: filtering would pull their black into the edges */
+                int filt = tex && !semi && g_tex_filter && !g_clut_transparent;
+                if (filt) sceGuTexFilter(GU_LINEAR, GU_LINEAR);
+                passes(prim, PFMT, n, pv, tex, semi, mode);
+                if (filt) sceGuTexFilter(GU_NEAREST, GU_NEAREST);
+                g_ge_pgxp++;
+                g_ge_prims++;
+                check_list();
+                return;
+            }
+        }
         HVtx *hv = sceGuGetMemory(n * (int)sizeof(HVtx));
         for (int i = 0; i < n; i++) {
             hv[i].u = v[i].u;
@@ -805,9 +860,44 @@ static void selftest(void)
     memset(g_vram, 0, 1024 * 2 * 32);
 }
 
+/* Debug self-test of the perspective path: the same triangle in through mode and in 3D mode with very different
+ * w per vertex must cover the same pixels. */
+static void selftest_3d(void)
+{
+    static const float tx[3] = {10, 300, 40}, ty[3] = {10, 60, 200}, tw[3][3] = {{1000, 1000, 1000}, {5, 2000, 300}, {2, 60000, 20}};
+    for (int t = 0; t < 4; t++) {
+        memset(g_vram, 0, 1024 * 2 * 256);
+        ge_begin();
+        set_tex(0); set_blend(-1); set_atest(0);
+        sceGuStencilFunc(GU_ALWAYS, 0, 0xFF);
+        sceGuStencilOp(GU_KEEP, GU_KEEP, GU_REPLACE);
+        set_scissor(0, 0, 1023, 511);
+        if (t == 0) {
+            HVtx *v = sceGuGetMemory(3 * (int)sizeof(HVtx));
+            for (int i = 0; i < 3; i++) v[i] = (HVtx){0, 0, 0xFF0000FFu, tx[i], ty[i], 0};
+            sceGuDrawArray(GU_TRIANGLES, HFMT, 3, 0, v);
+        } else {
+            PVtx *v = sceGuGetMemory(3 * (int)sizeof(PVtx));
+            for (int i = 0; i < 3; i++) { float w = tw[t - 1][i]; v[i] = (PVtx){0, 0, 0xFF0000FFu, tx[i] * w, ty[i] * w, w}; }
+            sceGuDrawArray(GU_TRIANGLES, PFMT, 3, 0, v);
+        }
+        ge_sync();
+        int hits = 0, x0 = 9999, x1 = -1, y0 = 9999, y1 = -1;
+        for (int y = 0; y < 256; y++)
+            for (int x = 0; x < 512; x++)
+                if (g_vram[y * 1024 + x] & 0x1F) {
+                    hits++;
+                    x0 = x < x0 ? x : x0; x1 = x > x1 ? x : x1; y0 = y < y0 ? y : y0; y1 = y > y1 ? y : y1;
+                }
+        logf_("ge selftest 3d case %d: %d pixels, bbox %d,%d-%d,%d\n", t, hits, x0, y0, x1, y1);
+    }
+    memset(g_vram, 0, 1024 * 2 * 256);
+}
+
 void ge_init(void)
 {
     sceGuInit();
+    selftest_3d();
     selftest();
     for (int i = 0; i < NSLOTS; i++) {
         g_slots[i].buf = memalign(64, 65536);

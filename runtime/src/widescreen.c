@@ -15,6 +15,7 @@ void gte_view_space(PsxCpu *c, int x, int y, int z, int32_t out[3]);
 void gte_screen_params(PsxCpu *c, int32_t *h, int32_t *ofx, int32_t *ofy);
 
 uint32_t g_wide_clipped, g_wide_tris;   /* statistics */
+int g_near_clip = 0;                     /* settings.txt: near_clip */
 
 /* polygon kinds of the 8 loops: F3 F4 G3 G4 FT3 FT4 GT3 GT4 */
 typedef struct { int n, stride, gouraud, textured; } Kind;
@@ -59,6 +60,7 @@ static inline uint32_t clamp255(float f) { int i = (int)(f + 0.5f); return (uint
 
 void wide_clip_track(PsxCpu *c, int kind, uint32_t entry, uint32_t pkt, uint32_t ot)
 {
+    if (!g_near_clip) return;
     const Kind *k = &KINDS[kind & 7];
     uint32_t w0 = mem_r32(entry), w1 = mem_r32(entry + 4);
     uint32_t idx[4] = {w0 & 0xFFF, (w0 >> 12) & 0xFFF, 0, 0};
@@ -107,10 +109,10 @@ void wide_clip_track(PsxCpu *c, int kind, uint32_t entry, uint32_t pkt, uint32_t
 
     uint32_t xy[16];
     for (int i = 0; i < n; i++) {
-        int sx = (int)(ofx + b[i].x * kx / b[i].z + (b[i].x >= 0 ? 0.5f : -0.5f));
-        int sy = (int)(ofy + b[i].y * H / b[i].z + (b[i].y >= 0 ? 0.5f : -0.5f));
+        float fx = ofx + b[i].x * kx / b[i].z, fy = ofy + b[i].y * H / b[i].z;
+        int sx = (int)(fx + (fx >= 0 ? 0.5f : -0.5f)), sy = (int)(fy + (fy >= 0 ? 0.5f : -0.5f));
         xy[i] = ((uint32_t)(sy & 0xFFFF) << 16) | (uint32_t)(sx & 0xFFFF);
-        ge_mark_3d(xy[i]);
+        ge_mark_3d_precise(xy[i], fx, fy, b[i].z);
     }
     uint32_t slot = ot + ((int32_t)w0 > 0 ? 4 : 0);
     int words = k->textured ? (k->gouraud ? 9 : 7) : (k->gouraud ? 6 : 4);

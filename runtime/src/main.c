@@ -9,6 +9,8 @@
 #include "gpu.h"
 #include "cdrom.h"
 #include "sio.h"
+#include "ge.h"
+#include <stdio.h>
 
 PSP_MODULE_INFO("GT2PSP", 0, 0, 1);
 PSP_MAIN_THREAD_ATTR(THREAD_ATTR_USER | THREAD_ATTR_VFPU);
@@ -31,6 +33,31 @@ static int load_exe(void)
     return 1;
 }
 
+/* Optional settings.txt next to the EBOOT, lines "name=0|1": widescreen, hires, pgxp, filter, hud_anchor. */
+static void load_settings(void)
+{
+    extern int g_hud_anchor, g_near_clip;
+    static const struct { const char *name; int *var; } opts[] = {
+        {"widescreen", &g_widescreen}, {"hires", &g_hires}, {"pgxp", &g_pgxp}, {"filter", &g_tex_filter},
+        {"hud_anchor", &g_hud_anchor}, {"near_clip", &g_near_clip},
+    };
+    char path[300], line[64];
+    snprintf(path, sizeof path, "%ssettings.txt", g_basedir);
+    FILE *f = fopen(path, "r");
+    if (f) {
+        while (fgets(line, sizeof line, f)) {
+            char *eq = strchr(line, '=');
+            if (!eq) continue;
+            *eq = 0;
+            for (unsigned i = 0; i < sizeof opts / sizeof opts[0]; i++)
+                if (!strcmp(line, opts[i].name)) *opts[i].var = atoi(eq + 1) != 0;
+        }
+        fclose(f);
+    }
+    logf_("settings: widescreen %d hires %d pgxp %d filter %d hud_anchor %d\n", g_widescreen, g_hires, g_pgxp,
+          g_tex_filter, g_hud_anchor);
+}
+
 int main(int argc, char **argv)
 {
     char dir[256] = "";
@@ -42,6 +69,7 @@ int main(int argc, char **argv)
     log_init(dir);
     scePowerSetClockFrequency(333, 333, 166);   /* default is 222 MHz */
     logf_("GT2 PSP runtime, base dir '%s'\n", dir);
+    load_settings();
 
     g_ram = memalign(64, PSX_RAM_SIZE);
     if (!g_ram) fatal(0, "out of memory (RAM)");
