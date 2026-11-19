@@ -359,6 +359,23 @@ uint32_t gpu_status(void)
     return (g_status & ~0x1E000000u) | 0x1C000000u | (g_xfer_dir == 2 ? 0x08000000u : 0);
 }
 
+/* Frame work statistics: time from the return of one waiting VSync call to the next one (recomp.py hooks). */
+static uint32_t g_work_hist[7];
+static uint64_t g_work_max, g_vs_leave;
+static int g_vs_wait;
+void rt_vsync_enter(uint32_t mode)
+{
+    g_vs_wait = (int32_t)mode >= 0 && mode != 1;       /* VSync(-1)/VSync(1) only read counters */
+    if (!g_vs_wait || !g_vs_leave) return;
+    uint64_t w = now_us() - g_vs_leave;
+    static const uint32_t lim[6] = {20000, 25000, 30000, 33000, 40000, 50000};
+    int b = 0;
+    while (b < 6 && w >= lim[b]) b++;
+    g_work_hist[b]++;
+    if (w > g_work_max) g_work_max = w;
+}
+void rt_vsync_leave(void) { if (g_vs_wait) g_vs_leave = now_us(); }
+
 void gpu_present(void)
 {
     static const int hres[4] = {256, 320, 512, 640};
@@ -479,6 +496,17 @@ stats:
                   (unsigned)g_wait_n[2], (unsigned)(g_wait_us[2] / 1000));
             memset(g_wait_us, 0, sizeof g_wait_us); memset(g_wait_n, 0, sizeof g_wait_n);
         }
+        {
+            extern uint32_t g_pace_hist[5];
+            logf_("pacing: lists after 1/2/3/4+ vblanks: %u %u %u %u\n", (unsigned)g_pace_hist[1],
+                  (unsigned)g_pace_hist[2], (unsigned)g_pace_hist[3], (unsigned)g_pace_hist[4]);
+            memset(g_pace_hist, 0, sizeof(uint32_t) * 5);
+        }
+        logf_("frame work (ms, VSync wait excluded) <20/<25/<30/<33/<40/<50/50+: %u %u %u %u %u %u %u, max %u\n",
+              (unsigned)g_work_hist[0], (unsigned)g_work_hist[1], (unsigned)g_work_hist[2], (unsigned)g_work_hist[3],
+              (unsigned)g_work_hist[4], (unsigned)g_work_hist[5], (unsigned)g_work_hist[6], (unsigned)(g_work_max / 1000));
+        memset(g_work_hist, 0, sizeof g_work_hist);
+        g_work_max = 0;
         extern uint32_t g_wide_clipped, g_wide_tris;
         logf_("widescreen clipper: %u polygons, %u triangles (totals)\n", (unsigned)g_wide_clipped,
               (unsigned)g_wide_tris);

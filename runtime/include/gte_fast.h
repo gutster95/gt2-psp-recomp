@@ -340,8 +340,29 @@ void gte_rtps_nf(PsxCpu *c, uint32_t insn);       /* FLAG not computed (see gte_
 void gte_rtpt_nf(PsxCpu *c, uint32_t insn);
 void gte_mvmva_nf(PsxCpu *c, uint32_t insn);
 
+/* Variants for the command words the generated code uses (the instruction is a constant at every call site, so the
+ * switch folds): decoding folded away, MVMVA 532 -> 316 ns per command on the PSP-3000. gte.c defines them. */
+#define GTE_MVMVA_VARIANTS(X) X(4a40e012) X(4a406012) X(4a4be012) X(4a4c6012) X(4a4a6012) X(4a4ce012) X(4a486012)     X(4a48e012) X(4a416012) X(4a49e012) X(4a498012) X(4a496012) X(4a42e012)
+#define GTE_DECL_V(k) void gte_mv_##k(PsxCpu *c); void gte_mv_##k##_nf(PsxCpu *c);
+GTE_MVMVA_VARIANTS(GTE_DECL_V)
+void gte_rtps_k(PsxCpu *c); void gte_rtps_k_nf(PsxCpu *c);      /* 0x4a180001 */
+void gte_rtpt_k(PsxCpu *c); void gte_rtpt_k_nf(PsxCpu *c);      /* 0x4a280030 */
+#define GTE_CASE_V(k) case 0x##k##u: fl ? gte_mv_##k(c) : gte_mv_##k##_nf(c); return 1;
+GT2_INLINE int gte_variant(PsxCpu *c, uint32_t insn, int fl)
+{
+    switch (insn) {
+    GTE_MVMVA_VARIANTS(GTE_CASE_V)
+    case 0x4a180001u: fl ? gte_rtps_k(c) : gte_rtps_k_nf(c); return 1;
+    case 0x4a280030u: fl ? gte_rtpt_k(c) : gte_rtpt_k_nf(c); return 1;
+    default: return 0;
+    }
+}
+
 GT2_INLINE void gte_cmd(PsxCpu *c, uint32_t insn)
 {
+#ifdef GT2_GTE_OUTLINE
+    if (__builtin_constant_p(insn) && gte_variant(c, insn, 1)) return;
+#endif
     switch (insn & 63) {
 #ifdef GT2_GTE_OUTLINE
     case 0x01: gte_rtps_o(c, insn); return;
@@ -360,6 +381,14 @@ GT2_INLINE void gte_cmd(PsxCpu *c, uint32_t insn)
 /* Same, for commands whose FLAG result is never read (recomp.py liveness): the slow commands still compute it. */
 GT2_INLINE void gte_cmd_nf(PsxCpu *c, uint32_t insn)
 {
+#ifdef GT2_GTE_OUTLINE
+    if (__builtin_constant_p(insn) && gte_variant(c, insn, 0)) {
+#ifdef GT2_FLAG_POISON
+        c->gte_ctrl[31] = 0xFFFu;
+#endif
+        return;
+    }
+#endif
     switch (insn & 63) {
 #ifdef GT2_GTE_OUTLINE
     case 0x01: gte_rtps_nf(c, insn); break;

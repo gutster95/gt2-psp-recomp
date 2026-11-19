@@ -237,12 +237,24 @@ static void ncx(PsxCpu *c, int n, int sf, int lm, int mode)   /* mode 0 NCS, 1 N
 
 static void gte_cmd_impl(PsxCpu *c, uint32_t insn);
 
-void gte_rtps_o(PsxCpu *c, uint32_t insn) { gte_rtp_fast(c, insn, 0, 1); }
-void gte_rtpt_o(PsxCpu *c, uint32_t insn) { gte_rtp_fast(c, insn, 1, 1); }
-void gte_mvmva_o(PsxCpu *c, uint32_t insn) { gte_mvmva_fast(c, insn, 1); }
-void gte_rtps_nf(PsxCpu *c, uint32_t insn) { gte_rtp_fast(c, insn, 0, 0); }
-void gte_rtpt_nf(PsxCpu *c, uint32_t insn) { gte_rtp_fast(c, insn, 1, 0); }
-void gte_mvmva_nf(PsxCpu *c, uint32_t insn) { gte_mvmva_fast(c, insn, 0); }
+/* RT_EXTRA=-DGT2_GTE_PHASE: the outlined commands count as "GTE" in the sampling profiler (prof.c) */
+#ifdef GT2_GTE_PHASE
+#define GTE_PH(x) do { PHASE_BEGIN(PH_GTE); g_gte_count[insn & 63]++; x; PHASE_END(); } while (0)
+#else
+#define GTE_PH(x) x
+#endif
+void gte_rtps_o(PsxCpu *c, uint32_t insn) { GTE_PH(gte_rtp_fast(c, insn, 0, 1)); }
+void gte_rtpt_o(PsxCpu *c, uint32_t insn) { GTE_PH(gte_rtp_fast(c, insn, 1, 1)); }
+void gte_mvmva_o(PsxCpu *c, uint32_t insn) { GTE_PH(gte_mvmva_fast(c, insn, 1)); }
+void gte_rtps_nf(PsxCpu *c, uint32_t insn) { GTE_PH(gte_rtp_fast(c, insn, 0, 0)); }
+void gte_rtpt_nf(PsxCpu *c, uint32_t insn) { GTE_PH(gte_rtp_fast(c, insn, 1, 0)); }
+void gte_mvmva_nf(PsxCpu *c, uint32_t insn) { GTE_PH(gte_mvmva_fast(c, insn, 0)); }
+#define GTE_DEF_V(k)     void gte_mv_##k(PsxCpu *c) { const uint32_t insn = 0x##k##u; GTE_PH(gte_mvmva_fast(c, insn, 1)); }     void gte_mv_##k##_nf(PsxCpu *c) { const uint32_t insn = 0x##k##u; GTE_PH(gte_mvmva_fast(c, insn, 0)); }
+GTE_MVMVA_VARIANTS(GTE_DEF_V)
+void gte_rtps_k(PsxCpu *c) { const uint32_t insn = 0x4a180001u; GTE_PH(gte_rtp_fast(c, insn, 0, 1)); }
+void gte_rtps_k_nf(PsxCpu *c) { const uint32_t insn = 0x4a180001u; GTE_PH(gte_rtp_fast(c, insn, 0, 0)); }
+void gte_rtpt_k(PsxCpu *c) { const uint32_t insn = 0x4a280030u; GTE_PH(gte_rtp_fast(c, insn, 1, 1)); }
+void gte_rtpt_k_nf(PsxCpu *c) { const uint32_t insn = 0x4a280030u; GTE_PH(gte_rtp_fast(c, insn, 1, 0)); }
 
 void gte_flag_poison_hit(uint32_t unused)
 {
@@ -294,6 +306,8 @@ static void gte_selftest(void)
 }
 
 static void __attribute__((noinline)) gte_nop_b(PsxCpu *c, uint32_t insn) { c->gte_ctrl[31] = insn; }
+static void gte_mvmva_k_b(PsxCpu *c, uint32_t insn) { (void)insn; gte_mv_4a498012_nf(c); }
+static void gte_rtps_k_b(PsxCpu *c, uint32_t insn) { (void)insn; gte_rtps_k_nf(c); }
 static void __attribute__((noinline)) gte_div_b(PsxCpu *c, uint32_t insn)
 {
     uint32_t f = 0;
@@ -312,10 +326,10 @@ void gte_bench(void)
     c->gte_ctrl[24] = 160 << 16; c->gte_ctrl[25] = 120 << 16; c->gte_ctrl[26] = 300;
     c->gte_ctrl[27] = (uint32_t)-100; c->gte_ctrl[28] = 0x1400000;
     const int N = 200000;
-    void (*const fns[8])(PsxCpu *, uint32_t) = {gte_rtps_o, gte_rtps_nf, gte_rtpt_o, gte_rtpt_nf, gte_mvmva_o, gte_mvmva_nf, gte_nop_b, gte_div_b};
-    static const char *const names[8] = {"rtps", "rtps nf", "rtpt", "rtpt nf", "mvmva", "mvmva nf", "call only", "divide"};
-    const uint32_t insn[8] = {0x4a180001u, 0x4a180001u, 0x4a280030u, 0x4a280030u, 0x4a498012u, 0x4a498012u, 0, 0};
-    for (int k = 0; k < 8; k++) {
+    void (*const fns[10])(PsxCpu *, uint32_t) = {gte_rtps_o, gte_rtps_nf, gte_rtpt_o, gte_rtpt_nf, gte_mvmva_o, gte_mvmva_nf, gte_nop_b, gte_div_b, gte_mvmva_k_b, gte_rtps_k_b};
+    static const char *const names[10] = {"rtps", "rtps nf", "rtpt", "rtpt nf", "mvmva", "mvmva nf", "call only", "divide", "mvmva nf const", "rtps nf const"};
+    const uint32_t insn[10] = {0x4a180001u, 0x4a180001u, 0x4a280030u, 0x4a280030u, 0x4a498012u, 0x4a498012u, 0, 0, 0, 0};
+    for (int k = 0; k < 10; k++) {
         uint64_t t0 = now_us();
         for (int i = 0; i < N; i++) {
             c->gte_data[0] = (uint32_t)((i & 255) | ((i & 511) << 16)); c->gte_data[1] = (uint32_t)(i & 1023);

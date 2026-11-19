@@ -59,6 +59,9 @@ _TRACK_LOOPS = [  # kind, bltz address, flag reg, entry reg, packet reg, mask lu
 ]
 HOOKS: dict[tuple[str, int], str] = {}
 OVERRIDE: dict[tuple[str, int], str] = {}
+# libetc VSync (0x8008c338): frame timing statistics (runtime gpu.c, "frame work" log line).
+HOOKS[("resident", 0x8008C338)] = "rt_vsync_enter(c->r[4]);"
+HOOKS[("resident", 0x8008C4A8)] = "rt_vsync_leave();"
 for _k, _b, _f, _e, _p, _m in _TRACK_LOOPS:
     HOOKS[("ovl0", _b)] = (f"if ((int32_t)c->r[{_f}] < 0 && g_widescreen) "
                            f"wide_clip_track(c, {_k}, c->r[{_e}], c->r[{_p}], c->r[14]);")

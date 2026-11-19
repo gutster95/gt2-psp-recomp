@@ -569,3 +569,19 @@ over 200000 random register sets incl. extreme values - 0 mismatches):
   glyphs visibly thinner (user). Found with the new frame capture:
   L+R+SELECT also saves the next big display list (geframe.bin), `scripts/geframe.py` lists its primitives by
   position and layer.
+
+## 2026-11-19 night - Frame pacing statistics, GTE profile, constant GTE variants
+
+* New log lines every 120 vblanks: `pacing: lists after 1/2/3/4+ vblanks` (display lists by vblanks since the
+  previous one; a race frame that misses 33.3 ms takes 3 vblanks) and `frame work` (time between waiting VSync calls,
+  recomp.py hooks on libetc VSync 0x8008c338 - GT2's race loop does not call VSync, the histogram stays empty there).
+  `build/pace.sh <log>` summarises the race windows.
+* Baseline (attract race, 16:9, PSP-3000): 71.6% of the frames on time (2 vblanks), 27.6% take 3, 0.8% 4+; 26.2 fps.
+  In heavy stretches 30 of 43 frames take 3 vblanks (~22 fps).
+* Profile with the outlined GTE commands as their own phase (`RT_EXTRA=-DGT2_GTE_PHASE`, now also applies to gte.c):
+  **GTE 21-25% of the race time** (~7 ms per frame), game code 30%, GE path ~33%, IRQ/poll 6%, GE sync wait 5%.
+  Commands per second: MVMVA ~145k, RTPS ~100k, RTPT ~22k, DPCS ~8k (slow path), SQR ~2k.
+* GTE variants for the 15 command words the generated code uses (gte_fast.h `gte_variant`, selected at compile time
+  through `__builtin_constant_p`): the outlined MVMVA decoded mx/v/cv/sf/lm at run time. PSP: MVMVA 533 -> 323 ns,
+  RTPS 741 -> 692 ns (its time is the HI/LO multiply chains and the UNR division, ~210 ns).
+* Race: 3-vblank frames 27.6% -> 14.9%, 27.9 fps (one run each; the replay is deterministic but the timing is not).

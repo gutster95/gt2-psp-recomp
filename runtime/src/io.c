@@ -21,6 +21,7 @@ static uint8_t g_seen[0x3000];
 uint32_t g_vblank_count;
 uint32_t g_gpu_lists;          /* GPU linked-list DMAs (~ game frames drawn) */
 uint64_t g_gpu_us;             /* time spent executing GPU display lists (rasterizer) */
+uint32_t g_pace_hist[5];       /* display lists by vblanks since the previous one: [1], [2], [3], [4+] */
 
 #define IO32(off) (*(uint32_t *)(g_io + (off)))
 #define IO16(off) (*(uint16_t *)(g_io + (off)))
@@ -225,6 +226,12 @@ static void dma_run(int ch)
         if ((chcr & 0x600) == 0x400) {          /* linked list */
             PHASE_BEGIN(PH_GPU);
             g_gpu_lists++;
+            {   /* frame pacing: vblanks since the previous display list (1, 2, 3, 4+), logged by gpu.c */
+                static uint32_t last_vb;
+                uint32_t d = g_vblank_count - last_vb;
+                last_vb = g_vblank_count;
+                g_pace_hist[d >= 4 ? 4 : d]++;
+            }
             uint64_t t0 = now_us();
             if ((g_gebench && g_vblank_count >= (uint32_t)g_gebench) || (g_gedump && g_vblank_count >= (uint32_t)g_gedump))
                 gpu_bench(madr);
