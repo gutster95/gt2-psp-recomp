@@ -75,18 +75,21 @@ PowerShell `Set-Content -Encoding utf8` writes a BOM. CMake globs: build.sh re-r
 * Not implemented yet: reverb,
   15-bit textures / texture windows on the GE (software fallback).
 
-## Next steps (as of 2026-11-18 evening)
+## Next steps (as of 2026-11-19)
 
-Real PSP-3000 status: correct, stable picture (native 1x rendering is the default; widescreen, PGXP and hi-res
-frames are off - they caused the hardware glitches). License tests run at 30 fps, replays ~20-22 fps.
+Real PSP-3000: attract race ~25-27 fps (was 22.2; build-to-build layout noise is +-1.5 fps, so judge GPU-path
+changes with the deterministic benchmark, not the race fps). License tests 30 fps.
 
-1. **Top priority: 30 fps in races incl. replays.** Measure on the PSP via PSPLink: `bash scripts/psp-run.sh 140`
-   (attract replay, prints `RACE: x fps`; baseline 22.2). Profile build with function trace:
-   `wsl ... bash scripts/build-exp.sh "-Os"`. Generated code must stay small (-Os beat -O2; 16 KB I-cache).
-   Candidates: cache-friendlier generated code, SPU mixer on the Media Engine (8-12% CPU), GPU list path (~12-14%),
-   VFPU for the GTE.
-2. Side quest: an all-unlocked GT2 Simulation NTSC-U save (e.g. GameFAQs .mcr) converted to the port's PSP save
-   data, so everything can be tested; back up the user's save first.
-3. Picture reference: PCSX-Redux (tools/downloads/pcsx-redux-*, OpenBIOS, `build/ref/shots.lua` screenshots every
+1. **Top priority: 30 fps in races incl. replays.** The GPU -> GE path costs ~12 ms of the 33 ms frame:
+   `settings.txt gebench=6000` next to the EBOOT logs per-stage times (`gebench stage ...`; stage order 1 walk,
+   2 decode, 3 clip, 7/8/9 texture parts, 4 texture done, 5 draw prep, 6 emit, 0 full). Memory facts
+   (`membench=1`): miss ~150 ns, uncached sequential store 14 ns/word vs cached 24 ns/word. Ideas: uncached vertex
+   arena (first try hung the PSP early - or the USB link died; retry carefully), decode straight into the arena
+   (no memcpy), fewer table lookups per primitive, cheaper state changes. Then game code (~50%).
+2. 100% save: `build/save/gt2-max.mcd` (from a RetroPie v1.2 save, maxed with `scripts/gt2save.py`) - copy as
+   `IMPORT.MCD` next to the EBOOT; the game's current card is saved to `BACKUP.MCD` first.
+3. After 30 fps: proper 16:9 (user wants it designed properly), with PCSX-Redux reference pictures.
+4. Picture reference: PCSX-Redux (tools/downloads/pcsx-redux-*, OpenBIOS, `build/ref/shots.lua` screenshots every
    30 vsyncs), never PPSSPP alone. PSPLink: tools/downloads/psplink-3.2.1 + pspsh-windows; `pspsh -e "scrshot ..."`.
-   Ask before taking over the PSP while the user is playing.
+   Ask before taking over the PSP while the user is playing. If PSPLink stops answering, the PSP needs a manual
+   power cycle.
