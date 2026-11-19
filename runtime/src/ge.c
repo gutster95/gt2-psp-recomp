@@ -41,8 +41,33 @@ int g_use_ge = 1;
 
 typedef struct { uint16_t u, v; uint32_t c; int16_t x, y, z, pad; } GeVtx;
 
-static uint32_t g_list[LIST_BYTES / 4] __attribute__((aligned(65536)));
+static uint32_t g_list[2][LIST_BYTES / 4] __attribute__((aligned(65536)));
 static int g_open, g_shown;
+
+/* Asynchronous presentation (settings.txt async_present, default on; needs the eDRAM vertex arena and 1x frames):
+ * the list that ends with the presentation blit is kicked without waiting for the GE - the CPU goes on with the next
+ * game frame while the GE finishes (the wait was ~2 ms per race frame). The next list is built in the other list
+ * buffer and continues in the vertex ring (see arena_full); the display swap happens once the GE has passed the
+ * list's FINISH (counted by the finish callback), checked in rt_poll (ge_poll_async). At most one list is in flight;
+ * ge_sync waits for it too, so every CPU access to VRAM still sees the finished picture. CLUT slots stay protected
+ * until the next real sync (the batch number only advances there). */
+int g_async_present = 1;
+static int g_async;                        /* async presentation active (decided in ge_init) */
+static int g_list_idx;                     /* list buffer of the current/next list */
+static int g_inflight;                     /* a kicked list may still be running */
+static uint32_t g_kicks;                   /* lists ended (statistics) */
+static int g_infl_qid;                     /* GE queue id of the in-flight list (pspgu's ge_list_executed[0]) */
+extern unsigned int ge_list_executed[];
+static int g_pending_show = -1;            /* display buffer to show once the in-flight list is done */
+static int g_infl_start;                   /* vertex ring: start of the in-flight list's vertices */
+/* peek at the in-flight list: 0 = completed; an error means the id is no longer queued (also completed). Checked
+ * before every sceGuStart too (ge_begin), so the id cannot have been reused by a newer list. The FINISH callback
+ * (sceGuSetCallback) never fired on the PSP-3000, so the queue is asked directly. */
+static inline int inflight_done(void)
+{
+    int r = sceGeListSync(g_infl_qid, 1);
+    return r <= 0;
+}
 static int g_last_vtype = -1, g_draws;    /* draw_array state */
 
 /* Hot-path GE commands are written straight into pspgu's current display list (same as sceGuSendCommandi, without
@@ -69,6 +94,7 @@ typedef struct {
     int disp_rect[4], disp_dirty;            /* 1x presentation: displayed VRAM rectangle, written since the blit */
     uint16_t blk_dirty[16];                  /* CLUT block versions (lazy) */
     uint32_t blk_ver[256];
+    uint32_t vlimit, cur_start;              /* vertex ring: end of the free space after vtop, start of this list */
 } GeHot;
 #define H (*(GeHot *)0x00010200u)
 #define g_vtop H.vtop
@@ -78,11 +104,11 @@ int g_varena_uncached;   /* settings.txt varena_uncached=1: vertices written unc
 int g_varena_edram = 1;  /* vertex arena in the free eDRAM tail: the GE reads vertices without the main bus (race
                           * GPU path -7%); settings.txt varena_edram=0: arena in RAM */
 #define VARENA_EDRAM_OFF 0x1CC000u              /* after display buffer 2 (FB_OFF(2) + 0x44000): 208 KB */
-static uint32_t g_varena_size = VARENA;
+static uint32_t g_varena_size = VARENA, g_varena_eoff = VARENA_EDRAM_OFF;
 static inline void *valloc_v(int bytes)
 {
     void *p = g_varena + g_vtop;
-    if (g_varena_edram) p = (void *)(0x40000000u + EDRAM + VARENA_EDRAM_OFF + g_vtop);
+    if (g_varena_edram) p = (void *)(0x40000000u + EDRAM + g_varena_eoff + g_vtop);
     else if (g_varena_uncached) p = (void *)((uintptr_t)p | 0x40000000u);
     g_vtop += ((uint32_t)bytes + 15) & ~15u;
     return p;
@@ -206,19 +232,31 @@ static int g_clut_transparent;   /* the CLUT of the current texture has transpar
 static uint32_t g_clut_clock;
 
 static void ge_begin(void);
+uint32_t g_vtop_max;                           /* debug: highest vertex arena fill at a sync */
 uint64_t g_wait_us[3]; uint32_t g_wait_n[3];   /* debug: time in scanout wait, 1x present wait, GE sync */
 extern uint64_t g_vblank_sync_us;              /* present_scaled */
 
+static void apply_swap(void);
+void ge_poll_async(void);
+
 void ge_sync(void)
 {
-    if (!g_open) return;
+    if (!g_open && !g_inflight) return;
     int ph = g_phase;
     g_phase = PH_GE_SYNC;
-    sceGuFinish();
+    if (g_open) { sceGuFinish(); g_kicks++; }
     { uint64_t t = now_us(); sceGuSync(0, 0); g_wait_us[2] += now_us() - t; g_wait_n[2]++; }
     g_phase = ph;
     g_open = 0;
+    g_inflight = 0;
+    if (g_pending_show >= 0) apply_swap();
+    {
+        uint32_t used = g_vtop >= H.cur_start ? g_vtop - H.cur_start : g_vtop + g_varena_size - H.cur_start;
+        if (used > g_vtop_max) g_vtop_max = used;
+    }
     g_vtop = 0;
+    H.cur_start = 0;
+    H.vlimit = g_varena_size;
     g_vflushed = 0;
     g_ge_pending = 0;
     g_ge_syncs++;
@@ -246,7 +284,8 @@ static float g_tix = 1, g_tiy = 1;   /* 1 / viewport scale of the chosen variant
 static void ge_begin(void)
 {
     if (g_open) return;
-    sceGuStart(GU_DIRECT, g_list);
+    if (g_inflight) ge_poll_async();             /* before a new queue id can reuse the in-flight list's */
+    sceGuStart(GU_DIRECT, g_list[g_list_idx]);
     sceGuDrawBufferList(GU_PSM_5551, (void *)0, 1024);
     sceGuSendCommandi(0x15, 0);                          /* drawing region: the whole PS1 VRAM */
     sceGuSendCommandi(0x16, (511 << 10) | 1023);
@@ -280,6 +319,61 @@ static void ge_begin(void)
     g_last_vtype = -1;
     g_cur_fb = -1;
     g_open = 1;
+}
+
+/* Vertex ring (async presentation): the current list's vertices run from cur_start up to vtop and may wrap to the
+ * start once; vlimit is where the next occupied range (the in-flight list's) begins. */
+static void arena_full(void)
+{
+    if (g_inflight && inflight_done()) {
+        g_inflight = 0;
+        if (g_pending_show >= 0) apply_swap();
+    }
+    if (!g_inflight && g_vtop >= H.cur_start) {             /* not wrapped: the space up to the end is free */
+        if (H.vlimit < g_varena_size) { H.vlimit = g_varena_size; if (g_vtop <= H.vlimit - 1024) return; }
+        if (H.cur_start >= 2048) { vflush(); g_vtop = 0; g_vflushed = 0; H.vlimit = H.cur_start; return; }
+    }
+    if (!g_inflight && g_vtop < H.cur_start && H.vlimit < H.cur_start) {   /* wrapped below finished vertices */
+        H.vlimit = H.cur_start;
+        if (g_vtop <= H.vlimit - 1024) return;
+    }
+    if (g_inflight && g_vtop >= H.cur_start && H.vlimit == g_varena_size && (uint32_t)g_infl_start < H.cur_start &&
+        g_infl_start >= 2048) {                                /* in-flight vertices below this list: wrap up to them */
+        vflush(); g_vtop = 0; g_vflushed = 0; H.vlimit = (uint32_t)g_infl_start; return;
+    }
+    g_sync_why = 9;
+    ge_sync();
+}
+
+/* End the current list without waiting for the GE (presentation) and show `show` once it is done. */
+static void ge_kick(int show)
+{
+    if (g_inflight && !inflight_done()) { ge_sync(); }   /* never two lists in flight */
+    g_inflight = 0;
+    if (!g_open) { g_pending_show = show; apply_swap(); return; }
+    g_infl_qid = (int)ge_list_executed[0];
+    sceGuFinish();
+    g_kicks++;
+    g_inflight = 1;
+    g_open = 0;
+    g_list_idx ^= 1;
+    g_pending_show = show;
+    {
+        uint32_t used = g_vtop >= H.cur_start ? g_vtop - H.cur_start : g_vtop + g_varena_size - H.cur_start;
+        if (used > g_vtop_max) g_vtop_max = used;
+    }
+    g_infl_start = (int)H.cur_start;
+    H.cur_start = g_vtop;                               /* the next list continues in the ring */
+    H.vlimit = g_vtop < (uint32_t)g_infl_start ? (uint32_t)g_infl_start : g_varena_size;
+}
+
+/* rt_poll: apply a pending display swap once the in-flight list has finished */
+void ge_poll_async(void)
+{
+    if (g_inflight && inflight_done()) {
+        g_inflight = 0;
+        if (g_pending_show >= 0) apply_swap();
+    }
 }
 
 static void check_list(void)
@@ -941,7 +1035,7 @@ static void submit(int prim, int n, const GeVtx *v, int *box, int tex, int depth
         return;
     }
     if (g_bench_stage == 3) return;
-    if (g_vtop > g_varena_size - 1024) { g_sync_why = 9; ge_sync(); }
+    if (g_vtop > H.vlimit - 1024) arena_full();
     ge_begin();
     if (fk >= 0) prepare_frame(fk);
     int ph = g_phase;
@@ -1189,7 +1283,8 @@ uint64_t g_vblank_sync_us;
  * half-height sprite lands between two source lines and averages each pair 50/50 (was 480 -> 272, x0.567). */
 int g_sharp = 1;
 
-static void present_scaled(int tgt, int dx, int dy, int w, int h, int blank)
+/* returns 1 when the list was kicked asynchronously (the swap follows in apply_swap) */
+static int present_scaled(int tgt, int dx, int dy, int w, int h, int blank)
 {
     int ow = ge_wide_now() ? 480 : 363, oh = 272, ox, oy = 0;   /* 16:9: anamorphic picture */
     if (g_sharp && !ge_wide_now() && h <= 512) { ow = 320; oh = h > 256 ? h / 2 : h; oy = (272 - oh) / 2; }
@@ -1238,7 +1333,9 @@ static void present_scaled(int tgt, int dx, int dy, int w, int h, int blank)
         sceGuTexFilter(GU_NEAREST, GU_NEAREST); S.filter = 0;
         sceGuTexWrap(GU_REPEAT, GU_REPEAT);
     }
+    if (g_async && !on_screen) { ge_kick(tgt); return 1; }
     ge_sync();
+    return 0;
 }
 
 /* ---- FPS counter (top right, settings.txt fps=0 hides it) ---------------------------------------------------
@@ -1282,6 +1379,26 @@ static void fps_frame(void)
     }
 }
 
+static int g_disp_buf = -1;   /* the display buffer set with sceDisplaySetFrameBuf */
+static void set_display(int show)
+{
+    if (show == g_disp_buf) return;
+    sceDisplaySetFrameBuf((void *)(EDRAM + FB_OFF(show)), 512, PSP_DISPLAY_PIXEL_FORMAT_5551, PSP_DISPLAY_SETBUF_NEXTFRAME);
+    g_prev_shown = g_disp_buf;
+    g_swap_vcount = (int)sceDisplayGetVcount();
+    g_disp_buf = show;
+}
+
+/* the in-flight presentation list is done: fps digits into the new picture, then show it */
+static void apply_swap(void)
+{
+    int show = g_pending_show;
+    g_pending_show = -1;
+    if (show < 0) return;
+    draw_fps(show);
+    set_display(show);
+}
+
 void ge_present(int dx, int dy, int w, int h, int blank)
 {
     PHASE_BEGIN(PH_PRESENT);
@@ -1304,17 +1421,14 @@ void ge_present(int dx, int dy, int w, int h, int blank)
         memcpy(g_disp_rect, r, sizeof r);
         g_disp_dirty = blank;
         int tgt = g_hires ? 2 : (g_shown == 0 ? 1 : 0);
-        present_scaled(tgt, dx, dy, w, h, blank);
+        if (g_pending_show >= 0) ge_sync();             /* the previous picture is still waiting for the GE */
+        int async = present_scaled(tgt, dx, dy, w, h, blank);
         show = tgt;
         fps_frame();
+        if (async) { g_shown = show; PHASE_END(); return; }   /* fps digits and swap in apply_swap */
         draw_fps(tgt);
     }
-    if (show != g_shown) {
-        sceDisplaySetFrameBuf((void *)(EDRAM + FB_OFF(show)), 512, PSP_DISPLAY_PIXEL_FORMAT_5551,
-                              PSP_DISPLAY_SETBUF_NEXTFRAME);
-        g_prev_shown = g_shown;
-        g_swap_vcount = (int)sceDisplayGetVcount();
-    }
+    set_display(show);
     g_shown = show;
     PHASE_END();
 }
@@ -1428,8 +1542,17 @@ void ge_init(void)
         sceKernelDcacheWritebackInvalidateRange(g_slots[i].buf, 65536);
     }
     sceKernelDcacheWritebackInvalidateRange(g_clut_arena, sizeof g_clut_arena);
-    g_shown = 2;
-    sceDisplaySetFrameBuf((void *)(EDRAM + FB_OFF(2)), 512, PSP_DISPLAY_PIXEL_FORMAT_5551, PSP_DISPLAY_SETBUF_NEXTFRAME);
+    g_async = g_async_present && g_varena_edram && !g_hires;
+    if (g_async) {                 /* display buffer 2 is unused at 1x: vertex ring from there to the end of eDRAM */
+        g_varena_eoff = FB_OFF(2);
+        g_varena_size = 0x200000u - FB_OFF(2);
+        memset((void *)(0x40000000u | (EDRAM + FB_OFF(0))), 0, 0x44000);
+        g_shown = 0;
+    } else g_shown = 2;
+    H.vlimit = g_varena_size;
+    H.cur_start = 0;
+    set_display(g_shown);
+    logf_("ge: async presentation %s, vertex arena %u KB\n", g_async ? "on" : "off", (unsigned)(g_varena_size >> 10));
 }
 
 /* Debug: the display buffer shown last (480x272 inside a 512-pixel stride, 5551). */

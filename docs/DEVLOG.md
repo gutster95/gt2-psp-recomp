@@ -585,3 +585,18 @@ over 200000 random register sets incl. extreme values - 0 mismatches):
   through `__builtin_constant_p`): the outlined MVMVA decoded mx/v/cv/sf/lm at run time. PSP: MVMVA 533 -> 323 ns,
   RTPS 741 -> 692 ns (its time is the HI/LO multiply chains and the UNR division, ~210 ns).
 * Race: 3-vblank frames 27.6% -> 14.9%, 27.9 fps (one run each; the replay is deterministic but the timing is not).
+
+## 2026-11-19 night - Race frame work, asynchronous presentation
+
+* GT2's race loop waits in its own function for its vblank counter (0x8007d23c: `while (counter < a0)`, counter
+  reset afterwards; found with `RT_EXTRA=-DGT2_SPIN_FIND`, which logs functions looping on rt_poll without calls).
+  The frame work hook sits there now. A late frame does not wait for a third vblank, it just takes longer, so the
+  vblank histogram understates the problem: **51% of the race frames needed more than 33 ms** of work (most 33-50 ms),
+  although only 13% of the display lists came 3 vblanks apart.
+* Asynchronous presentation (ge.c, `settings.txt async_present`, default on): the presentation list is kicked
+  without waiting for the GE (~2 ms per race frame); the next list goes into a second list buffer and continues in
+  a vertex ring; the display swap (and the fps digits) follow once `sceGeListSync(qid, 1)` reports the list done
+  (rt_poll and before every sceGuStart, so the queue id cannot be reused). The finish callback of pspgu
+  (sceGuSetCallback) never fired on the PSP-3000. Display buffer 2 is unused at 1x, so the vertex ring runs from
+  there to the end of eDRAM (480 KB; a race frame needs up to 168 KB).
+* PSP race: GE sync waits 97 ms per 2 s -> 0; frames over 33 ms 51.6% -> 45.6%, 28.5 fps.

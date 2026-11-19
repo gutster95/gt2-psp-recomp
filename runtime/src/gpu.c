@@ -363,9 +363,9 @@ uint32_t gpu_status(void)
 static uint32_t g_work_hist[7];
 static uint64_t g_work_max, g_vs_leave;
 static int g_vs_wait;
-void rt_vsync_enter(uint32_t mode)
+void rt_vsync_enter(int waits)
 {
-    g_vs_wait = (int32_t)mode >= 0 && mode != 1;       /* VSync(-1)/VSync(1) only read counters */
+    g_vs_wait = waits;
     if (!g_vs_wait || !g_vs_leave) return;
     uint64_t w = now_us() - g_vs_leave;
     static const uint32_t lim[6] = {20000, 25000, 30000, 33000, 40000, 50000};
@@ -490,7 +490,9 @@ stats:
             logf_("ge syncs by reason (other fill upload readback copy list clut-drawn clut-full sw vtx present):%s\n", buf);
         }
         {
-            extern uint64_t g_wait_us[3]; extern uint32_t g_wait_n[3];
+            extern uint64_t g_wait_us[3]; extern uint32_t g_wait_n[3]; extern uint32_t g_vtop_max;
+            logf_("vertex arena: max %u bytes per batch\n", (unsigned)g_vtop_max);
+            g_vtop_max = 0;
             logf_("waits: scanout %u x %u ms, present %u x %u ms, ge sync %u x %u ms\n",
                   (unsigned)g_wait_n[0], (unsigned)(g_wait_us[0] / 1000), (unsigned)g_wait_n[1], (unsigned)(g_wait_us[1] / 1000),
                   (unsigned)g_wait_n[2], (unsigned)(g_wait_us[2] / 1000));

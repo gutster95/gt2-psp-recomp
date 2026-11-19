@@ -281,7 +281,7 @@ extern int g_widescreen;
 extern int g_ws_menus;        /* 16:9 for the menu screens with 3D views too */
 extern uint32_t g_ws_keepw;   /* 16:9: original width for the view setup 0x80049780 (recomp.py) */
 void wide_clip_track(PsxCpu *c, int kind, uint32_t entry, uint32_t pkt, uint32_t ot);
-void rt_vsync_enter(uint32_t mode);   /* libetc VSync hooks (recomp.py): frame work statistics, gpu.c */
+void rt_vsync_enter(int waits);   /* libetc VSync hooks (recomp.py): frame work statistics, gpu.c */
 void rt_vsync_leave(void);
 
 extern int32_t g_poll_budget;

@@ -221,6 +221,19 @@ void rt_poll(PsxCpu *c)
     if (g_quit) for (;;) sceKernelDelayThread(100000);   /* quitting (main.c quit_game): park the game thread */
     g_poll_budget = POLL_INTERVAL;
     g_n_polls++;
+#ifdef GT2_SPIN_FIND
+    {   /* debug (trace builds): report functions that loop on rt_poll without calling anything (wait loops) */
+        static uint32_t lastpos, same, logged[16];
+        if (g_trace_pos == lastpos) {
+            if (++same == 200) {
+                uint32_t fn = g_trace[(g_trace_pos - 1) & (TRACE_SIZE - 1)];
+                int k;
+                for (k = 0; k < 16 && logged[k] && logged[k] != fn; k++) {}
+                if (k < 16 && !logged[k]) { logged[k] = fn; logf_("spin: %08x at vblank %u\n", (unsigned)fn, (unsigned)g_vblank_count); }
+            }
+        } else { same = 0; lastpos = g_trace_pos; }
+    }
+#endif
     uint64_t t = now_us();
     g_poll_now = t;
     static uint64_t next_report;
@@ -237,6 +250,10 @@ void rt_poll(PsxCpu *c)
               (unsigned)g_trace[(g_trace_pos - 2) & (TRACE_SIZE - 1)], (unsigned)g_trace[(g_trace_pos - 1) & (TRACE_SIZE - 1)]);
     }
     cdrom_tick();
+    {
+        extern void ge_poll_async(void);
+        ge_poll_async();
+    }
     if (t >= g_next_vblank) {
         g_next_vblank = (g_next_vblank && t - g_next_vblank < 100000) ? g_next_vblank + 16683 : t + 16683;
         extern uint64_t g_vblank_sync_us;

@@ -59,9 +59,12 @@ _TRACK_LOOPS = [  # kind, bltz address, flag reg, entry reg, packet reg, mask lu
 ]
 HOOKS: dict[tuple[str, int], str] = {}
 OVERRIDE: dict[tuple[str, int], str] = {}
-# libetc VSync (0x8008c338): frame timing statistics (runtime gpu.c, "frame work" log line).
-HOOKS[("resident", 0x8008C338)] = "rt_vsync_enter(c->r[4]);"
+# Frame timing statistics (runtime gpu.c, "frame work" log line): libetc VSync (0x8008c338, menus; VSync(-1) and
+# VSync(1) do not wait) and GT2's own wait for its vblank counter (0x8007d23c, races: waits while counter < a0).
+HOOKS[("resident", 0x8008C338)] = "rt_vsync_enter((int32_t)c->r[4] >= 0 && c->r[4] != 1);"
 HOOKS[("resident", 0x8008C4A8)] = "rt_vsync_leave();"
+HOOKS[("resident", 0x8007D23C)] = "rt_vsync_enter((int32_t)c->r[4] > 0);"
+HOOKS[("resident", 0x8007D288)] = "rt_vsync_leave();"
 for _k, _b, _f, _e, _p, _m in _TRACK_LOOPS:
     HOOKS[("ovl0", _b)] = (f"if ((int32_t)c->r[{_f}] < 0 && g_widescreen) "
                            f"wide_clip_track(c, {_k}, c->r[{_e}], c->r[{_p}], c->r[14]);")

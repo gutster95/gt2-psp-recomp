@@ -11,9 +11,9 @@ target_compile_options(gt2psp PRIVATE -O2 -G0 -ffunction-sections -fno-strict-al
 set(GEN_EXTRA "" CACHE STRING "extra compile options for the generated code (experiments)")
 separate_arguments(GEN_EXTRA_L UNIX_COMMAND "${GEN_EXTRA}")
 set_source_files_properties(${GEN_SRC} PROPERTIES COMPILE_OPTIONS "-w;${GEN_EXTRA_L}")
-set(RT_EXTRA "" CACHE STRING "extra compile options for ge.c, gpu.c, io.c, gte.c (experiments)")
+set(RT_EXTRA "" CACHE STRING "extra compile options for ge.c, gpu.c, io.c, gte.c, core.c (experiments)")
 separate_arguments(RT_EXTRA_L UNIX_COMMAND "${RT_EXTRA}")
-set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/src/ge.c" "${CMAKE_CURRENT_SOURCE_DIR}/src/gpu.c" "${CMAKE_CURRENT_SOURCE_DIR}/src/io.c" "${CMAKE_CURRENT_SOURCE_DIR}/src/gte.c" PROPERTIES COMPILE_OPTIONS "${RT_EXTRA_L}")
+set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/src/ge.c" "${CMAKE_CURRENT_SOURCE_DIR}/src/gpu.c" "${CMAKE_CURRENT_SOURCE_DIR}/src/io.c" "${CMAKE_CURRENT_SOURCE_DIR}/src/gte.c" "${CMAKE_CURRENT_SOURCE_DIR}/src/core.c" PROPERTIES COMPILE_OPTIONS "${RT_EXTRA_L}")
 target_link_libraries(gt2psp PRIVATE pspgu psputility pspaudio pspdebug pspdisplay pspge psprtc pspctrl psppower)
 create_pbp_file(TARGET gt2psp TITLE "GT2 recomp" BUILD_PRX)
 
