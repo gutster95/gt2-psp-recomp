@@ -129,7 +129,6 @@ GT2_INLINE void gtef_rtp(PsxCpu *c, int n, int sf, int lm, int last, uint32_t *f
     }
     uint32_t q = gtef_divide(C[26] & 0xFFFF, D[19], flag);
     int64_t px = (int64_t)(int32_t)q * (int16_t)D[9];
-    if (g_widescreen && g_hires) px = (px * 3) >> 2;   /* 16:9: the 4:3 field of view fills 3/4 of the width */
     int64_t sx = px + (int32_t)C[24];
     int64_t sy = (int64_t)(int32_t)q * (int16_t)D[10] + (int32_t)C[25];
     gtef_mac0(c, sx, flag);

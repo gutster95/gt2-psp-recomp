@@ -65,7 +65,8 @@ PowerShell `Set-Content -Encoding utf8` writes a BOM. CMake globs: build.sh re-r
 * **Data pack**: PSP folder = `EBOOT.PBP` + `GT2.PAK` (converted on the PC); no disc image.
 * **GE renderer** (`runtime/src/ge.c`): all primitives in GT2's title and race run on the GE (0 software
   fallbacks); race at the game's full 30 fps in PPSSPP (was ~6 fps with the software rasterizer).
-* **Hi-res 480x272 + 16:9** (ge.c `g_hires`, `g_widescreen`, GTE X*3/4, 3D/2D by GTE output tagging);
+* **16:9** (`widescreen=1`): view window patches after Silent's cheat (recomp.py), race HUD squeezed back to 4:3
+  (ge.c hud_squeeze, race OT layer), menus stay 4:3 unless `widescreen_menus=1`. Hi-res 480x272 (`g_hires`) optional;
   game patches via recomp.py HOOKS (widescreen.c near-plane clipper).
 * **Input + memory card**: DualShock analog emulation (libpad works now - before, all input was ignored and the
   "race replay" was the attract demo); memory card = PSP save data (XMB "Saved Data", savedata.c via sceUtilitySavedata; card.c BIOS events).

@@ -329,7 +329,7 @@ void gpu_present(void)
     }
     uint16_t *fb = (uint16_t *)(0x44188000u);          /* uncached display buffer 0, 512-pixel stride */
     /* The PS1 picture is 4:3 whatever the resolution: scale it to 363x272, centred (nearest neighbour). */
-    const int ow = 363, oh = 272, ox = (480 - ow) / 2;
+    const int ow = ge_wide_now() ? 480 : 363, oh = 272, ox = (480 - ow) / 2;   /* 16:9: anamorphic picture */
     static int xmap[363];
     for (int x = 0; x < ow; x++) xmap[x] = (g_disp_x + x * w / ow) & 1023;
     for (int y = 0; y < oh; y++) {

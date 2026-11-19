@@ -473,21 +473,19 @@ static void setup_texture_full(int depth, int page, uint32_t clut)
  * A "frame" is a PS1 framebuffer region that has been displayed (display start + size). Primitives whose drawing
  * area lies in a frame are drawn twice: into the PS1 VRAM (exact 1x image for readback and render-to-texture) and,
  * mapped to PSP resolution, into one of the two PSP display buffers. Presenting a frame is then just a flip.
- * Mapping: 2D primitives (HUD, menus) keep the 4:3 picture in the centre 363x272. With widescreen, the GTE hack
- * (gte.c: projected X * 3/4) squeezes the whole 16:9 field of view into the PS1 screen width, so every visibility
- * test of the game (all in PS1 screen space) covers 16:9; 3D primitives - recognised by vertices the GTE produced
- * in the last frames - are then stretched over the full 480 pixels. */
+ * Mapping: the 4:3 picture in the centre 363x272, or the full 480 pixels for a 16:9 (anamorphic) picture
+ * (ge_wide_now). 3D primitives are recognised by vertices the GTE produced in the last frames (PGXP pass). */
 
-/* Widescreen and the perspective-correct 3D pass are off by default: on the real PSP the GE's transform mode drops
+/* Hi-res and the perspective-correct 3D pass are off by default: on the real PSP the GE's transform mode drops
  * or distorts parts of the 3D scene (fine in PPSSPP); everything is drawn in through mode then (settings.txt can
- * enable them for experiments). */
+ * enable them for experiments). Widescreen (16:9 HUD + view window patches) works at 1x. */
 int g_hires = 0, g_widescreen = 0;
 
 typedef struct {
     int x, y, w, h, used, drawn, band_clear, n3d_cur, n3d_last;
     float kx2, ox2, kx3, ox3, ky, oy;   /* precomputed mappings PS1 -> PSP pixels (2D centre / 3D full width) */
 } Frame;
-int g_hud_anchor = 1;   /* widescreen: move HUD elements to the screen edges in 3D scenes (shifted, not stretched) */
+int g_hud_anchor = 1;   /* widescreen: squeeze the race HUD back to 4:3 proportions, anchored to the edges */
 static Frame g_frames[2];
 static int g_frame_gen;   /* bumped whenever a frame's mapping changes */
 
@@ -562,6 +560,55 @@ static int xy_find(uint32_t xy)
 }
 
 static int is_3d_xy(uint32_t xy) { return xy_find(xy) >= 0; }
+
+/* ---- 16:9 HUD ----------------------------------------------------------------------------------------------------
+ * With widescreen the game renders its 3D view anamorphic (recomp.py view window patches) and the presentation
+ * stretches the 320-pixel picture to the full 16:9 screen. 2D HUD elements would be stretched too: while gpu_walk
+ * reports the race HUD (g_hud_mode), each element is squeezed by 3/4 towards its anchor - the left edge, the centre
+ * or the right edge of the drawing area, by where its centre lies - so it keeps its 4:3 shape and its distance to
+ * the screen edge. Elements wider than half the screen (fades, banners) stay as they are. Text is drawn glyph by
+ * glyph: a glyph next to the previous element on the same line belongs to the same string and takes its anchor. */
+int g_hud_mode;
+static int run_lo, run_hi, run_y0, run_y1, run_anchor, run_valid;
+
+static uint32_t g_race_vblank;
+static int g_race_valid;
+int g_ws_menus;   /* settings.txt widescreen_menus=1: all screens 16:9 (Silent's patches for every 3D screen, 2D stretched) */
+
+void ge_hud_begin(void)
+{
+    g_race_vblank = g_vblank_count;
+    g_race_valid = 1;
+    g_hud_mode = g_hud_anchor;
+    run_valid = 0;
+}
+
+/* 16:9 presentation: in races (race HUD layer seen in the last half second) or everywhere with widescreen_menus */
+int ge_wide_now(void)
+{
+    return g_widescreen && (g_ws_menus || (g_race_valid && g_vblank_count - g_race_vblank < 30));
+}
+
+static void hud_squeeze(GeVtx *v, int n, int *box)
+{
+    int x0 = g_rs.clip_x0, w = g_rs.clip_x1 - g_rs.clip_x0 + 1;
+    int lo = box[0], hi = box[2], anchor;
+    if (hi - lo > w / 2) { run_valid = 0; return; }
+    if (run_valid && box[1] <= run_y1 && box[3] >= run_y0 && lo <= run_hi + 12 && hi >= run_lo - 12) {
+        anchor = run_anchor;
+        if (lo < run_lo) run_lo = lo;
+        if (hi > run_hi) run_hi = hi;
+    } else {
+        int cx = (lo + hi) / 2 - x0;
+        anchor = cx * 5 < w * 2 ? x0 : cx * 5 > w * 3 ? x0 + w : x0 + w / 2;
+        run_lo = lo; run_hi = hi; run_y0 = box[1]; run_y1 = box[3]; run_anchor = anchor; run_valid = 1;
+    }
+    /* x' = anchor + 3/4 (x - anchor), rounded to the nearest pixel */
+    for (int i = 0; i < n; i++) v[i].x = (int16_t)(anchor + (((v[i].x - anchor) * 3 + 2) >> 2));
+    box[0] = anchor + (((lo - anchor) * 3 + 2) >> 2);
+    box[2] = anchor + (((hi - anchor) * 3 + 2) >> 2);
+}
+int ge_is3d_xy(uint32_t xy) { return is_3d_xy(xy); }
 static inline float map_y(const Frame *f, float y) { return f->oy + y * f->ky; }
 
 /* Display swaps take effect at the next vblank (SETBUF_NEXTFRAME): until then the previously shown buffer is still
@@ -693,7 +740,7 @@ static void draw(int prim, int n, const GeVtx *v, int tex, int semi, int mode, i
     set_dither();
     if (vis1 && (fk < 0 || g_frames_read || g_frames_forced)) {
         bind(-1);
-        set_filter(0);
+        set_filter(g_hud_mode && tex);      /* squeezed 16:9 HUD: filtered instead of dropping texel columns */
         set_scissor(g_rs.clip_x0, g_rs.clip_y0, g_rs.clip_x1, g_rs.clip_y1);
         GeVtx *gv = valloc_v(n * (int)sizeof(GeVtx));
         memcpy(gv, v, n * sizeof(GeVtx));
@@ -704,37 +751,8 @@ static void draw(int prim, int n, const GeVtx *v, int tex, int semi, int mode, i
     if (fk >= 0) {
         Frame *f = &g_frames[fk];
         bind(fk);
-        /* HUD anchoring (races only - overlay 0; menus with 3D content such as the dealer's car view keep their
-         * 2D layout in the 4:3 middle): in a 3D scene, 2D elements in the left/right 40% of the 4:3 picture move to the 16:9
-         * edges by the band width (58.5 px); elements in the middle or wider than half the screen stay. */
-        /* Text is drawn glyph by glyph: a glyph next to the previous 2D element on the same line belongs to the same
-         * string and takes its shift, so strings are never torn apart. */
-        static float run_lo, run_hi, run_y0, run_y1, run_shift;
-        static int run_valid;
-        float shift = 0;
-        if (is3d) { f->n3d_cur++; run_valid = 0; }
-        else if (g_widescreen && g_hud_anchor && g_cur_overlay == 0 && (f->n3d_last > 50 || f->n3d_cur > 50)) {
-            float lo = v[0].x, hi = v[0].x, y0 = v[0].y, y1 = v[0].y;
-            for (int i = 1; i < n; i++) {
-                if (v[i].x < lo) lo = v[i].x;
-                if (v[i].x > hi) hi = v[i].x;
-                if (v[i].y < y0) y0 = v[i].y;
-                if (v[i].y > y1) y1 = v[i].y;
-            }
-            float cx = (lo + hi) * 0.5f - f->x;
-            if (run_valid && y0 <= run_y1 && y1 >= run_y0 && lo <= run_hi + 12 && hi >= run_lo - 12) {
-                shift = run_shift;
-                if (lo < run_lo) run_lo = lo;
-                if (hi > run_hi) run_hi = hi;
-            } else {
-                if (hi - lo <= f->w * 0.5f) {
-                    if (cx < f->w * 0.4f) shift = -(480.0f - 363.0f) * 0.5f;
-                    else if (cx > f->w * 0.6f) shift = (480.0f - 363.0f) * 0.5f;
-                }
-                run_lo = lo; run_hi = hi; run_y0 = y0; run_y1 = y1; run_shift = shift; run_valid = 1;
-            }
-        }
-        hires_scissor(f, is3d || shift != 0);
+        if (is3d) f->n3d_cur++;
+        hires_scissor(f, is3d);
         if (is3d && g_pgxp && xyj && prim == GU_TRIANGLE_STRIP) {
             PVtx *pv = valloc_v(n * (int)sizeof(PVtx));
             int ok = 1;
@@ -781,7 +799,7 @@ static void draw(int prim, int n, const GeVtx *v, int tex, int semi, int mode, i
             hv[i].u = v[i].u;
             hv[i].v = v[i].v;
             hv[i].c = v[i].c;
-            hv[i].x = is3d ? map_x3(f, v[i].x) : map_x(f, v[i].x) + shift;
+            hv[i].x = is3d ? map_x3(f, v[i].x) : map_x(f, v[i].x);
             hv[i].y = map_y(f, v[i].y);
             hv[i].z = 0;
         }
@@ -880,6 +898,7 @@ void ge_polygon(const uint32_t *w)
     }
     if (tex) g_rs.texpage = (g_rs.texpage & ~0x9FFu) | (page & 0x9FF);
     int depth = (int)(page >> 7) & 3, mode = (g_rs.texpage >> 5) & 3;
+    if (g_hud_mode) hud_squeeze(v, n, box);
     if (g_bench_stage != 2)
         submit(GU_TRIANGLE_STRIP, n, v, box, tex, depth, (int)page, clut, raw, semi, mode, raster_polygon, w, n3d >= 2, xyj);
     g_phase = ph_;
@@ -913,6 +932,7 @@ void ge_rect(const uint32_t *w)
         {(uint16_t)u0, (uint16_t)v0, 0xFF000000u | col, (int16_t)x0, (int16_t)y0, 0, 0},
         {(uint16_t)(u0 + ww), (uint16_t)(v0 + hh), 0xFF000000u | col, (int16_t)(x0 + ww), (int16_t)(y0 + hh), 0, 0},
     };
+    if (g_hud_mode) hud_squeeze(v, 2, box);
     submit(GU_SPRITES, 2, v, box, tex, depth, (int)(g_rs.texpage & 0x1F) | (depth << 7), clut, raw, semi, mode,
            raster_rect, w, 0, 0);
     g_phase = ph_;
@@ -929,6 +949,7 @@ void ge_line(int x0, int y0, uint32_t c0, int x1, int y1, uint32_t c1, int semi)
         {0, 0, 0xFF000000u | c1, (int16_t)x1, (int16_t)y1, 0, 0},
     };
     int n3d = is_3d_xy(((uint32_t)y0r << 16) | (x0r & 0xFFFF)) + is_3d_xy(((uint32_t)y1r << 16) | (x1r & 0xFFFF));
+    if (g_hud_mode) hud_squeeze(v, 2, box);
     submit(GU_LINES, 2, v, box, 0, 0, 0, 0, 0, semi, (g_rs.texpage >> 5) & 3, 0, 0, n3d >= 2, 0);
 }
 
@@ -1054,7 +1075,7 @@ static int frame_for_display(int dx, int dy, int w, int h)
     int k = !g_frames[0].used ? 0 : !g_frames[1].used ? 1 : (g_shown == 0 ? 1 : 0);
     Frame *f = &g_frames[k];
     *f = (Frame){dx, dy, w, h, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0};
-    f->kx2 = 363.0f / w; f->ox2 = 240.0f - (dx + w * 0.5f) * f->kx2;
+    f->kx2 = (ge_wide_now() ? 480.0f : 363.0f) / w; f->ox2 = 240.0f - (dx + w * 0.5f) * f->kx2;
     f->kx3 = 480.0f / w; f->ox3 = -dx * f->kx3;
     f->ky = 272.0f / h; f->oy = -dy * f->ky;
     g_frame_gen++;
@@ -1064,7 +1085,7 @@ static int frame_for_display(int dx, int dy, int w, int h)
 /* Fallback: scale the 1x display area from PS1 VRAM into buffer 2 (frames never drawn in hi-res, 24-bit, ...). */
 static void present_scaled(int tgt, int dx, int dy, int w, int h, int blank)
 {
-    const int ow = 363, oh = 272, ox = (480 - ow) / 2;
+    const int ow = ge_wide_now() ? 480 : 363, oh = 272, ox = (480 - ow) / 2;   /* 16:9: anamorphic picture */
     int on_screen = g_shown == tgt;
     if (on_screen) {                /* redrawing the shown buffer: the game's queued drawing first, then the clear and
                                      * blit right at the start of the vblank (no double buffer left for 1x screens) */

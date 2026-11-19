@@ -64,13 +64,45 @@ for _k, _b, _f, _e, _p, _m in _TRACK_LOOPS:
                            f"wide_clip_track(c, {_k}, c->r[{_e}], c->r[{_p}], c->r[14]);")
 
 
-# View window of the 3D camera (world-space frustum used for culling), from Silent's (CookiePLMonster) GT2
-# "16:9 Widescreen Hack 2.0" for NTSC-U 1.2: the half-width +-160 (race) / +-60 (rear view mirror) is scaled by
-# 4/3 so objects in the 16:9 side areas are not culled.
+# 16:9, after Silent's (CookiePLMonster) GT2 "Widescreen Hack 2.0" cheat template for NTSC-U 1.2: every 3D screen
+# sets up its view window (the screen-space half-width the projection maps the camera's field of view to) with
+# constants. Scaling the window by 4/3 makes the game itself render the 16:9 field of view squeezed into the 320
+# pixel framebuffer (anamorphic); the presentation stretches it to the PSP's 16:9 screen. No GTE change.
+# Races use g_widescreen (presented 16:9 while the race HUD layer is seen, ge.c ge_wide_now); the menu screens with
+# 3D views only with settings.txt widescreen_menus (g_ws_menus), which presents every screen 16:9.
+def _ws_li(mod: str, pc: int, reg: int, orig: int, cond: str = "g_ws_menus") -> None:
+    """`addiu reg, zero, orig` -> orig * 4/3 with widescreen (truncated like the cheat generator)."""
+    wide = int(orig * 4 / 3)
+    OVERRIDE[(mod, pc)] = f"c->r[{reg}] = {cond} ? (uint32_t)({wide}) : (uint32_t)({orig});"
+
+
+# Race (call to the view setup 0x8007b320 with a1/a2 = centre -+ half-width) and its rear view mirror.
 OVERRIDE[("ovl0", 0x800100D0)] = "c->r[5] = c->r[6] + (g_widescreen ? (uint32_t)-213 : (uint32_t)-160);"
 OVERRIDE[("ovl0", 0x800100D4)] = "c->r[6] = c->r[6] + (g_widescreen ? 213u : 160u);"
-OVERRIDE[("ovl0", 0x800295EC)] = "c->r[5] = g_widescreen ? (uint32_t)-80 : (uint32_t)-60;"
-OVERRIDE[("ovl0", 0x800295F0)] = "c->r[6] = g_widescreen ? 80u : 60u;"
+_ws_li("ovl0", 0x800295EC, 5, -60, "g_widescreen")
+_ws_li("ovl0", 0x800295F0, 6, 60, "g_widescreen")
+# Post-race / bonus / trophy screens: 0x80049780(view, width, height) stores width at +196 and derives the window
+# from it. Only the window may widen, +196 keeps the original width: the caller leaves it in g_ws_keepw (Silent's
+# cheat stores the height argument there instead, which slightly resizes other screens - not needed here).
+OVERRIDE[("ovl0", 0x800497C8)] = ("mem_w16(c->r[4] + 196u, g_ws_keepw ? g_ws_keepw : c->r[5]); "
+                                  "g_ws_keepw = 0;")
+for _pc, _w in ((0x80049F48, 200), (0x8004C194, 200), (0x80058070, 200), (0x80058924, 200),
+                (0x8004E064, 352), (0x80059A08, 352)):
+    OVERRIDE[("ovl0", _pc)] = (f"c->r[5] = g_ws_menus ? {int(_w * 4 / 3)}u : {_w}u; "
+                               f"g_ws_keepw = g_ws_menus ? {_w} : 0;")
+for _pc in (0x80049F50, 0x8004C19C, 0x80058078, 0x8005892C):   # `move a2, a1`: the height stays 200
+    OVERRIDE[("ovl0", _pc)] = "c->r[6] = g_ws_menus ? 200u : c->r[5];"
+_ws_li("ovl0", 0x80050C14, 2, -176)                            # results screen
+_ws_li("ovl0", 0x80050C1C, 2, 176)
+# Overlay 2: car selection (1P / 2P battle) and the pre-race screen.
+_ws_li("ovl2", 0x8001E578, 2, -128)
+_ws_li("ovl2", 0x8001E580, 2, 128)
+_ws_li("ovl2", 0x800201C4, 2, -105)
+_ws_li("ovl2", 0x800201CC, 2, 105)
+_ws_li("ovl2", 0x8001536C, 13, 320)
+# Overlay 4 (GT mode screens): these three view constants are divided by 4/3 instead.
+for _pc, _v in ((0x8001CDF4, 179), (0x8001CDFC, -50), (0x8001CE04, 800)):
+    OVERRIDE[("ovl4", _pc)] = f"c->r[2] = g_ws_menus ? (uint32_t)({int(_v * 3 / 4)}) : (uint32_t)({_v});"
 
 
 # Runtime functions that take the CPU but never touch c->r[] (GTE, coprocessor 0, division, interrupt polling,

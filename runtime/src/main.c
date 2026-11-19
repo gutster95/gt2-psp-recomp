@@ -39,10 +39,10 @@ static int load_exe(void)
 /* Optional settings.txt next to the EBOOT, lines "name=0|1": widescreen, hires, pgxp, filter, hud_anchor. */
 static void load_settings(void)
 {
-    extern int g_hud_anchor, g_near_clip, g_pad_analog, g_audio, g_autoexit, g_frames_forced, g_show_fps, g_gebench, g_membench, g_varena_uncached;
+    extern int g_hud_anchor, g_near_clip, g_pad_analog, g_audio, g_autoexit, g_frames_forced, g_show_fps, g_gebench, g_membench, g_varena_uncached, g_walklog, g_ws_menus;
     static const struct { const char *name; int *var; } opts[] = {
         {"widescreen", &g_widescreen}, {"hires", &g_hires}, {"pgxp", &g_pgxp}, {"filter", &g_tex_filter},
-        {"hud_anchor", &g_hud_anchor}, {"near_clip", &g_near_clip}, {"analog", &g_pad_analog}, {"audio", &g_audio}, {"autoexit", &g_autoexit}, {"frames1x", &g_frames_forced}, {"ge", &g_use_ge}, {"fps", &g_show_fps}, {"gebench", &g_gebench}, {"membench", &g_membench}, {"varena_uncached", &g_varena_uncached},
+        {"hud_anchor", &g_hud_anchor}, {"near_clip", &g_near_clip}, {"analog", &g_pad_analog}, {"audio", &g_audio}, {"autoexit", &g_autoexit}, {"frames1x", &g_frames_forced}, {"ge", &g_use_ge}, {"fps", &g_show_fps}, {"gebench", &g_gebench}, {"membench", &g_membench}, {"varena_uncached", &g_varena_uncached}, {"walklog", &g_walklog}, {"widescreen_menus", &g_ws_menus},
     };
     char path[300], line[64];
     snprintf(path, sizeof path, "%ssettings.txt", g_basedir);
@@ -53,10 +53,11 @@ static void load_settings(void)
             if (!eq) continue;
             *eq = 0;
             for (unsigned i = 0; i < sizeof opts / sizeof opts[0]; i++)
-                if (!strcmp(line, opts[i].name)) *opts[i].var = (opts[i].var == &g_autoexit || opts[i].var == &g_gebench) ? atoi(eq + 1) : atoi(eq + 1) != 0;
+                if (!strcmp(line, opts[i].name)) *opts[i].var = (opts[i].var == &g_autoexit || opts[i].var == &g_gebench || opts[i].var == &g_walklog) ? atoi(eq + 1) : atoi(eq + 1) != 0;
         }
         fclose(f);
     }
+    g_ws_menus &= g_widescreen;
     logf_("settings: widescreen %d hires %d pgxp %d filter %d hud_anchor %d\n", g_widescreen, g_hires, g_pgxp,
           g_tex_filter, g_hud_anchor);
 }

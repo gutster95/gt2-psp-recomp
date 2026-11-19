@@ -73,12 +73,21 @@ tools/             (ignored) local toolchain (pspdev inside a project-local WSL 
     one of two PSP display buffers. Primitives drawn into a frame are drawn twice: 1x into PS1 VRAM (readback,
     render-to-texture stay exact) and mapped (float through-mode vertices) at 480x272 into the frame's display
     buffer; presenting a frame is a flip. Fills/copies/uploads/software-rasterized areas are mirrored.
-  * Widescreen: gte.c scales projected X by 3/4, which squeezes the whole 16:9 field of view into the PS1 screen
-    width. All of the game's visibility tests work in PS1 screen space, so they automatically cover 16:9 - no
-    culling code needs patching (a first attempt kept 4:3 in PS1 space and lost geometry at the edges to dozens of
-    screen-space culls). In the hi-res pass, 3D primitives are stretched over the full 480 pixels, 2D primitives
-    (HUD, menus) are mapped 4:3 into the centre 363 pixels. 3D = at least two vertices equal a screen coordinate
-    the GTE produced within the last few vblanks (hash set fed by RTPS/RTPT, like PGXP-style tagging).
+  * 16:9 (`g_widescreen`, decided 2026-11-19 after the research in DEVLOG): no GTE change. Every 3D screen of GT2
+    sets up its view window (screen half-width of the camera's field of view) from constants; recomp.py OVERRIDEs
+    scale them by 4/3 (values from Silent's "Widescreen Hack 2.0" cheat template for NTSC-U 1.2). The game then
+    renders the 16:9 field of view itself, squeezed into its 320-pixel framebuffer (anamorphic), and all of its
+    screen-space visibility tests cover 16:9 automatically. The presentation stretches the picture to 480x272.
+    Races only by default: the race's ordering table (8515 entries, four layers each starting with a drawing-area
+    packet) has the HUD layer at OT[3] = list start - 0x850C; gpu_walk recognises it, `ge_wide_now()` presents
+    16:9 while that layer was seen in the last 30 vblanks, everything else stays 4:3 (pure 2D menus would be
+    stretched otherwise). `widescreen_menus=1` enables the patches for the menu screens with 3D views (car
+    selection, post-race, GT mode) and presents every screen 16:9, like an emulator with the cheat.
+  * 16:9 HUD (`g_hud_anchor`, default on): primitives of the race HUD layer are squeezed by 3/4 towards their
+    anchor (left edge, centre or right edge of the drawing area, by the element's centre; text runs keep one
+    anchor; elements wider than half the screen stay) before they are drawn, so the HUD keeps its 4:3 shape and
+    its distance to the screen edges. Squeezed textured HUD primitives are filtered bilinearly at 1x (nearest
+    would drop every fourth texel column of the glyphs).
   * Recompiler patches (`recomp.py` HOOKS/OVERRIDE): C code at specific game addresses. Overlay 0's scenery
     renderer (0x80018d1c, 8 loops with prebuilt packets) calls `wide_clip_track` (widescreen.c) for polygons the
     GTE rejects (vertex near/behind the camera): near-plane + guard-band clipping in view space, emitted as
@@ -89,7 +98,8 @@ tools/             (ignored) local toolchain (pspdev inside a project-local WSL 
     scale 1): exact screen positions, perspective-correct texture/colour interpolation (no PS1 affine warping).
     ~90% of 3D polygons take this path. Opaque 3D textures without transparent CLUT entries are filtered
     bilinearly (`g_tex_filter`); transparent ones stay nearest (filtering would pull black into the edges).
-  * `settings.txt` next to the EBOOT toggles widescreen, hires, pgxp, filter, hud_anchor, near_clip (0/1).
+  * `settings.txt` next to the EBOOT toggles widescreen, widescreen_menus, hires, pgxp, filter, hud_anchor,
+    near_clip (0/1).
     The overlay 0 near-plane clipper (widescreen.c) is off by default: suspected of producing garbage polygons.
   * The state cache is invalidated at every list start (the GE keeps state across lists); "unknown" must not
     collide with a valid value (blend -1 = opaque caused additive accumulation on the title screen).
@@ -137,7 +147,7 @@ tools/             (ignored) local toolchain (pspdev inside a project-local WSL 
 
 * Default rendering is native 1x: all primitives go into the PS1 VRAM in eDRAM (GE through mode), the displayed
   area is scaled into PSP buffer 0/1 (double-buffered, blit only when the displayed area changed). Hi-res frames,
-  widescreen (GTE X*3/4) and the perspective-correct pass (GE transform mode) stay optional via settings.txt: GE
+  the old widescreen (GTE X*3/4, replaced 2026-11-19) and the perspective-correct pass (GE transform mode) stay optional via settings.txt: GE
   transform mode drops/distorts geometry on the real PSP, and the hi-res frame bookkeeping was the main source of
   hardware-only glitches.
 * Picture reference: PCSX-Redux with OpenBIOS and the original disc (Lua screenshots), not PPSSPP - PPSSPP's GE is

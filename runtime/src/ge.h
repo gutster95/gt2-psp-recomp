@@ -4,7 +4,12 @@
 
 extern int g_use_ge;                 /* 1: GE renderer (default), 0: software rasterizer only */
 extern int g_hires;                  /* displayed frames rendered at 480x272 into the PSP display buffers */
-extern int g_widescreen;             /* 16:9: GTE projection X * 3/4, frames use the full 480 width */
+extern int g_widescreen;             /* 16:9: game renders anamorphic (view window patches), stretched to 480 */
+extern int g_hud_anchor;             /* 16:9: squeeze the race HUD back to 4:3 proportions */
+extern int g_hud_mode;               /* gpu_walk: the current primitives are the race HUD */
+void ge_hud_begin(void);
+int ge_wide_now(void);                /* present the current picture 16:9 */
+extern int g_ws_menus;
 
 void ge_init(void);
 extern int g_sync_why;              /* 1 fill 2 upload 3 readback 4 copy 5 list 6 clut 7 arena 8 sw 9 vtx 10 present */

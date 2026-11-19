@@ -65,19 +65,46 @@ uint32_t g_ot_entries, g_ot_empty;
 int g_bench_stage;              /* benchmark: stop the primitive path after stage n (0 = full) */
 int g_gebench;                /* settings.txt gebench=<vblank>: benchmark the GPU list path once (see below) */
 
+int g_walklog;                 /* settings.txt walklog=<vblank>: log every packet of one race frame (debug) */
+
+/* Race HUD (16:9, see ge.c hud_squeeze): the race's ordering table (ClearOTagR, walked from its top entry madr
+ * downwards) has 8515 entries in four layers, each starting with a drawing-area packet; the last layer, linked from
+ * OT[3] = madr - 0x850C, is the HUD. Found with settings.txt walklog=<vblank> (one summary line per list). */
+#define RACE_HUD_OT 0x850Cu
+
 static void gpu_walk(uint32_t madr)
 {
-    uint32_t a = madr, guard = 0;
+    uint32_t a = madr, guard = 0, prev = 0;
+    uint32_t hud_ot = (g_widescreen && g_cur_overlay == 0) ? madr - RACE_HUD_OT : 1;
+    int wl = g_walklog && g_vblank_count >= (uint32_t)g_walklog;
+    char buf[400];
+    int bl = 0, pk = 0;
     for (;;) {
         uint32_t hdr = *(uint32_t *)(g_ram + a);
         uint32_t n = hdr >> 24;
         g_ot_entries++;
-        if (!n) g_ot_empty++;
+        if (wl && n) {
+            const uint32_t *p = (const uint32_t *)(g_ram + a + 4);
+            if ((p[0] >> 24) == 0xE3 && bl < 360)
+                bl += snprintf(buf + bl, sizeof buf - bl, " %d@%06x:%08x", pk, (unsigned)prev, (unsigned)p[1]);
+            pk++;
+        }
+        if (!n) {
+            g_ot_empty++;
+            if (a == hud_ot) ge_hud_begin();
+        }
         else if (g_bench_stage == 1) { volatile uint32_t x = *(uint32_t *)(g_ram + a + 4); (void)x; }
         else if (a + 4 + 4 * n <= PSX_RAM_SIZE) gpu_packet((const uint32_t *)(g_ram + a + 4), n);
         else for (uint32_t i = 0; i < n; i++) gpu_gp0(*(uint32_t *)(g_ram + ((a + 4 + 4 * i) & 0x1FFFFC)));
         if ((hdr & 0x800000) || ++guard > 0x40000) break;
+        prev = a;
         a = hdr & 0x1FFFFC;
+    }
+    g_hud_mode = 0;
+    if (wl) {
+        buf[bl] = 0;
+        logf_("wls %u %06x %d:%s\n", (unsigned)g_vblank_count, (unsigned)madr, pk, buf);
+        if (g_vblank_count > (uint32_t)g_walklog + 900) g_walklog = 0;
     }
 }
 

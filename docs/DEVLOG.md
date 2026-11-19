@@ -449,3 +449,23 @@ is a stable 30 fps.
   alone squeezes the whole 16:9 field of view into the 320-pixel framebuffer (anamorphic). The old widescreen path
   (patch + GTE X*3/4) therefore squeezed twice.
 * Cost: race frames draw 5% more primitives on average (1343 -> 1413 per frame), up to 20% in places.
+
+## 2026-11-19 - 16:9 done properly (stage A + B of the research)
+
+* GTE X*3/4 removed. All view window constants of Silent's NTSC-U 1.2 template ported as recomp.py OVERRIDEs
+  (addresses verified against our modules: race/mirror/post-race/results/bonus in ovl0, car selection + pre-race
+  in ovl2, GT mode in ovl4). The cheat's "a1 -> t1" change in 0x80049780 (keeps +196 at the original width but
+  slightly resizes other screens) is done cleanly instead: the patched callers pass the original width in
+  `g_ws_keepw`, other callers are unaffected (and the bonus screen needs no free-space re-fit).
+* Presentation stretches the anamorphic picture to 480x272 - but only in races: pure 2D menus would be stretched.
+  Race detection: `walklog=<vblank>` (new debug setting, one summary line per GPU list) showed the race's ordering
+  table: 8515 entries (ClearOTagR), four layers each starting with a drawing-area packet (E3/E4/E5), the HUD layer
+  always linked from OT[3] = list start - 0x850C, in both buffers and all replay cameras. gpu_walk compares each
+  empty OT entry against that address (no per-primitive cost).
+* HUD (stage B): primitives of that layer are squeezed by 3/4 towards their anchor (left/centre/right by the
+  element's centre, glyph runs share an anchor, elements wider than half the screen stay). Textured ones are
+  filtered bilinearly at 1x - with nearest, every fourth texel column of the glyphs vanished ("0:10.477"
+  unreadable); filtered they read cleanly.
+* Menu screens with 3D views (car selection, post-race, GT mode) keep 4:3 by default; `widescreen_menus=1` turns
+  their patches on and presents every screen 16:9 (emulator-with-cheat behaviour).
+* PPSSPP: race replay 16:9 with a 4:3-shaped HUD at the screen edges, no missing geometry at the edges, 30 fps.

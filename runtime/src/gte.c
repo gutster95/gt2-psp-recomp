@@ -174,7 +174,6 @@ static void rtp(PsxCpu *c, int n, int sf, int lm, int last)
     push_sz(c, m3 >> 12);
     uint32_t q = divide(C[H] & 0xFFFF, D[SZ3]);
     int64_t px = M(q, (int16_t)D[IR1]);
-    if (g_widescreen && g_hires) px = (px * 3) >> 2;   /* 16:9: the 4:3 field of view fills 3/4 of the width */
     int64_t sx = px + (int32_t)C[OFX];
     int64_t sy = M(q, (int16_t)D[IR2]) + (int32_t)C[OFY];
     set_mac0(c, sx); set_mac0(c, sy);

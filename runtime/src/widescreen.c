@@ -15,6 +15,7 @@ void gte_view_space(PsxCpu *c, int x, int y, int z, int32_t out[3]);
 void gte_screen_params(PsxCpu *c, int32_t *h, int32_t *ofx, int32_t *ofy);
 
 uint32_t g_wide_clipped, g_wide_tris;   /* statistics */
+uint32_t g_ws_keepw;
 int g_near_clip = 0;                     /* settings.txt: near_clip */
 
 /* polygon kinds of the 8 loops: F3 F4 G3 G4 FT3 FT4 GT3 GT4 */
@@ -95,7 +96,7 @@ void wide_clip_track(PsxCpu *c, int kind, uint32_t entry, uint32_t pkt, uint32_t
 
     int32_t h, ofx16, ofy16;
     gte_screen_params(c, &h, &ofx16, &ofy16);
-    float H = (float)h, kx = H * (g_widescreen ? 0.75f : 1.0f), ofx = ofx16 / 65536.0f, ofy = ofy16 / 65536.0f;
+    float H = (float)h, kx = H, ofx = ofx16 / 65536.0f, ofy = ofy16 / 65536.0f;
     float zn = H * 0.5f + 4.0f;
     const float GX = 495.0f, GY = 250.0f;          /* guard band around the screen centre (11-bit, <1024x512) */
     int n = k->n;
