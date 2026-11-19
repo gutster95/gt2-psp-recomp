@@ -397,3 +397,17 @@ is a stable 30 fps.
   code (15.8 fps vs 18.3 with -Os: the 16 KB I-cache favours small code), out-of-line scratchpad/IO accessors
   (17.8), no POLL in storing loops (22.2, reverted).
 * FPS counter top right (settings fps=0). PSPLink workflow: scripts/psp-run.sh.
+
+## 2026-11-19 - Faster generated code: register flow, unchecked RAM accesses (22.2 -> 27.0 fps on the PSP)
+
+* Profile with function trace (PSP, attract race): game code ~60%, spread over many functions; the generated
+  machine code was ~10x the size of the PS1 code (6.4 MB text for 650 KB of MIPS), with the 16 KB I-cache the main
+  cost. Every memory access was ~6 instructions plus an inline scratchpad/I/O path and register spills around it.
+* Interprocedural register flow (`regflow.py`): calls write back and reload only the registers the callee can
+  read/change (hottest call: 11 instead of 29 stores, 5 instead of 18 loads). 22.2 -> 22.9 fps.
+* Stack accesses (base sp) without checks: 23.7 fps.
+* Scratchpad mapped onto RAM 0x000-0x3FF, memory profile (`-DGT2_MEMPROF`, data/memprof/) selects functions that
+  never touch I/O: 826 functions use unchecked accessors, 57 touch I/O. Found on the way: libapi patches the BIOS
+  exception handler through C0 table entry 6, which pointed to 0 (writes to RAM 0x28-0x38); two GT2 functions
+  write RAM 0x14 through a null pointer (they keep checked accessors, the checked path redirects the low KB to a
+  dummy area). Text 3.5 MB, attract race **27.0 fps** (on-screen counter 29), picture unchanged.

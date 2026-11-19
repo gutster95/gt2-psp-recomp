@@ -114,6 +114,24 @@ tools/             (ignored) local toolchain (pspdev inside a project-local WSL 
 * GE: draw calls bypass sceGuDrawArray (kernel stall update every 32 draws only), state changes are raw GE
   commands into pspgu's list, vertices come from an uncached arena; GPU DMA packets are executed in place.
 * `profile.txt` next to the EBOOT starts the sampling profiler (log every 10 s).
+* **Register flow across calls** (2026-11-19, `regflow.py`): an interprocedural fixpoint computes per function
+  `IN` (registers whose `c->r[]` value the function or its callees may read: liveness with call sites using the
+  callee's `IN`), `CLOB` (registers it may change in `c->r[]`) and `D` (dirty registers). Before a call only
+  `D & IN(callee)` is written back, after it only `CLOB(callee)` (caller-saved) is reloaded. Assumes the MIPS ABI:
+  caller-saved registers are dead after a call, prologue stores of s0-s8/ra to the stack only save them.
+  Dynamic calls, BIOS and setjmp/longjmp use all registers.
+* **Memory accessors**: the scratchpad lives in the first KB of `g_ram` (physical 0x000-0x3FF, BIOS RAM on the
+  PS1), so `g_ram + (a & 0x1FFFFF)` reaches RAM and scratchpad with no check (`ram_*`). Used for every access
+  with base register `sp` (`rt_check_sp` guards the rare places that set sp from anything but sp + constant) and
+  for all accesses of functions that a memory profile saw accessing memory but never I/O
+  (`data/memprof/*.txt`, recorded by a build with `-DGT2_MEMPROF`, ids `module << 24 | address`; read by
+  `recomp` by default). Functions never profiled, touching I/O or the low KB of RAM keep the checked accessors:
+  inline fast path for RAM above 0x400, out of line for the low KB (redirected to a dummy area - GT2 writes
+  there through null pointers), scratchpad and I/O. The BIOS C0 table points libapi's exception handler patch
+  into kernel RAM at 0x1028 (main.c). Effect on the PSP: text 6.4 -> 3.5 MB, attract race 22.2 -> 27.0 fps.
+* Refreshing the memory profile (after partitioning changes): `recomp --no-memprof`, build with
+  `scripts/build-exp.sh "-Os -DGT2_NO_TRACE -DGT2_MEMPROF"`, run (attract race, menus, license tests), copy
+  `memprof.txt` from the EBOOT folder to `data/memprof/`.
 
 ## Real-hardware rendering decision (2026-11-18)
 
