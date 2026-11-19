@@ -561,6 +561,11 @@ void ge_note_read(int x, int y, int w, int h)
 }
 
 typedef struct { uint16_t u, v; uint32_t c; float x, y, z; } HVtx;
+/* filtered 16:9 HUD elements: float texture coordinates, inset half a texel at the edges of the element's texture
+ * rectangle - bilinear filtering otherwise blends in the texel row/column outside it (the black line above the
+ * minimap was the row above its 96x96 bitmap) */
+typedef struct { float u, v; uint32_t c; float x, y, z; } FVtx;
+#define FFMT (GU_TEXTURE_32BITF | GU_COLOR_8888 | GU_VERTEX_32BITF | GU_TRANSFORM_2D)
 typedef struct { float u, v; uint32_t c; float x, y, z; } PVtx;
 #define PFMT (GU_TEXTURE_32BITF | GU_COLOR_8888 | GU_VERTEX_32BITF | GU_TRANSFORM_3D)
 #define HFMT (GU_TEXTURE_16BIT | GU_COLOR_8888 | GU_VERTEX_32BITF | GU_TRANSFORM_2D)
@@ -821,11 +826,29 @@ static void draw(int prim, int n, const GeVtx *v, int tex, int semi, int mode, i
         set_filter(g_hud_mode && tex);      /* squeezed 16:9 HUD: filtered instead of dropping texel columns */
         set_scissor(g_rs.clip_x0, g_rs.clip_y0, g_rs.clip_x1, g_rs.clip_y1);
         if (g_bench_stage == 12) { check_list(); return; }
-        GeVtx *gv = valloc_v(n * (int)sizeof(GeVtx));
-        if (g_bench_stage == 13) { check_list(); return; }
-        memcpy(gv, v, n * sizeof(GeVtx));
-        if (g_bench_stage == 5) { check_list(); return; }
-        passes(prim, VFMT, n, gv, tex, semi, mode);
+        if (g_hud_mode && tex) {
+            int u0 = v[0].u, u1 = v[0].u, w0 = v[0].v, w1 = v[0].v;
+            for (int i = 1; i < n; i++) {
+                if (v[i].u < u0) u0 = v[i].u;
+                if (v[i].u > u1) u1 = v[i].u;
+                if (v[i].v < w0) w0 = v[i].v;
+                if (v[i].v > w1) w1 = v[i].v;
+            }
+            FVtx *fv = valloc_v(n * (int)sizeof(FVtx));
+            for (int i = 0; i < n; i++) {
+                float fu = v[i].u, fw = v[i].v;
+                if (u1 > u0) fu += v[i].u == u0 ? 0.5f : v[i].u == u1 ? -0.5f : 0;
+                if (w1 > w0) fw += v[i].v == w0 ? 0.5f : v[i].v == w1 ? -0.5f : 0;
+                fv[i] = (FVtx){fu, fw, v[i].c, (float)v[i].x, (float)v[i].y, 0};
+            }
+            passes(prim, FFMT, n, fv, tex, semi, mode);
+        } else {
+            GeVtx *gv = valloc_v(n * (int)sizeof(GeVtx));
+            if (g_bench_stage == 13) { check_list(); return; }
+            memcpy(gv, v, n * sizeof(GeVtx));
+            if (g_bench_stage == 5) { check_list(); return; }
+            passes(prim, VFMT, n, gv, tex, semi, mode);
+        }
         if (g_bench_stage == 6) { g_ge_prims++; check_list(); return; }
     }
     if (fk >= 0) {

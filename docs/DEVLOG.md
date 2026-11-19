@@ -562,3 +562,8 @@ over 200000 random register sets incl. extreme values - 0 mismatches):
   ~1 ms.
 * 16:9 HUD: elements that touch or overlap within a frame form a group with one anchor (32 groups per frame; was
   only the previous glyph on the same line).
+* **Black line above the minimap** (16:9): the minimap sits on a 96x96 textured sprite; squeezed HUD textures are
+  filtered bilinearly, which blended in the texel row above the sprite's texture rectangle. Filtered HUD elements now
+  use float texture coordinates inset half a texel at the rectangle's edges. Found with the new frame capture:
+  L+R+SELECT also saves the next big display list (geframe.bin), `scripts/geframe.py` lists its primitives by
+  position and layer.

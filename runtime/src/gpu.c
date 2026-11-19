@@ -157,6 +157,8 @@ static void snapshot(void)
             fclose(f);
         }
     }
+    extern int g_gedump;
+    g_gedump = 1;                             /* and the next big display list to geframe.bin (io.c gpu_dump) */
     logf_("snapshot %d written (snap%d.bmp)\n", n, n);
     n++;
 }
