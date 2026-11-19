@@ -1146,9 +1146,19 @@ static int frame_for_display(int dx, int dy, int w, int h)
  * emulated vblank blocks the game for almost a whole frame (loading screens took 15-20 s on the PSP). */
 uint64_t g_vblank_sync_us;
 
+/* settings.txt sharp=0: 4:3 screens scaled to the full height (363x272) like before. Default: 240 lines on screen
+ * (16-pixel bands above and below), 4:3 wide (320 pixels: 1:1 in the 320 modes, the 368 mode narrowed horizontally).
+ * 240-line screens are shown 1:1 vertically - the 240 -> 272 scaling (x1.133) smeared every text line over an uneven
+ * number of screen lines. 480-line screens (GT2's interlaced menus) are halved exactly: bilinear sampling of a
+ * half-height sprite lands between two source lines and averages each pair 50/50 (was 480 -> 272, x0.567). */
+int g_sharp = 1;
+
 static void present_scaled(int tgt, int dx, int dy, int w, int h, int blank)
 {
-    const int ow = ge_wide_now() ? 480 : 363, oh = 272, ox = (480 - ow) / 2;   /* 16:9: anamorphic picture */
+    int ow = ge_wide_now() ? 480 : 363, oh = 272, ox, oy = 0;   /* 16:9: anamorphic picture */
+    if (g_sharp && !ge_wide_now() && h <= 512) { ow = 320; oh = h > 256 ? h / 2 : h; oy = (272 - oh) / 2; }
+    ox = (480 - ow) / 2;
+    int linear = ow != w || oh != h;
     int on_screen = g_shown == tgt;
     if (on_screen) {                /* redrawing the shown buffer: the game's queued drawing first, then the clear and
                                      * blit right at the start of the vblank (no double buffer left for 1x screens) */
@@ -1170,7 +1180,7 @@ static void present_scaled(int tgt, int dx, int dy, int w, int h, int blank)
         set_tex(1);
         sceGuTexMode(GU_PSM_5551, 0, 0, 0);
         sceGuTexFunc(GU_TFX_REPLACE, GU_TCC_RGB);
-        sceGuTexFilter(GU_LINEAR, GU_LINEAR);
+        if (linear) sceGuTexFilter(GU_LINEAR, GU_LINEAR); else sceGuTexFilter(GU_NEAREST, GU_NEAREST);
         sceGuTexWrap(GU_CLAMP, GU_CLAMP);
         sceGuTexFlush();
         S.tfx = -1; S.tex_ptr = 0; S.tex_psm = -1;
@@ -1180,8 +1190,9 @@ static void present_scaled(int tgt, int dx, int dy, int w, int h, int blank)
             sceGuTexImage(0, 512, h > 256 ? 512 : 256, 1024,
                           (void *)(EDRAM + (unsigned)dy * 2048 + (unsigned)((ax + s0) & 1023) * 2));
             GeVtx *gv = sceGuGetMemory(2 * (int)sizeof(GeVtx));
-            gv[0] = (GeVtx){(uint16_t)uo, 0, 0xFFFFFFFFu, (int16_t)(ox + s0 * ow / w), 0, 0, 0};
-            gv[1] = (GeVtx){(uint16_t)(uo + s1 - s0), (uint16_t)h, 0xFFFFFFFFu, (int16_t)(ox + s1 * ow / w), (int16_t)oh, 0, 0};
+            gv[0] = (GeVtx){(uint16_t)uo, 0, 0xFFFFFFFFu, (int16_t)(ox + s0 * ow / w), (int16_t)oy, 0, 0};
+            gv[1] = (GeVtx){(uint16_t)(uo + s1 - s0), (uint16_t)h, 0xFFFFFFFFu, (int16_t)(ox + s1 * ow / w),
+                            (int16_t)(oy + oh), 0, 0};
             sceGuDrawArray(GU_SPRITES, VFMT, 2, 0, gv);
         }
         sceGuTexFilter(GU_NEAREST, GU_NEAREST); S.filter = 0;

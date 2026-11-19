@@ -549,3 +549,10 @@ over 200000 random register sets incl. extreme values - 0 mismatches):
   everything else is squeezed towards the centre.
 * **Display width from GP1(06)**: the visible width is taken from the horizontal display range (the right edge of
   the 368-pixel menus showed a stripe of VRAM). To be confirmed on the PSP.
+* **Sharper 4:3 screens** (`sharp=1`, default; `sharp=0` = old full-height scaling): 240 lines on screen with
+  16-pixel bands, 320 wide. 240-line screens 1:1 vertically (240 -> 272 smeared every text line); GT2's 480-line
+  interlaced menus (mode 0x64, 368x480) halved exactly - bilinear sampling of a half-height sprite averages each
+  line pair 50/50 (was 480 -> 272). User: "wirkt schon viel schaerfer". Confirmed on the PSP: the display range crop
+  removed the VRAM stripe at the right edge of the 368-pixel menus.
+* Ideas for later (user): menus truly in 16:9 would need per-screen relayout (fixed 4:3 compositions); texture
+  replacement with assets converted on the PC (hash lookup, hi-res 2D path) - biggest gain for the font.
