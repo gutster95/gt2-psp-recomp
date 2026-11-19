@@ -366,9 +366,13 @@ class Translator:
             st = st.replace("mem_", "ram_", 1).replace(f"({ea}", f"o({s_}, {imm}", 1)
         if st is not None:
             return st
+        fast = rs == 29 or self.fast_mem       # as above: unchecked base + offset form
         if op == "lwc2":
-            return f"gte_write_data(c, {rt}, mem_r32({ea}));"
+            ld = f"ram_r32o({s_}, {imm})" if fast else f"mem_r32({ea})"
+            return f"gte_write_data(c, {rt}, {ld});"
         if op == "swc2":
+            if fast:
+                return f"ram_w32o({s_}, {imm}, gte_read_data(c, {rt}));"
             return f"mem_w32({ea}, gte_read_data(c, {rt}));"
         if op == "mfc2":
             return wr(rt, f"gte_read_data(c, {rd})")
