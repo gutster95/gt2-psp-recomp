@@ -53,7 +53,7 @@ static void load_settings(void)
             if (!eq) continue;
             *eq = 0;
             for (unsigned i = 0; i < sizeof opts / sizeof opts[0]; i++)
-                if (!strcmp(line, opts[i].name)) *opts[i].var = (opts[i].var == &g_autoexit || opts[i].var == &g_gebench || opts[i].var == &g_walklog) ? atoi(eq + 1) : atoi(eq + 1) != 0;
+                if (!strcmp(line, opts[i].name)) *opts[i].var = (opts[i].var == &g_autoexit || opts[i].var == &g_gebench || opts[i].var == &g_walklog || opts[i].var == &g_membench) ? atoi(eq + 1) : atoi(eq + 1) != 0;
         }
         fclose(f);
     }

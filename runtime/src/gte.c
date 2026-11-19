@@ -2,6 +2,7 @@
  *
  * Simplification: MAC1-3 overflow flags are checked on the final 44-bit sum only (not after every partial
  * addition). Everything else (saturation, flags, UNR division, register quirks) follows the documentation. */
+#include <string.h>
 #include "rt.h"
 #include "ge.h"
 #include "prof.h"
@@ -236,9 +237,96 @@ static void ncx(PsxCpu *c, int n, int sf, int lm, int mode)   /* mode 0 NCS, 1 N
 
 static void gte_cmd_impl(PsxCpu *c, uint32_t insn);
 
-void gte_rtps_o(PsxCpu *c, uint32_t insn) { gte_rtp_fast(c, insn, 0); }
-void gte_rtpt_o(PsxCpu *c, uint32_t insn) { gte_rtp_fast(c, insn, 1); }
-void gte_mvmva_o(PsxCpu *c, uint32_t insn) { gte_mvmva_fast(c, insn); }
+void gte_rtps_o(PsxCpu *c, uint32_t insn) { gte_rtp_fast(c, insn, 0, 1); }
+void gte_rtpt_o(PsxCpu *c, uint32_t insn) { gte_rtp_fast(c, insn, 1, 1); }
+void gte_mvmva_o(PsxCpu *c, uint32_t insn) { gte_mvmva_fast(c, insn, 1); }
+void gte_rtps_nf(PsxCpu *c, uint32_t insn) { gte_rtp_fast(c, insn, 0, 0); }
+void gte_rtpt_nf(PsxCpu *c, uint32_t insn) { gte_rtp_fast(c, insn, 1, 0); }
+void gte_mvmva_nf(PsxCpu *c, uint32_t insn) { gte_mvmva_fast(c, insn, 0); }
+
+void gte_flag_poison_hit(uint32_t unused)
+{
+    static int n;
+    (void)unused;
+    if (n++ < 50)
+        logf_("GTE FLAG read after a FLAG-free command (recomp flagflow assumption broken) in %08x\n",
+              (unsigned)g_trace[(g_trace_pos - 1) & (TRACE_SIZE - 1)]);
+}
+
+/* settings.txt membench=2: self-test of the sf = 1 fast cores against the reference paths (random registers, incl.
+ * extreme values), then timing of the fast paths (ns per command, with and without FLAG) */
+static uint32_t g_rng = 12345;
+static uint32_t rnd(void) { g_rng = g_rng * 1664525u + 1013904223u; return g_rng ^ (g_rng >> 15); }
+static uint32_t rnd_val(void)
+{
+    uint32_t r = rnd();
+    switch (rnd() & 7) {
+    case 0: return r;                                   /* anything */
+    case 1: return 0x7FFF7FFFu ^ (r & 0x00030003u);     /* near the 16-bit maximum */
+    case 2: return 0x80008000u | (r & 0x00030003u);     /* near the 16-bit minimum */
+    default: return r & 0x0FFF0FFFu;                    /* typical */
+    }
+}
+static void gte_selftest(void)
+{
+    static PsxCpu a, b;
+    static const uint32_t insns[] = {0x4a180001u, 0x4a280030u, 0x4a180401u, 0x4a280430u, 0x4a498012u, 0x4a4a6012u,
+                                     0x4a486012u, 0x4a4c6012u, 0x4a40e012u, 0x4a4be012u, 0x4a49e412u, 0x4a41a012u};
+    int bad = 0;
+    for (int it = 0; it < 200000 && bad < 8; it++) {
+        for (int i = 0; i < 32; i++) { a.gte_data[i] = rnd_val(); a.gte_ctrl[i] = rnd_val(); }
+        if (rnd() & 1) for (int i = 5; i < 8; i++) a.gte_ctrl[i] = rnd();          /* translations: full 32 bit */
+        if (rnd() & 1) { a.gte_ctrl[24] = rnd(); a.gte_ctrl[25] = rnd(); a.gte_ctrl[28] = rnd(); }
+        a.gte_ctrl[26] = rnd() & 0xFFFF;
+        b = a;
+        uint32_t insn = insns[rnd() % (sizeof insns / sizeof insns[0])];
+        if ((insn & 63) == 0x12) { gte_mvmva_fast2(&a, insn, 1, 1); gte_mvmva_fast2(&b, insn, 1, 0); }
+        else { gte_rtp_fast(&a, insn, (insn & 63) == 0x30, 1); gte_rtp_ref(&b, insn, (insn & 63) == 0x30, 1); }
+        if (memcmp(a.gte_data, b.gte_data, sizeof a.gte_data) || a.gte_ctrl[31] != b.gte_ctrl[31]) {
+            bad++;
+            logf_("gte selftest MISMATCH insn %08x it %d:", (unsigned)insn, it);
+            for (int i = 0; i < 32; i++)
+                if (a.gte_data[i] != b.gte_data[i]) logf_(" d%d %08x/%08x", i, (unsigned)a.gte_data[i], (unsigned)b.gte_data[i]);
+            logf_(" flag %08x/%08x\n", (unsigned)a.gte_ctrl[31], (unsigned)b.gte_ctrl[31]);
+        }
+    }
+    logf_("gte selftest: %d mismatches\n", bad);
+}
+
+static void __attribute__((noinline)) gte_nop_b(PsxCpu *c, uint32_t insn) { c->gte_ctrl[31] = insn; }
+static void __attribute__((noinline)) gte_div_b(PsxCpu *c, uint32_t insn)
+{
+    uint32_t f = 0;
+    c->gte_data[8] = gtef_divide(c->gte_ctrl[26] & 0xFFFF, (c->gte_data[1] & 0x3FF) + 400, &f);
+    (void)insn;
+}
+
+void gte_bench(void)
+{
+    gte_selftest();
+    static PsxCpu cc;
+    PsxCpu *c = &cc;
+    static const uint32_t m[5] = {0x00000F80u, 0x02000100u, 0x0F00FE00u, 0x00400010u, 0x00000FF0u};
+    for (int i = 0; i < 5; i++) c->gte_ctrl[i] = m[i];
+    c->gte_ctrl[5] = 100; c->gte_ctrl[6] = -50; c->gte_ctrl[7] = 3000;
+    c->gte_ctrl[24] = 160 << 16; c->gte_ctrl[25] = 120 << 16; c->gte_ctrl[26] = 300;
+    c->gte_ctrl[27] = (uint32_t)-100; c->gte_ctrl[28] = 0x1400000;
+    const int N = 200000;
+    void (*const fns[8])(PsxCpu *, uint32_t) = {gte_rtps_o, gte_rtps_nf, gte_rtpt_o, gte_rtpt_nf, gte_mvmva_o, gte_mvmva_nf, gte_nop_b, gte_div_b};
+    static const char *const names[8] = {"rtps", "rtps nf", "rtpt", "rtpt nf", "mvmva", "mvmva nf", "call only", "divide"};
+    const uint32_t insn[8] = {0x4a180001u, 0x4a180001u, 0x4a280030u, 0x4a280030u, 0x4a498012u, 0x4a498012u, 0, 0};
+    for (int k = 0; k < 8; k++) {
+        uint64_t t0 = now_us();
+        for (int i = 0; i < N; i++) {
+            c->gte_data[0] = (uint32_t)((i & 255) | ((i & 511) << 16)); c->gte_data[1] = (uint32_t)(i & 1023);
+            c->gte_data[2] = c->gte_data[0] ^ 0x00400040u; c->gte_data[3] = 500;
+            c->gte_data[4] = c->gte_data[0] ^ 0x00200010u; c->gte_data[5] = 700;
+            fns[k](c, insn[k]);
+        }
+        uint64_t t1 = now_us();
+        logf_("gtebench: %s %u ns\n", names[k], (unsigned)((t1 - t0) * 1000 / N));
+    }
+}
 
 void gte_cmd_slow(PsxCpu *c, uint32_t insn)
 {

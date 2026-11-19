@@ -230,8 +230,12 @@ GT2_INLINE void gte_write_data(PsxCpu *c, int reg, uint32_t v)
     if (reg == 15 || reg >= 28) gte_write_data_slow(c, reg, v);     /* SXYP push, IRGB, ORGB, LZCS, LZCR */
     else c->gte_data[reg] = v;
 }
+void gte_flag_poison_hit(uint32_t unused);   /* gte.c: GT2_FLAG_POISON check */
 GT2_INLINE uint32_t gte_read_ctrl(PsxCpu *c, int reg)
 {
+#ifdef GT2_FLAG_POISON
+    if (reg == 31 && (c->gte_ctrl[31] & 0xFFFu) == 0xFFFu) gte_flag_poison_hit(0);
+#endif
     switch (reg) {
     case 4: case 12: case 20: case 26: case 27: case 29: case 30:   /* RT33 L33 LR33 H DQA ZSF3 ZSF4 */
         return (uint32_t)(int32_t)(int16_t)c->gte_ctrl[reg];

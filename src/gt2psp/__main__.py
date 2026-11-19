@@ -105,7 +105,8 @@ def cmd_recomp(args: argparse.Namespace) -> None:
     st = generate(mods, out, prof)
     (out / "functions.json").write_text(to_json(mods))
     print(f"functions: {st.funcs}  instructions: {st.insns}  dynamic calls: {st.dyn_calls}  "
-          f"dynamic jumps: {st.dyn_jumps}  branches in delay slots: {st.ds_branch}")
+          f"dynamic jumps: {st.dyn_jumps}  branches in delay slots: {st.ds_branch}  "
+          f"GTE commands without FLAG: {st.gte_nf}")
     unk = sorted(st.unknown_targets)
     print(f"static targets that are not function starts: {len(unk)}")
     for mod, t in unk[:40]:

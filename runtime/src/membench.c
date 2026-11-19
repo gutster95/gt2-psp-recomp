@@ -14,6 +14,7 @@ static uint64_t t_us(void) { return now_us(); }
 
 void membench(void)
 {
+    if (g_membench == 2) { extern void gte_bench(void); gte_bench(); return; }
     if (!g_membench) return;
     volatile uint32_t *p = (volatile uint32_t *)g_mb;
     uint32_t sum = 0;

@@ -107,8 +107,8 @@ for _pc, _v in ((0x8001CDF4, 179), (0x8001CDFC, -50), (0x8001CE04, 800)):
 
 # Runtime functions that take the CPU but never touch c->r[] (GTE, coprocessor 0, division, interrupt polling,
 # the widescreen clipper): calls to them need no register write-back (see registers_to_locals).
-_NO_FLUSH = {"POLL", "gte_cmd", "gte_read_data", "gte_write_data", "gte_read_ctrl", "gte_write_ctrl", "op_div",
-             "op_divu", "cop0_read", "cop0_write", "cop0_rfe", "wide_clip_track"}
+_NO_FLUSH = {"POLL", "gte_cmd", "gte_cmd_nf", "gte_read_data", "gte_write_data", "gte_read_ctrl", "gte_write_ctrl",
+             "op_div", "op_divu", "cop0_read", "cop0_write", "cop0_rfe", "wide_clip_track"}
 _CALLEE_SAVED = CALLEE_SAVED
 _REG = re.compile(r"c->r\[(\d+)\]")
 _WRITE = re.compile(r"c->r\[(\d+)\] = ")
@@ -235,6 +235,7 @@ class Stats:
     dyn_calls: int = 0
     dyn_jumps: int = 0
     ds_branch: int = 0
+    gte_nf: int = 0
     unknown_targets: set = field(default_factory=set)
 
 
@@ -247,6 +248,8 @@ class Translator:
         self.mod_index = {m.name: i for i, m in enumerate(mods)}
         self.fast_funcs = set()
         self.fast_mem = False
+        from .flagflow import analyze
+        self.flag_dead_all = analyze(mods, lambda mod: (lambda t: self.resolve(mod, t)))
 
     def load_memprof(self, paths: list[Path]) -> None:
         """Memory profiles (memprof.txt of GT2_MEMPROF runs, "<id> <flags>"): functions that accessed memory but
@@ -376,7 +379,8 @@ class Translator:
         if op == "ctc2":
             return f"gte_write_ctrl(c, {rd}, {t_});"
         if ins.extra.get("gte"):
-            return f"gte_cmd(c, 0x{ins.word:08x}u); /* {op} */"
+            nf = "_nf" if ins.pc in getattr(self, "flag_dead", ()) else ""
+            return f"gte_cmd{nf}(c, 0x{ins.word:08x}u); /* {op} */"
         if op == "mfc0":
             return wr(rt, f"cop0_read(c, {rd})")
         if op == "mtc0":
@@ -470,6 +474,8 @@ class Translator:
                f"    TRACE(0x{start:08x}u); const uint32_t fn_ = 0x{fid:08x}u; (void)fn_;"]
         self.fast_mem = fid in self.fast_funcs
         self.cur_mod = m.name
+        self.flag_dead = self.flag_dead_all.get(sym(m.name, start), set())
+        self.stats.gte_nf += len(self.flag_dead)
         pc = start
         while pc < end:
             ins = insns[pc]

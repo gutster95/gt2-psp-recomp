@@ -489,3 +489,25 @@ The user reported the PSP "hanging" when going into a menu, and HOME -> quit han
   of 64x32 blocks (`g_blk_ver`), the cache grew to 64 sets x 8 ways. Map: 13 ms per frame, 0 CLUT syncs.
 * Race (attract, PSP-3000, no profiler): 16:9 25.0 fps, 4:3 25.7 fps.
 * The memory stick still had `PROFILE.TXT` (1 kHz sampling profiler at top priority) - removed.
+
+## 2026-11-19 - GTE fast paths: HI/LO chains, branchless flags, FLAG liveness
+
+Profiling the outlined GTE calls separately (phase markers) showed RTPS 12%, RTPT 6%, MVMVA 7% of a race frame.
+Microbenchmark (`settings.txt membench=2`, also a bit-exact self-test of the new cores against the reference code
+over 200000 random register sets incl. extreme values - 0 mismatches):
+
+| ns per command | before | sf=1 core | + branchless flags | without FLAG |
+|---|---|---|---|---|
+| RTPS | 1049 | 983 | 877 | 722 |
+| RTPT | 3213 | 2440 | 2177 | 1764 |
+| MVMVA | 631 | 597 | 560 | 520 |
+
+* sf = 1 core (`gtef_dot3`): (T << 12 + S) >> 12 == T + (S >> 12); S from one mult/madd/madd chain in HI/LO (gcc
+  interleaved the three int64 sums and shuffled HI/LO through registers). The 44-bit MAC overflow is exactly the
+  signed overflow of the 32-bit sum.
+* Saturations and their flag bits with min/max instead of branches.
+* FLAG liveness (src/gt2psp/flagflow.py): RTPS/RTPT/MVMVA whose FLAG is never read get `gte_cmd_nf`. The sound
+  whole-program analysis finds almost nothing (dynamic calls make every return live), so it is function-local
+  (FLAG assumed dead across calls/returns): 66 of 202 commands. Checked at run time with `-DGT2_FLAG_POISON`
+  (FLAG-free commands write an impossible FLAG, all 112 reads check it): 0 hits in attract race and menus.
+* Race (attract, 16:9, PSP-3000): 25.0 -> 26.6-26.9 fps.
