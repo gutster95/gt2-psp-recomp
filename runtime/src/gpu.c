@@ -73,28 +73,58 @@ static void vram_put(uint16_t px)
     g_xi++;
 }
 
-/* Screenshot on L+R+SELECT (real hardware debugging): snapN.bmp (the PSP screen) plus snapN_vram.bin (PS1 VRAM)
- * and snapN_screen.bin (PSP screen in the vram2png layout) next to the EBOOT. */
+/* Screenshot on L+R+SELECT: snapN.bmp (the PSP screen) next to the EBOOT, N = the first free number. With
+ * snapvram.txt there also snapN_vram.bin (PS1 VRAM) and snapN_screen.bin (vram2png layout). Every write goes through
+ * a buffer in RAM: sceIoWrite straight from eDRAM (the old VRAM dump) hung the whole PSP - the memory stick driver
+ * transfers by DMA from the source buffer. */
+/* PS1 VRAM to / from a file through a RAM buffer (never let sceIoWrite/sceIoRead DMA from or into eDRAM) */
+int vram_fwrite(FILE *f)
+{
+    static uint16_t r[1024];
+    for (int y = 0; y < 512; y++) {
+        memcpy(r, g_vram + y * 1024, sizeof r);
+        if (fwrite(r, 2, 1024, f) != 1024) return 0;
+    }
+    return 1;
+}
+int vram_fread(FILE *f)
+{
+    static uint16_t r[1024];
+    for (int y = 0; y < 512; y++) {
+        if (fread(r, 2, 1024, f) != 1024) return 0;
+        memcpy(g_vram + y * 1024, r, sizeof r);
+    }
+    return 1;
+}
+
+static int file_exists(const char *path)
+{
+    SceIoStat st;
+    return sceIoGetstat(path, &st) >= 0;
+}
+
 static void snapshot(void)
 {
     static int n;
+    static uint8_t row[480 * 3];
+    static uint16_t r[1024];
     char path[300];
     ge_sync();
     const uint16_t *fb = ge_display_buffer();
-    snprintf(path, sizeof path, "%ssnap%d.bmp", g_basedir, n);
+    for (;; n++) {
+        snprintf(path, sizeof path, "%ssnap%d.bmp", g_basedir, n);
+        if (!file_exists(path) || n >= 999) break;
+    }
     FILE *f = fopen(path, "wb");
     if (f) {
         static uint8_t hdr[54];
-        uint32_t img = 480 * 272 * 3;
         static const struct { int off; uint32_t v; } F[] = {   /* byte-wise: unaligned stores trap on the PSP */
             {2, 54 + 480 * 272 * 3}, {10, 54}, {14, 40}, {18, 480}, {22, 272}, {26, 1}, {28, 24}, {34, 480 * 272 * 3}};
         memset(hdr, 0, sizeof hdr);
         hdr[0] = 'B'; hdr[1] = 'M';
         for (unsigned i = 0; i < sizeof F / sizeof F[0]; i++)
             for (int b = 0; b < 4; b++) hdr[F[i].off + b] = (uint8_t)(F[i].v >> (8 * b));
-        (void)img;
         fwrite(hdr, 1, 54, f);
-        static uint8_t row[480 * 3];
         for (int y = 271; y >= 0; y--) {
             for (int x = 0; x < 480; x++) {
                 uint16_t p = fb[y * 512 + x];
@@ -106,19 +136,25 @@ static void snapshot(void)
         }
         fclose(f);
     }
-    snprintf(path, sizeof path, "%ssnap%d_vram.bin", g_basedir, n);
-    f = fopen(path, "wb");
-    if (f) { fwrite(g_vram, 2, 1024 * 512, f); fclose(f); }
-    snprintf(path, sizeof path, "%ssnap%d_screen.bin", g_basedir, n);
-    f = fopen(path, "wb");
-    if (f) {
-        static uint16_t r[1024];
-        for (int y = 0; y < 512; y++) {
-            memset(r, 0, sizeof r);
-            if (y < 272) memcpy(r, fb + y * 512, 480 * 2);
-            fwrite(r, 2, 1024, f);
+    char flag[300];
+    snprintf(flag, sizeof flag, "%ssnapvram.txt", g_basedir);
+    if (file_exists(flag)) {
+        snprintf(path, sizeof path, "%ssnap%d_vram.bin", g_basedir, n);
+        f = fopen(path, "wb");
+        if (f) {
+            vram_fwrite(f);
+            fclose(f);
         }
-        fclose(f);
+        snprintf(path, sizeof path, "%ssnap%d_screen.bin", g_basedir, n);
+        f = fopen(path, "wb");
+        if (f) {
+            for (int y = 0; y < 512; y++) {
+                memset(r, 0, sizeof r);
+                if (y < 272) memcpy(r, fb + y * 512, 480 * 2);
+                fwrite(r, 2, 1024, f);
+            }
+            fclose(f);
+        }
     }
     logf_("snapshot %d written (snap%d.bmp)\n", n, n);
     n++;
@@ -362,7 +398,7 @@ stats:
         snprintf(path, sizeof path, "%svram%d.bin", g_basedir, frame);
         ge_sync();
         FILE *f = dumps_from > 0 ? 0 : fopen(path, "wb");   /* negative start frame: VRAM dumps too */
-        if (f) { fwrite(g_vram, 2, 1024 * 512, f); fclose(f); }
+        if (f) { vram_fwrite(f); fclose(f); }
         if (g_use_ge) {                          /* the PSP screen, as a 512x512 "VRAM" image for vram2png */
             snprintf(path, sizeof path, "%sscreen%d.bin", g_basedir, frame);
             f = fopen(path, "wb");

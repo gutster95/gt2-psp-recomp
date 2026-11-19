@@ -4,7 +4,10 @@
 void gpu_init(void);
 uint32_t gpu_draw_mode(void);
 void gpu_set_draw_mode(uint32_t m);
-void ge_bench_file(void);   /* io.c: settings.txt gebenchfile=1 */
+void ge_bench_file(void);
+#include <stdio.h>
+int vram_fwrite(FILE *f);   /* PS1 VRAM through a RAM buffer (no memory stick DMA from eDRAM) */
+int vram_fread(FILE *f);   /* io.c: settings.txt gebenchfile=1 */
 void gpu_gp0(uint32_t v);
 void gpu_packet(const uint32_t *w, uint32_t n);   /* n command words of a DMA linked-list packet */
 void gpu_gp1(uint32_t v);

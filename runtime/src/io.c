@@ -142,7 +142,7 @@ static void gpu_dump(uint32_t madr)
     GeFrameHdr h = {GEFRAME_MAGIC, madr, gpu_draw_mode(), g_cur_overlay, g_rs};
     fwrite(&h, sizeof h, 1, f);
     fwrite(g_ram, 1, PSX_RAM_SIZE, f);
-    fwrite(g_vram, 2, 1024 * 512, f);
+    vram_fwrite(f);
     fclose(f);
     logf_("gedump: frame at vblank %u saved (madr %06x)\n", (unsigned)g_vblank_count, (unsigned)madr);
 }
@@ -158,7 +158,7 @@ void ge_bench_file(void)
     if (!f) { logf_("gebenchfile: no geframe.bin\n"); return; }
     GeFrameHdr h;
     int ok = fread(&h, sizeof h, 1, f) == 1 && h.magic == GEFRAME_MAGIC &&
-             fread(g_ram, 1, PSX_RAM_SIZE, f) == PSX_RAM_SIZE && fread(g_vram, 2, 1024 * 512, f) == 1024 * 512;
+             fread(g_ram, 1, PSX_RAM_SIZE, f) == PSX_RAM_SIZE && vram_fread(f);
     fclose(f);
     if (!ok) { logf_("gebenchfile: bad geframe.bin\n"); return; }
     sceKernelDcacheWritebackAll();
