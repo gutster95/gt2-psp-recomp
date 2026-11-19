@@ -141,11 +141,11 @@
   on PSP-class CPU time (PPSSPP paces the emulated CPU). Decision: keep the software rasterizer as the
   accurate reference; add fast paths / move hot primitives to the GE later (see ARCHITECTURE.md).
 
-## 2026-11-18 — Milestone 1: title screen
+## 2026-11-18 â€” Milestone 1: title screen
 
 * Sprite fast paths in the rasterizer (pre-modulated CLUT per primitive, row fills for flat rectangles) make
   the notice fade run at playable speed; the game then loads overlay 1 and shows the **GT2 title screen**
-  ("Start Game", "Replay Theater", Polyphony Digital logo) — all game logic is recompiled code.
+  ("Start Game", "Replay Theater", Polyphony Digital logo) â€” all game logic is recompiled code.
 * Title screen frame: 1 clear rect, 4 textured 256x256 background sprites, 1 flat triangle (menu cursor),
   5 textured menu sprites with varying modulation (fade/highlight).
 
@@ -527,7 +527,9 @@ over 200000 random register sets incl. extreme values - 0 mismatches):
     texture memo in the PSP scratchpad (16 KB on-chip at 0x10000, never misses);
   * vertex arena in the free eDRAM tail (0x1CC000-0x1FFFFF, 208 KB, uncached writes, no writeback): 13.3 -> 12.45 ms.
     The display list there too was slower (80 KB left -> more mid-frame syncs), it stays in RAM.
-  * OT walk: tight loop over empty entries (17000 per race frame): 0.80 ms -> 0.44 ms per heavy frame... the walk
-    stage alone went 802 -> 440 ns per primitive.
+  * OT walk: tight loop over empty entries (~17000 per race frame), about 0.4 ms less per frame.
 * Race (attract, 16:9): 26.7 -> 27.4 (scratchpad, walk, lazy versions) -> 27.8 fps (eDRAM arena).
 * Not worth it: `varena_uncached` (RAM, uncached), fewer stall-address updates (slower: the GE then starts late).
+
+* Recompiler: lwc2/swc2 use the unchecked base + offset accessors in the same functions as normal loads/stores
+  (stack base or memory-profile functions without I/O): 1007 GTE transfers. Race 27.8 -> 28.0-28.1 fps.
