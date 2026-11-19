@@ -437,3 +437,15 @@ is a stable 30 fps.
   from the GT2SaveEditor documentation), maxed (all license tests gold, all events won, 9,999,999 credits).
   New: `IMPORT.MCD` next to the EBOOT replaces the card once; the current card is written to `BACKUP.MCD` first.
   Verified in PPSSPP (My Home shows 632 days, 9,999,999 credits).
+
+## 2026-11-19 - 16:9 research: Silent's viewport patch already squeezes the picture
+
+* Silent's (CookiePLMonster) "Widescreen 2.0" for GT2 (DuckStation cheat, generator `PS1/Tools/gt2-widescreen-gen.py`
+  in his Console-Cheat-Codes repo; NTSC-U 1.2 template `resource/gt2-ws/NTSC-U 1.2.cht`) patches the viewport data
+  of each screen: car selection, pre-race, race (+-160 -> +-213 at ovl0 0x800100D0/D4, the call to 0x8007b320),
+  rear view mirror (+-60 -> +-80), post-race/results/bonus screens, GT mode screens (B3/-32/320 divided by 4/3).
+  DuckStation's own widescreen rendering stays off with it.
+* PPSSPP, same replay frame with and without the race patch only (`widescreen=1 hires=0`, no GTE hack): the patch
+  alone squeezes the whole 16:9 field of view into the 320-pixel framebuffer (anamorphic). The old widescreen path
+  (patch + GTE X*3/4) therefore squeezed twice.
+* Cost: race frames draw 5% more primitives on average (1343 -> 1413 per frame), up to 20% in places.
