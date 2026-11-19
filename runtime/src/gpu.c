@@ -106,7 +106,6 @@ static int file_exists(const char *path)
 static void snapshot(void)
 {
     static int n;
-    static uint8_t row[480 * 3];
     static uint16_t r[1024];
     char path[300];
     ge_sync();
@@ -115,25 +114,27 @@ static void snapshot(void)
         snprintf(path, sizeof path, "%ssnap%d.bmp", g_basedir, n);
         if (!file_exists(path) || n >= 999) break;
     }
+    /* the whole BMP is built in RAM and written with one call: row by row it took seconds over PSPLink's USB */
+    static uint8_t bmp[54 + 480 * 272 * 3];
     FILE *f = fopen(path, "wb");
     if (f) {
-        static uint8_t hdr[54];
+        uint8_t *hdr = bmp;
         static const struct { int off; uint32_t v; } F[] = {   /* byte-wise: unaligned stores trap on the PSP */
             {2, 54 + 480 * 272 * 3}, {10, 54}, {14, 40}, {18, 480}, {22, 272}, {26, 1}, {28, 24}, {34, 480 * 272 * 3}};
-        memset(hdr, 0, sizeof hdr);
+        memset(hdr, 0, 54);
         hdr[0] = 'B'; hdr[1] = 'M';
         for (unsigned i = 0; i < sizeof F / sizeof F[0]; i++)
             for (int b = 0; b < 4; b++) hdr[F[i].off + b] = (uint8_t)(F[i].v >> (8 * b));
-        fwrite(hdr, 1, 54, f);
         for (int y = 271; y >= 0; y--) {
+            uint8_t *row = bmp + 54 + (271 - y) * 480 * 3;
             for (int x = 0; x < 480; x++) {
                 uint16_t p = fb[y * 512 + x];
                 row[x * 3 + 2] = (uint8_t)((p & 31) << 3);
                 row[x * 3 + 1] = (uint8_t)(((p >> 5) & 31) << 3);
                 row[x * 3 + 0] = (uint8_t)(((p >> 10) & 31) << 3);
             }
-            fwrite(row, 1, sizeof row, f);
         }
+        fwrite(bmp, 1, sizeof bmp, f);
         fclose(f);
     }
     char flag[300];
@@ -360,6 +361,16 @@ void gpu_present(void)
 {
     static const int hres[4] = {256, 320, 512, 640};
     int w = (g_disp_mode & 0x40) ? 368 : hres[g_disp_mode & 3];
+    {   /* visible width from the horizontal display range GP1(06) (in GPU clocks, nocash psx-spx): GT2's menus run in
+         * the 368 mode with a range of ~352 pixels; showing all 368 put VRAM garbage at the right edge */
+        static const int div[4] = {10, 8, 5, 4};
+        int d = (g_disp_mode & 0x40) ? 7 : div[g_disp_mode & 3];
+        int x1 = (int)(g_hrange & 0xFFF), x2 = (int)((g_hrange >> 12) & 0xFFF);
+        int vis = ((x2 - x1) / d + 2) & ~3;
+        static uint32_t logged = 0xFFFFFFFFu;
+        if (g_hrange != logged) { logged = g_hrange; logf_("display range x %d-%d: %d of %d pixels\n", x1, x2, vis, w); }
+        if (vis >= 64 && vis < w) w = vis;
+    }
     int h = (g_disp_mode & 0x04) && (g_disp_mode & 0x20) ? 480 : 240;
     int disabled = g_status & 0x800000u;
     static int frame;

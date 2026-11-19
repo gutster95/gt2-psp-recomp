@@ -615,9 +615,9 @@ static int is_3d_xy(uint32_t xy) { return xy_find(xy) >= 0; }
 /* ---- 16:9 HUD ----------------------------------------------------------------------------------------------------
  * With widescreen the game renders its 3D view anamorphic (recomp.py view window patches) and the presentation
  * stretches the 320-pixel picture to the full 16:9 screen. 2D HUD elements would be stretched too: while gpu_walk
- * reports the race HUD (g_hud_mode), each element is squeezed by 3/4 towards its anchor - the left edge, the centre
- * or the right edge of the drawing area, by where its centre lies - so it keeps its 4:3 shape and its distance to
- * the screen edge. Elements wider than half the screen (fades, banners) stay as they are. Text is drawn glyph by
+ * reports the race HUD (g_hud_mode), each element is squeezed by 3/4 towards its anchor - the left or right edge of
+ * the drawing area for elements entirely in its outer 30%, the centre for all others - so it keeps its 4:3 shape and
+ * edge elements keep their distance to the screen edge. Elements wider than half the screen (fades, banners) stay as they are. Text is drawn glyph by
  * glyph: a glyph next to the previous element on the same line belongs to the same string and takes its anchor. */
 int g_hud_mode;
 static int run_lo, run_hi, run_y0, run_y1, run_anchor, run_valid;
@@ -650,8 +650,10 @@ static void hud_squeeze(GeVtx *v, int n, int *box)
         if (lo < run_lo) run_lo = lo;
         if (hi > run_hi) run_hi = hi;
     } else {
-        int cx = (lo + hi) / 2 - x0;
-        anchor = cx * 5 < w * 2 ? x0 : cx * 5 > w * 3 ? x0 + w : x0 + w / 2;
+        /* edge anchors only for elements entirely in the outer 30% (lap times, records, tachometer); everything else
+         * is squeezed towards the centre, so centred texts and menus keep their layout (by the element's centre with
+         * 40/60% limits, "BRONZE PRIZE!" fell apart and the pause menu moved right) */
+        anchor = (hi - x0) * 10 <= w * 3 ? x0 : (lo - x0) * 10 >= w * 7 ? x0 + w : x0 + w / 2;
         run_lo = lo; run_hi = hi; run_y0 = box[1]; run_y1 = box[3]; run_anchor = anchor; run_valid = 1;
     }
     /* x' = anchor + 3/4 (x - anchor), rounded to the nearest pixel */

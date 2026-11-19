@@ -533,3 +533,19 @@ over 200000 random register sets incl. extreme values - 0 mismatches):
 
 * Recompiler: lwc2/swc2 use the unchecked base + offset accessors in the same functions as normal loads/stores
   (stack base or memory-profile functions without I/O): 1007 GTE transfers. Race 27.8 -> 28.0-28.1 fps.
+
+## 2026-11-19 - Real PSP play test: save data, screenshots, HUD anchors, display width
+
+* **Save data never worked on the real PSP** (only PPSSPP was tested): every save answered 0x80110388 (bad
+  parameter). A variant test on the PSP-3000 showed the cause: pspsdk's SceUtilitySavedataParam with the fields of
+  firmware 2.00+ (1536 bytes, key/secureVersion left zero) is rejected; the parameter block without them (size up
+  to utilityData) saves and loads. Import of the 100% card verified: save result 0, reload with the same checksum.
+* **L+R+SELECT screenshot hung the whole PSP**: the VRAM dump was written straight from eDRAM (0x44000000) and the
+  memory stick driver transfers by DMA from the source buffer. All VRAM file I/O now goes through a RAM buffer
+  (also gedump/gebenchfile), the BMP is written in one call (row by row it took seconds over PSPLink), snapN takes
+  the first free number, VRAM dumps only with snapvram.txt.
+* **16:9 HUD anchors**: by the element's centre (40/60% limits) centred texts fell apart ("BRONZE PRIZE!") and the
+  pause menu moved right. Now edge anchors only for elements entirely in the outer 30% of the drawing area,
+  everything else is squeezed towards the centre.
+* **Display width from GP1(06)**: the visible width is taken from the horizontal display range (the right edge of
+  the 368-pixel menus showed a stripe of VRAM). To be confirmed on the PSP.

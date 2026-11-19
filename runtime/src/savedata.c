@@ -34,7 +34,10 @@ static uint32_t checksum(const uint8_t *b)
 static void setup(int mode, void *buf)
 {
     memset(&g_sp, 0, sizeof g_sp);
-    g_sp.base.size = sizeof g_sp;
+    /* the parameter block without the fields of firmware 2.00+ (key, secureVersion, ...): the real PSP answered the
+     * full size (1536 bytes, pspsdk with _PSP_FW_VERSION >= 200) with 0x80110388 (bad parameter) for every save,
+     * PPSSPP accepted it; tested on the PSP-3000 with settings variants */
+    g_sp.base.size = (unsigned)((char *)&g_sp.utilityData - (char *)&g_sp) + sizeof g_sp.utilityData;
     sceUtilityGetSystemParamInt(PSP_SYSTEMPARAM_ID_INT_LANGUAGE, &g_sp.base.language);
     sceUtilityGetSystemParamInt(PSP_SYSTEMPARAM_ID_INT_UNKNOWN, &g_sp.base.buttonSwap);
     g_sp.base.graphicsThread = 0x11;
