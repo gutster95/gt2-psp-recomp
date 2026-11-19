@@ -8,10 +8,16 @@
 #include "cdrom.h"
 #include "prof.h"
 
-uint8_t g_ram[PSX_RAM_SIZE] __attribute__((aligned(64)));   /* fixed address: no pointer load per access */
+/* fixed address: no pointer load per access; guard areas around it for base + offset accesses (gt2rt.h) */
+uint8_t g_ram_mem[RAM_GUARD_LO + PSX_RAM_SIZE + RAM_GUARD_HI] __attribute__((aligned(65536)));
+__asm__(".globl g_ram\n.set g_ram, g_ram_mem + 0x8000");
+_Static_assert(RAM_GUARD_LO == 0x8000, "g_ram symbol offset");
 uint32_t g_trace[TRACE_SIZE];
 uint32_t g_trace_pos;
 int32_t g_poll_budget = 1000;
+/* Backward branches between two rt_poll calls (in races only ~180 calls per second: vblank delivery latency) */
+#define POLL_INTERVAL 2000
+uint64_t g_poll_now;                       /* time of the current rt_poll (for the devices it ticks) */
 int g_cur_overlay = -1;
 
 #define OVL_LO 0x80010000u
@@ -57,6 +63,12 @@ void rt_jump(PsxCpu *c, uint32_t addr) { dispatch(c, addr, "jump"); }
 void rt_check_sp(uint32_t sp)
 {
     if ((sp & 0x1FFFFFFFu) >= 0x00800000u) fatal(0, "stack pointer %08x outside main RAM", (unsigned)sp);
+}
+
+void ramo_bad(uint32_t b, int32_t o)
+{
+    static int n;
+    if (n < 50) { n++; logf_("ramo: base %08x offset %d leaves the 2 MB mirror of the base\n", (unsigned)b, (int)o); }
 }
 
 void rt_break(PsxCpu *c, uint32_t pc) { fatal(c, "break at %08x", (unsigned)pc); }
@@ -204,14 +216,18 @@ void bios_return_from_exception(PsxCpu *c)
 void rt_poll(PsxCpu *c)
 {
     PHASE_BEGIN(PH_IRQ);
-    g_poll_budget = 2000;
+    g_poll_budget = POLL_INTERVAL;
     g_n_polls++;
     uint64_t t = now_us();
+    g_poll_now = t;
     static uint64_t next_report;
     if (t >= next_report) {
         next_report = t + 2000000;
         extern void memprof_dump(void);
         memprof_dump();
+        extern uint32_t g_ot_entries, g_ot_empty;
+        logf_("ot: %u entries (%u empty) in 2 s\n", (unsigned)g_ot_entries, (unsigned)g_ot_empty);
+        g_ot_entries = g_ot_empty = 0;
         logf_("alive: tpos %u polls %u irqs %u dicr %08x in_irq %d ovl %d i_stat %03x i_mask %03x irq %d sr %08x last fns %08x %08x %08x %08x\n", (unsigned)g_trace_pos, (unsigned)g_n_polls, (unsigned)g_n_irqs, (unsigned)io_r32(0x1F8010F4u), g_in_irq, g_cur_overlay,
               (unsigned)g_i_stat, (unsigned)g_i_mask, g_irq_enabled, (unsigned)c->cop0[12],
               (unsigned)g_trace[(g_trace_pos - 4) & (TRACE_SIZE - 1)], (unsigned)g_trace[(g_trace_pos - 3) & (TRACE_SIZE - 1)],

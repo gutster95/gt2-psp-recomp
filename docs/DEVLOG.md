@@ -411,3 +411,29 @@ is a stable 30 fps.
   exception handler through C0 table entry 6, which pointed to 0 (writes to RAM 0x28-0x38); two GT2 functions
   write RAM 0x14 through a null pointer (they keep checked accessors, the checked path redirects the low KB to a
   dummy area). Text 3.5 MB, attract race **27.0 fps** (on-screen counter 29), picture unchanged.
+
+## 2026-11-19 - GPU path benchmark, memory system numbers, CLUT cache, 100% save import
+
+* Frame-rate comparisons between builds turned out unreliable: unrelated edits moved the race result by up to
+  8% (code/data layout). Tried: hot functions first in .text (own PRX linker script, `scripts/make_linkfile.py`,
+  `data/hot_functions.txt`, all code with -ffunction-sections), 64 KB alignment of the big buffers - no measurable
+  gain, kept for reproducible layouts. GTE RTPS/RTPT/MVMVA out of line for generated code (`GT2_GTE_OUTLINE`):
+  the two biggest renderer functions shrank from 66 KB to 42 KB.
+* Deterministic benchmark instead (`settings.txt gebench=<vblank>`, io.c): the first race display list after that
+  vblank is replayed 100 times per stage, cut off at successive points of the primitive path. PSP, ~1600 prims:
+  OT walk 1.0 ms, packet decode 3.2 ms, clipping 0.5 ms, texture setup 4.2 ms, draw preparation 1.9 ms, command
+  emission 1.7 ms - 12.5 ms per frame, about 40% of the 33 ms budget.
+* Memory system of the PSP-3000 (`membench=1`): cache hit ~14 ns, miss 130-170 ns, D-cache 16 KB; cached
+  sequential stores 24 ns/word (write allocate), **uncached sequential stores 14 ns/word**.
+* Texture setup: every frame re-converted ~55 CLUTs (the CLUT arena was reset at every GE sync) with uncached
+  single stores. Now a persistent 32x4 CLUT cache keyed by VRAM page versions (cached writes + writeback): 55 -> 3
+  conversions per frame. Plus a memo for "same texture as the previous primitive" (keeps the slot's LRU stamp -
+  without it the hot page was evicted) and a direct (depth, page) -> slot lookup.
+* pspgu writes the display list through an uncached pointer (sceGuStart ORs 0x40000000). A cached list with
+  explicit writeback worked but is not faster given the store numbers above; reverted. An uncached vertex arena
+  hung the PSP early in boot (or the USB link died at the same time) - to be retried.
+* Side quest: a GT2 US Simulation v1.2 save (BASCUS-94455GAME, 93 cars, all licenses, ending seen, 218/248 events
+  won; RetroPie save collection on GitHub) checked with `scripts/gt2save.py` (own reader, offsets and CRC-32 range
+  from the GT2SaveEditor documentation), maxed (all license tests gold, all events won, 9,999,999 credits).
+  New: `IMPORT.MCD` next to the EBOOT replaces the card once; the current card is written to `BACKUP.MCD` first.
+  Verified in PPSSPP (My Home shows 632 days, 9,999,999 credits).

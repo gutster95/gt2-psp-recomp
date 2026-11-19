@@ -31,6 +31,7 @@ rm -f "$ROOT/input.txt"
 rm -f "$ROOT/gt2log.txt"
 sh_ "./gt2psp.prx" | head -3
 sleep "$SECS"
+cp "$ROOT/gt2log.txt" "$PROJ/build/psp-last-gt2log.txt"
 grep -E "gpu: vblank|^profile|game code|FATAL|syncs by reason|overlay load" "$ROOT/gt2log.txt" | tail -40
 # race frame rate: display lists per second over the stats lines of the attract race (prims > 20000)
 awk '/^gpu: vblank/ { for (i = 1; i <= NF; i++) { if ($i == "took") ms = $(i+1); if ($i == "display" && $(i+1) == "lists,") dl = $(i-1); if ($i == "prims") pr = $(i-1) }

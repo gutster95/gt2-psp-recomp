@@ -324,12 +324,11 @@ class Translator:
             return f"op_divu(c, {s_}, {t_});"
         ea = f"{s_} + {simm}"
         st = self.memory(op, rs, rt, s_, t_, ea, wr)
-        if st is not None and rs == 29 and op in _STACK_OPS:
-            # sp always points into main RAM (checked where sp is set from anything but sp + constant):
-            # stack accesses skip the scratchpad/I/O checks
-            st = st.replace("mem_", "stk_", 1)
-        elif st is not None and self.fast_mem:
-            st = st.replace("mem_", "ram_", 1)
+        if st is not None and op in _STACK_OPS and (rs == 29 or self.fast_mem):
+            # unchecked RAM/scratchpad access in base + offset form (gt2rt.h ram_*o): stack accesses (sp always
+            # points into main RAM, checked where sp is set from anything but sp + constant) and all accesses of
+            # functions the memory profile never saw touching I/O
+            st = st.replace("mem_", "ram_", 1).replace(f"({ea}", f"o({s_}, {imm}", 1)
         if st is not None:
             return st
         if op == "lwc2":

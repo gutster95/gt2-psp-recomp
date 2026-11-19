@@ -18,7 +18,7 @@
 #define RAM_SIZE (512 * 1024)
 #define BLOCK 1024
 
-static uint8_t g_sram[RAM_SIZE] __attribute__((aligned(64)));
+static uint8_t g_sram[RAM_SIZE] __attribute__((aligned(65536)));
 static uint16_t g_reg[0x200];              /* 0x1C00-0x1FFF as halfwords */
 #define REG(off) g_reg[((off) - 0x1C00) >> 1]
 static uint32_t g_xfer;                    /* transfer address (bytes) */

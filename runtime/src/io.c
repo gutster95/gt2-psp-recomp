@@ -10,6 +10,7 @@
 #include "spu.h"
 #include "prof.h"
 #include "mdec.h"
+#include "ge.h"
 
 uint32_t g_i_stat, g_i_mask;
 /* indexed by address - 0x1F800000, so offsets below read like the hardware addresses */
@@ -60,6 +61,58 @@ static void dma_irq(int ch)
     }
 }
 
+uint32_t g_ot_entries, g_ot_empty;
+int g_bench_stage;              /* benchmark: stop the primitive path after stage n (0 = full) */
+int g_gebench;                /* settings.txt gebench=<vblank>: benchmark the GPU list path once (see below) */
+
+static void gpu_walk(uint32_t madr)
+{
+    uint32_t a = madr, guard = 0;
+    for (;;) {
+        uint32_t hdr = *(uint32_t *)(g_ram + a);
+        uint32_t n = hdr >> 24;
+        g_ot_entries++;
+        if (!n) g_ot_empty++;
+        else if (g_bench_stage == 1) { volatile uint32_t x = *(uint32_t *)(g_ram + a + 4); (void)x; }
+        else if (a + 4 + 4 * n <= PSX_RAM_SIZE) gpu_packet((const uint32_t *)(g_ram + a + 4), n);
+        else for (uint32_t i = 0; i < n; i++) gpu_gp0(*(uint32_t *)(g_ram + ((a + 4 + 4 * i) & 0x1FFFFC)));
+        if ((hdr & 0x800000) || ++guard > 0x40000) break;
+        a = hdr & 0x1FFFFC;
+    }
+}
+
+/* Deterministic benchmark of the GPU -> GE path: the first big display list after vblank <gebench> is executed 100
+ * more times (same RAM contents, so the same primitives); logs the time per pass without and with the GE's work. */
+static void gpu_bench(uint32_t madr)
+{
+    extern uint32_t g_ge_prims;
+    uint32_t p0 = g_ge_prims;
+    gpu_walk(madr);
+    ge_sync();
+    uint32_t prims = g_ge_prims - p0;
+    if (prims < 500) return;                    /* not a race frame */
+    g_gebench = 0;
+    static const int order[] = {1, 2, 3, 7, 8, 9, 4, 5, 6, 0};
+    for (unsigned si = 0; si < sizeof order / sizeof order[0]; si++) {
+        g_bench_stage = order[si];
+        uint64_t t0 = now_us(), tw = 0;
+        for (int i = 0; i < 100; i++) {
+            uint64_t a = now_us();
+            gpu_walk(madr);
+            tw += now_us() - a;
+        }
+        ge_sync();
+        uint64_t t1 = now_us();
+        extern uint32_t g_memo_hits, g_memo_miss, g_clut_conv;
+        logf_("gebench: memo %u hits %u misses, %u CLUT conversions (100 passes)\n", (unsigned)g_memo_hits,
+              (unsigned)g_memo_miss, (unsigned)g_clut_conv);
+        g_memo_hits = g_memo_miss = g_clut_conv = 0;
+        logf_("gebench stage %d:%u prims, CPU %u us per pass (%u ns per prim), with GE %u us\n", g_bench_stage,
+              (unsigned)prims, (unsigned)(tw / 100), (unsigned)(tw * 10 / prims), (unsigned)((t1 - t0) / 100));
+    }
+    g_bench_stage = 0;
+}
+
 static void dma_run(int ch)
 {
     uint32_t base = 0x1080 + ch * 0x10;
@@ -70,15 +123,8 @@ static void dma_run(int ch)
             PHASE_BEGIN(PH_GPU);
             g_gpu_lists++;
             uint64_t t0 = now_us();
-            uint32_t a = madr, guard = 0;
-            for (;;) {
-                uint32_t hdr = *(uint32_t *)(g_ram + a);
-                uint32_t n = hdr >> 24;
-                if (a + 4 + 4 * n <= PSX_RAM_SIZE) gpu_packet((const uint32_t *)(g_ram + a + 4), n);
-                else for (uint32_t i = 0; i < n; i++) gpu_gp0(*(uint32_t *)(g_ram + ((a + 4 + 4 * i) & 0x1FFFFC)));
-                if ((hdr & 0x800000) || ++guard > 0x40000) break;
-                a = hdr & 0x1FFFFC;
-            }
+            if (g_gebench && g_vblank_count >= (uint32_t)g_gebench) gpu_bench(madr);
+            gpu_walk(madr);
             g_gpu_us += now_us() - t0;
             PHASE_END();
         } else {                                /* block / sync mode */

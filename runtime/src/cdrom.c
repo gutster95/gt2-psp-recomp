@@ -234,10 +234,9 @@ static void update_irq(void)
     if (g_int_flag & g_int_enable & 0x1F) raise_irq(2);
 }
 
-static void deliver(void)
+static void deliver_at(uint64_t t)
 {
     if (g_int_flag & 7) return;                /* previous interrupt not acknowledged */
-    uint64_t t = now_us();
     if (g_qn && g_q[0].at <= t) {
         Resp r = g_q[0];
         memmove(g_q, g_q + 1, sizeof(Resp) * (--g_qn));
@@ -292,7 +291,14 @@ static void deliver(void)
     }
 }
 
-void cdrom_tick(void) { deliver(); }
+static void deliver(void)
+{
+    if (g_int_flag & 7) return;
+    deliver_at(now_us());
+}
+
+extern uint64_t g_poll_now;
+void cdrom_tick(void) { deliver_at(g_poll_now); }
 
 uint32_t cdrom_read(uint32_t reg)
 {

@@ -10,7 +10,7 @@
 volatile int g_phase;
 
 static const char *const NAMES[PH_COUNT] = {"game code", "GTE", "GPU lists (GE build)", "present/GE wait", "IRQ/poll",
-                                           "CD", "other", "GE texture setup", "GE draw emit"};
+                                           "CD", "other", "GE texture setup", "GE draw emit", "GE prim decode", "GE touch", "GE sync wait"};
 static uint32_t g_ph[PH_COUNT], g_total;
 
 #define FN_SLOTS 4096
@@ -37,12 +37,12 @@ static void report(void)
     logf_("profile (%u samples):", (unsigned)g_total);
     for (int i = 0; i < PH_COUNT; i++) logf_(" %s %u%%", NAMES[i], (unsigned)(g_ph[i] * 100 / g_total));
     logf_("\n");
-    for (int k = 0; k < 15; k++) {                       /* top functions by samples */
+    for (int k = 0; k < 100; k++) {                      /* top functions by samples */
         int best = -1;
         for (int j = 0; j < FN_SLOTS; j++)
             if (g_fn_cnt[j] && (best < 0 || g_fn_cnt[j] > g_fn_cnt[best])) best = j;
         if (best < 0) break;
-        logf_("  %08x %u%%\n", (unsigned)g_fn_addr[best], (unsigned)(g_fn_cnt[best] * 100 / g_total));
+        logf_("  fn %08x %u\n", (unsigned)g_fn_addr[best], (unsigned)g_fn_cnt[best]);
         g_fn_cnt[best] = 0;
     }
     extern uint32_t g_gte_count[64];

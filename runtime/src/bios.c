@@ -39,7 +39,8 @@ static void deliver(PsxCpu *c, uint32_t cls, uint32_t spec)
 /* called from rt_poll outside interrupt handlers */
 void bios_poll_events(PsxCpu *c)
 {
-    uint64_t t = now_us();
+    extern uint64_t g_poll_now;
+    uint64_t t = g_poll_now;
     while (g_npending && g_pending[0].at <= t) {
         Pending p = g_pending[0];
         memmove(g_pending, g_pending + 1, sizeof(Pending) * (--g_npending));

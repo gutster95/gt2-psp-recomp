@@ -237,6 +237,10 @@ static void ncx(PsxCpu *c, int n, int sf, int lm, int mode)   /* mode 0 NCS, 1 N
 
 static void gte_cmd_impl(PsxCpu *c, uint32_t insn);
 
+void gte_rtps_o(PsxCpu *c, uint32_t insn) { gte_rtp_fast(c, insn, 0); }
+void gte_rtpt_o(PsxCpu *c, uint32_t insn) { gte_rtp_fast(c, insn, 1); }
+void gte_mvmva_o(PsxCpu *c, uint32_t insn) { gte_mvmva_fast(c, insn); }
+
 void gte_cmd_slow(PsxCpu *c, uint32_t insn)
 {
     PHASE_BEGIN(PH_GTE);

@@ -32,7 +32,12 @@ extern const int g_num_modules;
 #define GT2_INLINE static inline __attribute__((always_inline))
 
 #define PSX_RAM_SIZE 0x200000u
-extern uint8_t g_ram[];         /* 2 MB main RAM (static array: address is a link-time constant) */
+/* 2 MB main RAM (static array: address is a link-time constant), with guard areas before and after it: unchecked
+ * accesses add the instruction's offset to the mapped base register (ram_*o), which can step a little outside. */
+#define RAM_GUARD_LO 0x8000u
+#define RAM_GUARD_HI 0x10000u
+extern uint8_t g_ram_mem[];
+extern uint8_t g_ram[];          /* = g_ram_mem + RAM_GUARD_LO, an assembler symbol (core.c): one constant base */
 /* The 1 KB scratchpad (0x1F800000, the R3000A data cache) lives in the first KB of g_ram (physical 0x000-0x3FF,
  * BIOS RAM on the PS1): then g_ram + (a & 0x1FFFFF) reaches RAM and scratchpad alike (the ram_* accessors). */
 #define g_scratch g_ram
@@ -95,6 +100,23 @@ GT2_INLINE uint32_t ram_r32(uint32_t a) { return *(uint32_t *)RAMP(a); }
 GT2_INLINE void ram_w8(uint32_t a, uint8_t v) { *RAMP(a) = v; }
 GT2_INLINE void ram_w16(uint32_t a, uint16_t v) { *(uint16_t *)RAMP(a) = v; }
 GT2_INLINE void ram_w32(uint32_t a, uint32_t v) { *(uint32_t *)RAMP(a) = v; }
+/* Base + offset form: the host address of the base register is shared by all accesses through it (struct fields,
+ * stack slots); with a constant base the exact address is used. Differs from ram_* only if base and base + offset
+ * lie in different 2 MB mirrors (not done by the game; GT2_CHECK_RAMO builds log it). */
+void ramo_bad(uint32_t b, int32_t o);
+#ifdef GT2_CHECK_RAMO
+#define RAMO_CHECK(b, o) do { if ((((b) & (PSX_RAM_SIZE - 1)) + (uint32_t)(o)) >= PSX_RAM_SIZE) ramo_bad((b), (o)); } while (0)
+#else
+#define RAMO_CHECK(b, o) ((void)0)
+#endif
+/* The empty asm hides that the host base is g_ram + something: otherwise GCC folds the offset into the constant
+ * g_ram and needs one register per distinct offset; this way one register per base register suffices. */
+GT2_INLINE uint8_t *ramp_opaque(uint32_t b) { uint8_t *h = RAMP(b); __asm__("" : "+r"(h)); return h; }
+#define RAMPO(b, o) (__builtin_constant_p(b) ? RAMP((b) + (uint32_t)(o)) : ramp_opaque(b) + (o))
+#define RAMO_FN(name, T, R)                                                                                    GT2_INLINE uint32_t ram_r##name##o(uint32_t b, int32_t o) { RAMO_CHECK(b, o); return *(R *)RAMPO(b, o); }     GT2_INLINE void ram_w##name##o(uint32_t b, int32_t o, T v) { RAMO_CHECK(b, o); *(R *)RAMPO(b, o) = v; }
+RAMO_FN(8, uint8_t, uint8_t)
+RAMO_FN(16, uint16_t, uint16_t)
+RAMO_FN(32, uint32_t, uint32_t)
 #define stk_r8 ram_r8
 #define stk_r16 ram_r16
 #define stk_r32 ram_r32

@@ -168,13 +168,26 @@ GT2_INLINE void gte_rtp_fast(PsxCpu *c, uint32_t insn, int three)
     c->gte_ctrl[31] = flag;
 }
 
+/* Out-of-line copies of the bigger fast paths (gte.c). GT2_GTE_OUTLINE (generated code): calls instead of inline
+ * expansion - an inline RTPT is ~300 instructions, and the renderer functions grew to 66 KB with them (the PSP's
+ * instruction cache is 16 KB). */
+void gte_rtps_o(PsxCpu *c, uint32_t insn);
+void gte_rtpt_o(PsxCpu *c, uint32_t insn);
+void gte_mvmva_o(PsxCpu *c, uint32_t insn);
+
 GT2_INLINE void gte_cmd(PsxCpu *c, uint32_t insn)
 {
     switch (insn & 63) {
+#ifdef GT2_GTE_OUTLINE
+    case 0x01: gte_rtps_o(c, insn); return;
+    case 0x30: gte_rtpt_o(c, insn); return;
+    case 0x12: gte_mvmva_o(c, insn); return;
+#else
     case 0x01: gte_rtp_fast(c, insn, 0); return;
     case 0x30: gte_rtp_fast(c, insn, 1); return;
-    case 0x06: gte_nclip_fast(c); return;
     case 0x12: gte_mvmva_fast(c, insn); return;
+#endif
+    case 0x06: gte_nclip_fast(c); return;
     default: gte_cmd_slow(c, insn); return;
     }
 }

@@ -55,10 +55,47 @@ static void format(void)
     memcpy(g_img + 63 * SECTOR, g_img, SECTOR);    /* write test frame */
 }
 
+/* IMPORT.MCD next to the EBOOT (a raw 128 KB card image, e.g. converted from an emulator's .mcr/.srm) replaces the
+ * card once: the current card is first written to BACKUP.MCD, the import file is renamed to IMPORT.MCD.done. */
+static int card_import(int have_save)
+{
+    char path[320], done[330], bak[320];
+    snprintf(path, sizeof path, "%sIMPORT.MCD", g_basedir);
+    FILE *f = fopen(path, "rb");
+    if (!f) return 0;
+    static uint8_t tmp[SECTOR * SECTORS];
+    size_t n = fread(tmp, 1, sizeof tmp, f);
+    fclose(f);
+    if (n != sizeof tmp || tmp[0] != 'M' || tmp[1] != 'C') {
+        logf_("card: %s is not a 128 KB memory card image - ignored\n", path);
+        return 0;
+    }
+    if (have_save) {
+        snprintf(bak, sizeof bak, "%sBACKUP.MCD", g_basedir);
+        FILE *b = fopen(bak, "wb");
+        if (!b || fwrite(g_img, 1, sizeof g_img, b) != sizeof g_img) {
+            if (b) fclose(b);
+            logf_("card: cannot back up the current card to %s - import skipped\n", bak);
+            return 0;
+        }
+        fclose(b);
+        logf_("card: current card backed up to %s\n", bak);
+    }
+    memcpy(g_img, tmp, sizeof g_img);
+    snprintf(done, sizeof done, "%s.done", path);
+    remove(done);
+    rename(path, done);
+    savedata_written();                            /* stored as PSP save data shortly */
+    logf_("card: imported %s (renamed to IMPORT.MCD.done)\n", path);
+    return 1;
+}
+
 void card_init(void)
 {
     g_present = 1;
-    if (savedata_load(g_img)) { logf_("card: loaded from PSP save data\n"); return; }
+    int have = savedata_load(g_img);
+    if (card_import(have)) return;
+    if (have) { logf_("card: loaded from PSP save data\n"); return; }
     snprintf(g_path, sizeof g_path, "%sGT2CARD1.MCD", g_basedir);   /* card file of earlier builds */
     FILE *f = fopen(g_path, "rb");
     if (f) {

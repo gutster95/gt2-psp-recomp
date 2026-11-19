@@ -41,7 +41,7 @@ int g_use_ge = 1;
 
 typedef struct { uint16_t u, v; uint32_t c; int16_t x, y, z, pad; } GeVtx;
 
-static uint32_t g_list[LIST_BYTES / 4] __attribute__((aligned(64)));
+static uint32_t g_list[LIST_BYTES / 4] __attribute__((aligned(65536)));
 static int g_open, g_shown;
 static int g_last_vtype = -1, g_draws;    /* draw_array state */
 
@@ -56,7 +56,7 @@ static inline void cmd(uint32_t c, uint32_t a) { *gu_list->current++ = (c << 24)
  * stall address (sceGuDrawArray, sceGuGetMemory, sceGuFinish - checked in libpspgu.a), so the GE never reads
  * vertices still sitting in the cache. */
 #define VARENA (512 * 1024)
-static uint8_t g_varena[VARENA] __attribute__((aligned(64)));
+static uint8_t g_varena[VARENA] __attribute__((aligned(65536)));
 static uint32_t g_vtop, g_vflushed;
 static inline void *valloc_v(int bytes)
 {
@@ -75,6 +75,8 @@ static inline void vflush(void)
 #define sceGuDrawArray(...) (vflush(), sceGuDrawArray(__VA_ARGS__))
 #define sceGuGetMemory(n) (vflush(), sceGuGetMemory(n))
 #define sceGuFinish() (vflush(), sceGuFinish())
+extern int g_bench_stage;
+uint32_t g_memo_hits, g_memo_miss, g_clut_conv;
 static int g_cur_fb = -1;             /* GE draw target: -1 PS1 VRAM, 0/1 hi-res frame buffers, 2 scaled present */
 static int g_scissor_is_width = 1;    /* sceGuScissor(x, y, w, h) semantics, checked at startup */
 uint32_t g_ge_prims, g_ge_sw_prims, g_ge_tex_uploads, g_ge_syncs, g_ge_pgxp;
@@ -137,30 +139,35 @@ static struct {
  * state across display lists, so after a restart nothing may be assumed. */
 static void invalidate_state(void) { memset(&S, 0xFF, sizeof S); S.blend = -99; }
 
-/* ---- CLUT conversion (per batch arena; the GE copies a CLUT on load, entries stay valid until the sync) ----- */
+/* ---- CLUT cache --------------------------------------------------------------------------------------------
+ * Converted CLUTs (PS1 15-bit -> 8888) stay valid across frames while their VRAM pages are unchanged (version).
+ * 32 sets x 4 ways, one 1 KB slot each. The GE copies a CLUT when it executes the load command, so a slot used since
+ * the last sync must not be overwritten (batch == g_ge_syncs); then the oldest other way is taken, or the GE is
+ * synced if all four were used in this batch. (Before: a per-batch arena, every CLUT converted again each frame with
+ * uncached stores - 55 conversions per race frame, ~1.5 ms.) */
 
-#define CLUT_ARENA (128 * 1024)
-static uint32_t g_clut_arena[CLUT_ARENA / 4] __attribute__((aligned(64)));
-static uint32_t g_clut_top;
-typedef struct { uint32_t key, ver; const uint32_t *p; int transparent; } ClutEnt;
+#define CLUT_SETS 32
+#define CLUT_WAYS 4
+static uint32_t g_clut_arena[CLUT_SETS * CLUT_WAYS * 256] __attribute__((aligned(65536)));
+typedef struct { uint32_t key, ver, batch, use; int transparent; } ClutEnt;
+static ClutEnt g_cluts[CLUT_SETS * CLUT_WAYS];
 static int g_clut_transparent;   /* the CLUT of the current texture has transparent entries (no filtering) */
-#define NCLUT 64
-static ClutEnt g_cluts[NCLUT];
-static int g_nclut, g_clut_rr;
+static uint32_t g_clut_clock;
 
 static void ge_begin(void);
 
 void ge_sync(void)
 {
     if (!g_open) return;
+    int ph = g_phase;
+    g_phase = PH_GE_SYNC;
     sceGuFinish();
     sceGuSync(0, 0);
+    g_phase = ph;
     g_open = 0;
     g_vtop = 0;
     g_vflushed = 0;
     g_ge_pending = 0;
-    g_clut_top = 0;
-    g_nclut = 0;
     g_ge_syncs++;
     g_sync_stats[g_sync_why & 15]++;
     g_sync_why = 0;
@@ -244,14 +251,32 @@ static const uint32_t *clut_get(int clx, int cly, int n)
             break;
         }
     }
-    uint32_t key = (n == 256 ? 0x80000000u : 0) | ((uint32_t)cly << 10) | (uint32_t)clx;
+    uint32_t key = (n == 256 ? 0x80000000u : 0) | ((uint32_t)cly << 10) | (uint32_t)clx | 0x40000000u;
     uint32_t ver = g_page_ver[p] ^ (g_page_ver[p2] * 0x9E3779B1u);
-    for (int i = 0; i < g_nclut; i++)
-        if (g_cluts[i].key == key && g_cluts[i].ver == ver) { g_clut_transparent = g_cluts[i].transparent; return g_cluts[i].p; }
-    uint32_t bytes = (uint32_t)(n * 4 + 63) & ~63u;
-    if (g_clut_top + bytes > CLUT_ARENA) { g_sync_why = 7; ge_sync(); ge_begin(); }
-    uint32_t *dst = (uint32_t *)((uintptr_t)((uint8_t *)g_clut_arena + g_clut_top) | 0x40000000u);   /* uncached */
-    g_clut_top += bytes;
+    int set = (int)(((key * 0x9E3779B1u) >> 27) & (CLUT_SETS - 1));
+    ClutEnt *e = &g_cluts[set * CLUT_WAYS], *victim = 0;
+    for (int i = 0; i < CLUT_WAYS; i++)
+        if (e[i].key == key) {
+            if (e[i].ver == ver) {
+                e[i].batch = g_ge_syncs;
+                e[i].use = ++g_clut_clock;
+                g_clut_transparent = e[i].transparent;
+                return g_clut_arena + (set * CLUT_WAYS + i) * 256;
+            }
+            victim = &e[i];                       /* same palette, VRAM changed: convert again in place */
+            break;
+        }
+    if (victim && victim->batch == g_ge_syncs) victim = 0;
+    if (!victim)
+        for (int i = 0; i < CLUT_WAYS; i++)
+            if (e[i].batch != g_ge_syncs && (!victim || e[i].use < victim->use)) victim = &e[i];
+    if (!victim) {                                /* all four ways loaded in this batch */
+        g_sync_why = 7; ge_sync(); ge_begin();
+        victim = &e[0];
+        for (int i = 1; i < CLUT_WAYS; i++) if (e[i].use < victim->use) victim = &e[i];
+    }
+    uint32_t *dst = g_clut_arena + (victim - g_cluts) * 256;
+    g_clut_conv++;
     const uint16_t *src = g_vram + cly * 1024;
     int transparent = 0;
     for (int i = 0; i < n; i++) {
@@ -260,13 +285,12 @@ static const uint32_t *clut_get(int clx, int cly, int n)
         uint32_t a = t == 0 ? 0 : (t & 0x8000) ? 0x70 : 0xFF;
         dst[i] = (a << 24) | (c5to8((t >> 10) & 31) << 16) | (c5to8((t >> 5) & 31) << 8) | c5to8(t & 31);
     }
-    ClutEnt *e;
-    if (g_nclut < NCLUT) e = &g_cluts[g_nclut++];
-    else e = &g_cluts[g_clut_rr++ % NCLUT];
-    e->key = key;
-    e->ver = ver;
-    e->p = dst;
-    e->transparent = transparent;
+    sceKernelDcacheWritebackRange(dst, (unsigned)n * 4);   /* the GE reads it from memory */
+    victim->key = key;
+    victim->ver = ver;
+    victim->batch = g_ge_syncs;
+    victim->use = ++g_clut_clock;
+    victim->transparent = transparent;
     g_clut_transparent = transparent;
     return dst;
 }
@@ -277,6 +301,8 @@ static const uint32_t *clut_get(int clx, int cly, int n)
 typedef struct { uint32_t key, ver[2], use; uint8_t *buf; } Slot;
 static Slot g_slots[NSLOTS];
 static uint32_t g_use_clock;
+static Slot *g_last_slot;
+
 
 void ge_note_read(int x, int y, int w, int h);
 
@@ -286,13 +312,23 @@ static const uint8_t *tex_page(int depth, int tpx, int tpy)
     int np = depth == 0 ? 1 : 2;
     int p0 = (tpy >> 8) * 16 + (tpx >> 6), p1 = (p0 & 16) | ((p0 + 1) & 15);
     uint32_t key = 1 + ((uint32_t)depth << 8) + (uint32_t)p0;
-    Slot *s = 0, *lru = &g_slots[0];
-    for (int i = 0; i < NSLOTS; i++) {
-        if (g_slots[i].key == key) { s = &g_slots[i]; break; }
-        if (g_slots[i].use < lru->use) lru = &g_slots[i];
-    }
+    /* slot of each (depth, page): direct lookup, the LRU scan only on a miss */
+    static int8_t slot_of[4 * 32];
+    static int init;
+    if (!init) { memset(slot_of, -1, sizeof slot_of); init = 1; }
+    int mi = (depth & 3) * 32 + p0;
+    Slot *s = slot_of[mi] >= 0 ? &g_slots[slot_of[mi]] : 0;
     int fresh = 0;
-    if (!s) { s = lru; s->key = key; fresh = 1; }
+    if (!s) {
+        Slot *lru = &g_slots[0];
+        for (int i = 1; i < NSLOTS; i++)
+            if (g_slots[i].use < lru->use) lru = &g_slots[i];
+        s = lru;
+        if (s->key) slot_of[((s->key - 1) >> 8 & 3) * 32 + ((s->key - 1) & 31)] = -1;
+        s->key = key;
+        slot_of[mi] = (int8_t)(s - g_slots);
+        fresh = 1;
+    }
     uint32_t v0 = g_page_ver[p0], v1 = np > 1 ? g_page_ver[p1] : 0;
     if (fresh || s->ver[0] != v0 || s->ver[1] != v1) {
         int w = 64 * np;
@@ -305,6 +341,7 @@ static const uint8_t *tex_page(int depth, int tpx, int tpy)
         g_ge_tex_uploads++;
     }
     s->use = ++g_use_clock;
+    g_last_slot = s;
     return s->buf;
 }
 
@@ -389,10 +426,37 @@ static void set_dither(void)
 }
 
 
+static void setup_texture_full(int depth, int page, uint32_t clut);
+
 static void setup_texture(int depth, int page, uint32_t clut)
 {
+    /* Same texture and CLUT as the previous primitive, nothing written into their pages and no GE sync since then
+     * (a sync recycles the CLUT arena): the GE state is already right. Most consecutive primitives share them. */
+    static struct { int depth, page; uint32_t clut, sync, v[4]; const void *cl; uintptr_t tex; Slot *slot; } M = {-1};
+    int clx = (int)(clut & 0x3F) * 16, cly = (int)(clut >> 6) & 0x1FF, cn = depth ? 256 : 16;
+    int tp0 = ((page >> 4) & 1) * 16 + (page & 15), tp1 = (tp0 & 16) | ((tp0 + 1) & 15);
+    int cp0 = (cly >> 8) * 16 + (clx >> 6), cp1 = (cly >> 8) * 16 + (((clx + cn - 1) & 1023) >> 6);
+    if (M.depth == depth && M.page == page && M.clut == clut && M.sync == g_ge_syncs && M.v[0] == g_page_ver[tp0] &&
+        M.v[1] == g_page_ver[tp1] && M.v[2] == g_page_ver[cp0] && M.v[3] == g_page_ver[cp1] && S.clut == M.cl &&
+        S.tex_ptr == M.tex && S.tex_psm == depth && !g_hires) {
+        M.slot->use = ++g_use_clock;                     /* keep the LRU order of the texture page cache */
+        g_memo_hits++;
+        return;
+    }
+    g_memo_miss++;
+    setup_texture_full(depth, page, clut);
+    M.depth = depth; M.page = page; M.clut = clut; M.sync = g_ge_syncs;
+    M.v[0] = g_page_ver[tp0]; M.v[1] = g_page_ver[tp1]; M.v[2] = g_page_ver[cp0]; M.v[3] = g_page_ver[cp1];
+    M.cl = S.clut; M.tex = S.tex_ptr; M.slot = g_last_slot;
+}
+
+static void setup_texture_full(int depth, int page, uint32_t clut)
+{
+    if (g_bench_stage == 7) return;
     const uint32_t *cl = clut_get((int)(clut & 0x3F) * 16, (int)(clut >> 6) & 0x1FF, depth ? 256 : 16);
+    if (g_bench_stage == 8) return;
     const uint8_t *buf = tex_page(depth, (page & 15) * 64, ((page >> 4) & 1) * 256);
+    if (g_bench_stage == 9) return;
     if (S.clut != cl) { sceGuClutLoad(depth ? 32 : 2, cl); S.clut = cl; }
     if (S.tex_ptr != (uintptr_t)buf || S.tex_psm != depth) {
         sceGuTexMode(depth ? GU_PSM_T8 : GU_PSM_T4, 0, 0, 0);
@@ -630,7 +694,9 @@ static void draw(int prim, int n, const GeVtx *v, int tex, int semi, int mode, i
         set_scissor(g_rs.clip_x0, g_rs.clip_y0, g_rs.clip_x1, g_rs.clip_y1);
         GeVtx *gv = valloc_v(n * (int)sizeof(GeVtx));
         memcpy(gv, v, n * sizeof(GeVtx));
+        if (g_bench_stage == 5) { check_list(); return; }
         passes(prim, VFMT, n, gv, tex, semi, mode);
+        if (g_bench_stage == 6) { g_ge_prims++; check_list(); return; }
     }
     if (fk >= 0) {
         Frame *f = &g_frames[fk];
@@ -723,6 +789,7 @@ static void draw(int prim, int n, const GeVtx *v, int tex, int semi, int mode, i
     check_list();
 }
 
+
 static int too_big(const int *b) { return b[2] - b[0] >= 1024 || b[3] - b[1] >= 512; }
 
 /* Clip the bounding box to the drawing area; 0 if nothing of it is inside. */
@@ -759,6 +826,7 @@ static void submit(int prim, int n, const GeVtx *v, int *box, int tex, int depth
         if (fk >= 0) mirror(box[0], box[1], box[2] - box[0] + 1, box[3] - box[1] + 1);
         return;
     }
+    if (g_bench_stage == 3) return;
     if (g_vtop > VARENA - 1024) { g_sync_why = 9; ge_sync(); }
     ge_begin();
     if (fk >= 0) prepare_frame(fk);
@@ -766,16 +834,20 @@ static void submit(int prim, int n, const GeVtx *v, int *box, int tex, int depth
     g_phase = PH_GE_TEX;
     if (tex) { setup_texture(depth, page, clut); set_tfx(raw); }
     set_tex(tex);
+    if (g_bench_stage == 4 || g_bench_stage >= 7) { check_list(); return; }
     g_phase = PH_GE_DRAW;
     draw(prim, n, v, tex, semi, mode, vis1, fk, is3d && g_widescreen, xyj);
-    g_phase = ph;
+    g_phase = PH_GE_TOUCH;
     if (vis1) touch(box[0], box[1], box[2], box[3], 1);
+    g_phase = ph;
 }
 
 /* ---- primitives ---------------------------------------------------------------------------------------------- */
 
 void ge_polygon(const uint32_t *w)
 {
+    int ph_ = g_phase;
+    g_phase = PH_GE_PRIM;
     uint32_t op = w[0] >> 24;
     int quad = op & 8, tex = (op & 4) != 0, gour = op & 0x10, semi = (op & 2) != 0, raw = op & 1;
     int n = quad ? 4 : 3, k = 0, n3d = 0, xyj[4];
@@ -805,11 +877,15 @@ void ge_polygon(const uint32_t *w)
     }
     if (tex) g_rs.texpage = (g_rs.texpage & ~0x9FFu) | (page & 0x9FF);
     int depth = (int)(page >> 7) & 3, mode = (g_rs.texpage >> 5) & 3;
-    submit(GU_TRIANGLE_STRIP, n, v, box, tex, depth, (int)page, clut, raw, semi, mode, raster_polygon, w, n3d >= 2, xyj);
+    if (g_bench_stage != 2)
+        submit(GU_TRIANGLE_STRIP, n, v, box, tex, depth, (int)page, clut, raw, semi, mode, raster_polygon, w, n3d >= 2, xyj);
+    g_phase = ph_;
 }
 
 void ge_rect(const uint32_t *w)
 {
+    int ph_ = g_phase;
+    g_phase = PH_GE_PRIM;
     uint32_t op = w[0] >> 24;
     int tex = (op & 4) != 0, semi = (op & 2) != 0, raw = op & 1, sz = (op >> 3) & 3, k = 1;
     uint32_t col = w[0] & 0xFFFFFF, xy = w[k++], clut = 0;
@@ -827,7 +903,7 @@ void ge_rect(const uint32_t *w)
     case 2: ww = hh = 8; break;
     default: ww = hh = 16; break;
     }
-    if (!ww || !hh) return;
+    if (!ww || !hh) { g_phase = ph_; return; }
     int depth = (g_rs.texpage >> 7) & 3, mode = (g_rs.texpage >> 5) & 3;
     int box[4] = {x0, y0, x0 + ww - 1, y0 + hh - 1};
     GeVtx v[2] = {
@@ -836,6 +912,7 @@ void ge_rect(const uint32_t *w)
     };
     submit(GU_SPRITES, 2, v, box, tex, depth, (int)(g_rs.texpage & 0x1F) | (depth << 7), clut, raw, semi, mode,
            raster_rect, w, 0, 0);
+    g_phase = ph_;
 }
 
 void ge_line(int x0, int y0, uint32_t c0, int x1, int y1, uint32_t c1, int semi)
