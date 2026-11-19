@@ -9,7 +9,6 @@
 #include "prof.h"
 
 uint8_t g_ram[PSX_RAM_SIZE] __attribute__((aligned(64)));   /* fixed address: no pointer load per access */
-uint8_t g_scratch[1024] __attribute__((aligned(16)));
 uint32_t g_trace[TRACE_SIZE];
 uint32_t g_trace_pos;
 int32_t g_poll_budget = 1000;
@@ -54,6 +53,11 @@ static void dispatch(PsxCpu *c, uint32_t addr, const char *what)
 void rt_call(PsxCpu *c, uint32_t addr) { dispatch(c, addr, "call"); }
 void rt_call_ovl(PsxCpu *c, uint32_t addr) { dispatch(c, addr, "overlay call"); }
 void rt_jump(PsxCpu *c, uint32_t addr) { dispatch(c, addr, "jump"); }
+
+void rt_check_sp(uint32_t sp)
+{
+    if ((sp & 0x1FFFFFFFu) >= 0x00800000u) fatal(0, "stack pointer %08x outside main RAM", (unsigned)sp);
+}
 
 void rt_break(PsxCpu *c, uint32_t pc) { fatal(c, "break at %08x", (unsigned)pc); }
 void rt_invalid(PsxCpu *c, uint32_t pc, uint32_t w) { fatal(c, "invalid instruction %08x at %08x", (unsigned)w, (unsigned)pc); }
@@ -206,6 +210,8 @@ void rt_poll(PsxCpu *c)
     static uint64_t next_report;
     if (t >= next_report) {
         next_report = t + 2000000;
+        extern void memprof_dump(void);
+        memprof_dump();
         logf_("alive: tpos %u polls %u irqs %u dicr %08x in_irq %d ovl %d i_stat %03x i_mask %03x irq %d sr %08x last fns %08x %08x %08x %08x\n", (unsigned)g_trace_pos, (unsigned)g_n_polls, (unsigned)g_n_irqs, (unsigned)io_r32(0x1F8010F4u), g_in_irq, g_cur_overlay,
               (unsigned)g_i_stat, (unsigned)g_i_mask, g_irq_enabled, (unsigned)c->cop0[12],
               (unsigned)g_trace[(g_trace_pos - 4) & (TRACE_SIZE - 1)], (unsigned)g_trace[(g_trace_pos - 3) & (TRACE_SIZE - 1)],

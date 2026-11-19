@@ -110,6 +110,12 @@ int main(int argc, char **argv)
     memset(&g_cpu, 0, sizeof g_cpu);
     g_cpu.r[29] = 0x801FFF00u;            /* SYSTEM.CNF STACK */
     g_cpu.cop0[12] = 0x40000401u;          /* SR: COP2 enabled, IEc, IM2 */
+    /* C0 table entry 6 (exception handler, as in the real BIOS at 0xC80): PsyQ's libapi reads two instruction words
+     * from it (+112/+116, a lui/ori address pair) and patches the handler code at that address + 40. Point both
+     * into the unused kernel RAM above 0x400 - physical 0x000-0x3FF holds the scratchpad (gt2rt.h). */
+    mem_w32(0x674u + 6 * 4, 0x00000C80u);
+    mem_w32(0xC80u + 112, 0x3C1A0000u);    /* lui k0, 0x0000 */
+    mem_w32(0xC80u + 116, 0x375A1000u);    /* ori k0, k0, 0x1000 -> patches land at 0x1028 */
     run_program(&g_cpu);
     fatal(&g_cpu, "program finished");
     return 0;

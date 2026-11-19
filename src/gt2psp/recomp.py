@@ -27,6 +27,7 @@ from pathlib import Path
 
 from .mips import (K_BRANCH, K_CALL, K_JALR, K_JR, K_JUMP, K_TRAP, Insn, decode)
 from .program import LONGJMP, SETJMP, Module
+from .regflow import ALL, CALLEE_SAVED, RETURN_MASK, FuncFlow, solve
 
 OVL_WINDOW = (0x80010000, 0x8005D600)
 
@@ -72,18 +73,29 @@ OVERRIDE[("ovl0", 0x800295EC)] = "c->r[5] = g_widescreen ? (uint32_t)-80 : (uint
 OVERRIDE[("ovl0", 0x800295F0)] = "c->r[6] = g_widescreen ? 80u : 60u;"
 
 
-# Runtime functions that take the CPU but never touch c->r[] (GTE, coprocessor 0, division, interrupt polling):
-# calls to them need no register write-back (see registers_to_locals).
+# Runtime functions that take the CPU but never touch c->r[] (GTE, coprocessor 0, division, interrupt polling,
+# the widescreen clipper): calls to them need no register write-back (see registers_to_locals).
 _NO_FLUSH = {"POLL", "gte_cmd", "gte_read_data", "gte_write_data", "gte_read_ctrl", "gte_write_ctrl", "op_div",
-             "op_divu", "cop0_read", "cop0_write", "cop0_rfe"}
-_CALLEE_SAVED = {16, 17, 18, 19, 20, 21, 22, 23, 28, 29, 30}
-_RETURN_REGS = {2, 3, 29, 31}
+             "op_divu", "cop0_read", "cop0_write", "cop0_rfe", "wide_clip_track"}
+_CALLEE_SAVED = CALLEE_SAVED
 _REG = re.compile(r"c->r\[(\d+)\]")
 _WRITE = re.compile(r"c->r\[(\d+)\] = ")
 _CALL = re.compile(r"\b([A-Za-z_]\w*)\(c[,)]")
 
 
-def registers_to_locals(body: list[str]) -> list[str]:
+def _regs(mask: int) -> list[int]:
+    return [n for n in range(1, 32) if mask >> n & 1]
+
+
+def text_regs(body: list[str]) -> tuple[int, int]:
+    """Registers referenced / assigned in the raw (c->r[] based) body of a function."""
+    text = "\n".join(body)
+    used = sum(1 << int(n) for n in set(_REG.findall(text)) if n != "0")
+    written = sum(1 << int(n) for n in set(_WRITE.findall(text)) if n != "0")
+    return used, written
+
+
+def registers_to_locals(body: list[str], dirty: int = ALL, info: dict | None = None) -> list[str]:
     """Keep the PS1 registers of one function in C locals.
 
     The compiler cannot keep c->r[] in machine registers: every memory access has an out-of-line I/O path that
@@ -91,21 +103,37 @@ def registers_to_locals(body: list[str]) -> list[str]:
     locals, registers are written back to c->r[] only right before a call that takes the CPU (other recompiled
     functions, dispatch, BIOS, hooks) or a return, and reloaded after such a call. Interrupt polling needs neither:
     interrupt handlers save and restore the whole CPU state and do not depend on the interrupted registers.
+
+    Which registers are written back and reloaded at a call comes from the interprocedural register flow
+    (regflow.py, ``info``: symbol -> (IN, CLOB)): before a call the dirty registers the callee may read, after it the
+    caller-saved registers the callee may change. Unknown callees (dispatch, BIOS, setjmp) get all registers.
     """
-    text = "\n".join(body)
-    used = sorted({int(n) for n in _REG.findall(text)} - {0})
-    if not used:
+    info = info or {}
+    used_m, written_m = text_regs(body)
+    get = lambda name: info.get(name, (ALL, ALL))
+    # callee-saved registers that an earlier callee may have changed in c->r[] and a later one reads: keep a local
+    # (loaded at entry) so the original value can be written back
+    need = 0
+    for line in body:
+        for m in _CALL.finditer(line):
+            if m.group(1) not in _NO_FLUSH:
+                need |= get(m.group(1))[0]
+    extra = dirty & need & ~used_m & sum(1 << n for n in _CALLEE_SAVED)
+    locs = used_m | extra
+    if not locs:
         return body
-    written = sorted({int(n) for n in _WRITE.findall(text)} - {0})
-    flush = " ".join(f"c->r[{n}] = r{n};" for n in written)
-    # After a call only caller-saved registers can have changed: s0-s7, gp, sp and fp are preserved by the MIPS
-    # calling convention, which the game's compiled code and the PsyQ libraries follow (setjmp/longjmp unwind through
-    # the host and resume from c->r, which the flush before every call keeps exact).
-    reload = " ".join(f"r{n} = c->r[{n}];" for n in used if n not in _CALLEE_SAVED)
+    dirty &= locs
+
+    def flush(mask: int) -> str:
+        return " ".join(f"c->r[{n}] = r{n};" for n in _regs(mask & dirty))
+
+    def reload(mask: int) -> str:
+        return " ".join(f"r{n} = c->r[{n}];" for n in _regs(mask & locs) if n not in _CALLEE_SAVED)
+
     # A plain return (jr ra) only has to hand back what the caller can rely on: v0/v1, sp and ra. Callee-saved
     # registers were restored by the function itself (their values equal c->r[] from the entry), argument and
     # temporary registers are undefined after a call.
-    ret_flush = " ".join(f"c->r[{n}] = r{n};" for n in written if n in _RETURN_REGS)
+    ret_flush = " ".join(f"c->r[{n}] = r{n};" for n in _regs(written_m & RETURN_MASK))
 
     def wrap_calls(line: str) -> str:
         out, i = [], 0
@@ -134,22 +162,26 @@ def registers_to_locals(body: list[str]) -> list[str]:
             call = line[m.start():k + 1]
             rest = line[k + 1:]
             out.append(line[i:m.start()])
+            cin, cclob = get(name)
             if rest.lstrip().startswith("return;"):          # tail call
-                out.append(f"{{ {flush} {call} return; }}")
+                out.append(f"{{ {flush(cin | RETURN_MASK)} {call} return/**/; }}")
                 i = k + 1 + rest.index("return;") + len("return;")
             else:
-                out.append(f"{{ {flush} {call} {reload} }}")
+                out.append(f"{{ {flush(cin)} {call} {reload(cclob)} }}")
                 i = k + 1
 
     res = []
     for line in body:
         line = wrap_calls(_REG.sub(lambda m: "r" + m.group(1) if m.group(1) != "0" else "0u", line))
         # remaining plain returns (jr ra): write back first
-        if "return;" in line and "{ " + flush not in line:
+        if "return;" in line:
             line = line.replace("return;", f"{{ {ret_flush} return; }}")
         res.append(line)
-    decl = "    uint32_t " + ", ".join(f"r{n} = c->r[{n}]" for n in used) + ";"
+    decl = "    uint32_t " + ", ".join(f"r{n} = c->r[{n}]" for n in _regs(locs)) + ";"
     return [decl] + res
+
+
+_STACK_OPS = {"lb", "lbu", "lh", "lhu", "lw", "sb", "sh", "sw"}
 
 
 def sym(mod: str, addr: int) -> str:
@@ -180,6 +212,26 @@ class Translator:
         self.starts = {m.name: {f.start for f in m.funcs} for m in mods}
         self.sorted_starts = {m.name: sorted(self.starts[m.name]) for m in mods}
         self.stats = Stats()
+        self.mod_index = {m.name: i for i, m in enumerate(mods)}
+        self.fast_funcs = set()
+        self.fast_mem = False
+
+    def load_memprof(self, paths: list[Path]) -> None:
+        """Memory profiles (memprof.txt of GT2_MEMPROF runs, "<id> <flags>"): functions that accessed memory but
+        never I/O (flag 2) get unchecked RAM/scratchpad accessors. Functions never seen keep the checked ones."""
+        flags: dict[int, int] = {}
+        for p in paths:
+            for line in Path(p).read_text().split(chr(10)):
+                if line.strip() and not line.startswith("#"):
+                    a, f = line.split()
+                    flags[int(a, 16)] = flags.get(int(a, 16), 0) | int(f)
+        self.fast_funcs = {a for a, f in flags.items() if not f & 6}
+        low = sorted(a for a, f in flags.items() if f & 4)
+        if low:
+            print(f"memprof: {len(low)} functions access RAM 0x000-0x3FF (shared with the scratchpad):",
+                  " ".join(f"{a:08x}" for a in low[:20]))
+        print(f"memprof: {len(self.fast_funcs)} functions with unchecked memory accesses, "
+              f"{sum(1 for f in flags.values() if f & 2)} with I/O")
 
     # --- symbol resolution ------------------------------------------------------------------------------
     def resolve(self, mod: str, target: int) -> str | None:
@@ -204,6 +256,8 @@ class Translator:
         simm = f"(uint32_t){imm}" if imm >= 0 else f"(uint32_t)({imm})"
 
         def wr(dst: int, expr: str) -> str:
+            if dst == 29 and not (op in ("addi", "addiu") and rs == 29):
+                return f"c->r[29] = {expr}; rt_check_sp(c->r[29]);"
             return f"c->r[{dst}] = {expr};" if dst else f"(void)({expr});"
 
         if op == "nop":
@@ -269,30 +323,15 @@ class Translator:
         if op == "divu":
             return f"op_divu(c, {s_}, {t_});"
         ea = f"{s_} + {simm}"
-        if op == "lb":
-            return wr(rt, f"(uint32_t)(int32_t)(int8_t)mem_r8({ea})")
-        if op == "lbu":
-            return wr(rt, f"mem_r8({ea})")
-        if op == "lh":
-            return wr(rt, f"(uint32_t)(int32_t)(int16_t)mem_r16({ea})")
-        if op == "lhu":
-            return wr(rt, f"mem_r16({ea})")
-        if op == "lw":
-            return wr(rt, f"mem_r32({ea})")
-        if op == "lwl":
-            return wr(rt, f"op_lwl({ea}, {t_})")
-        if op == "lwr":
-            return wr(rt, f"op_lwr({ea}, {t_})")
-        if op == "sb":
-            return f"mem_w8({ea}, (uint8_t){t_});"
-        if op == "sh":
-            return f"mem_w16({ea}, (uint16_t){t_});"
-        if op == "sw":
-            return f"mem_w32({ea}, {t_});"
-        if op == "swl":
-            return f"op_swl({ea}, {t_});"
-        if op == "swr":
-            return f"op_swr({ea}, {t_});"
+        st = self.memory(op, rs, rt, s_, t_, ea, wr)
+        if st is not None and rs == 29 and op in _STACK_OPS:
+            # sp always points into main RAM (checked where sp is set from anything but sp + constant):
+            # stack accesses skip the scratchpad/I/O checks
+            st = st.replace("mem_", "stk_", 1)
+        elif st is not None and self.fast_mem:
+            st = st.replace("mem_", "ram_", 1)
+        if st is not None:
+            return st
         if op == "lwc2":
             return f"gte_write_data(c, {rt}, mem_r32({ea}));"
         if op == "swc2":
@@ -318,6 +357,34 @@ class Translator:
         if op == "break":
             return f"rt_break(c, 0x{ins.pc:08x}u);"
         return f"rt_invalid(c, 0x{ins.pc:08x}u, 0x{ins.word:08x}u);"
+
+    def memory(self, op, rs, rt, s_, t_, ea, wr):
+        """C statement for a CPU load/store, or None."""
+        if op == "lb":
+            return wr(rt, f"(uint32_t)(int32_t)(int8_t)mem_r8({ea})")
+        if op == "lbu":
+            return wr(rt, f"mem_r8({ea})")
+        if op == "lh":
+            return wr(rt, f"(uint32_t)(int32_t)(int16_t)mem_r16({ea})")
+        if op == "lhu":
+            return wr(rt, f"mem_r16({ea})")
+        if op == "lw":
+            return wr(rt, f"mem_r32({ea})")
+        if op == "lwl":
+            return wr(rt, f"op_lwl({ea}, {t_})")
+        if op == "lwr":
+            return wr(rt, f"op_lwr({ea}, {t_})")
+        if op == "sb":
+            return f"mem_w8({ea}, (uint8_t){t_});"
+        if op == "sh":
+            return f"mem_w16({ea}, (uint16_t){t_});"
+        if op == "sw":
+            return f"mem_w32({ea}, {t_});"
+        if op == "swl":
+            return f"op_swl({ea}, {t_});"
+        if op == "swr":
+            return f"op_swr({ea}, {t_});"
+        return None
 
     def cond(self, ins: Insn) -> str:
         s_, t_ = R(ins.rs), R(ins.rt)
@@ -356,7 +423,7 @@ class Translator:
         im = m.image
         name = sym(m.name, start)
         if start in REPLACE:
-            return ""
+            return None
         if start in WRAP:
             name += "_impl"
         insns = {pc: decode(im.word(pc), pc) for pc in range(start, end, 4)}
@@ -366,7 +433,11 @@ class Translator:
             if ins.kind in (K_BRANCH, K_JUMP) and ins.target is not None and start <= ins.target < end:
                 targets.add(ins.target)
         # restrict: c->r[] is only reached through c, so the compiler may keep registers across memory stores
-        out = [f"void {name}(PsxCpu *restrict c)", "{", f"    TRACE(0x{start:08x}u);"]
+        # fn_: function id for the memory profile build (module index << 24 | address), unused otherwise
+        fid = (self.mod_index[m.name] << 24) | (start & 0xFFFFFF)
+        out = [f"void {name}(PsxCpu *restrict c)", "{",
+               f"    TRACE(0x{start:08x}u); const uint32_t fn_ = 0x{fid:08x}u; (void)fn_;"]
+        self.fast_mem = fid in self.fast_funcs
         self.cur_mod = m.name
         pc = start
         while pc < end:
@@ -436,19 +507,30 @@ class Translator:
             pc += 8
         if falls_through:
             out.append(f"    {self.tail(m.name, end)}")
-        out = out[:3] + registers_to_locals(out[3:]) + ["}"]
         self.stats.funcs += 1
-        return "\n".join(out)
+        # register flow of this function (regflow.py); hooks read the registers they mention
+        extra_use = {}
+        for (hm, hpc), code in HOOKS.items():
+            if hm == m.name and start <= hpc < end:
+                extra_use[hpc] = sum(1 << int(n) for n in _REG.findall(code) if n != "0")
+        key = sym(m.name, start)
+        flow = FuncFlow(key, insns, start, end, labels_in, falls_through, lambda t: self.resolve(m.name, t),
+                        extra_use)
+        return key, out, flow
 
-    def module(self, m: Module) -> str:
-        parts = [f"/* Generated by gt2psp recomp from module {m.name}. Do not edit. */",
-                 '#include "gt2rt.h"', '#include "funcs.h"', ""]
-        for f in m.funcs:
-            src = self.function(m, f.start, f.end, f.falls_through)
-            if src:
-                parts.append(src)
-                parts.append("")
-        return "\n".join(parts)
+    def module(self, m: Module) -> list:
+        """Raw functions of a module: (symbol, lines with c->r[] registers, register flow)."""
+        return [r for f in m.funcs if (r := self.function(m, f.start, f.end, f.falls_through))]
+
+
+def finalize(m: Module, raw: list, IN: dict, CLOB: dict, D: dict) -> str:
+    info = {k: (IN[k], CLOB[k]) for k in IN}
+    parts = [f"/* Generated by gt2psp recomp from module {m.name}. Do not edit. */",
+             '#include "gt2rt.h"', '#include "funcs.h"', ""]
+    for key, out, _flow in raw:
+        parts.append("\n".join(out[:3] + registers_to_locals(out[3:], D[key], info) + ["}"]))
+        parts.append("")
+    return "\n".join(parts)
 
 
 def prototypes(mods: list[Module]) -> str:
@@ -485,11 +567,28 @@ def tables(mods: list[Module]) -> str:
     return "\n".join(out) + "\n"
 
 
-def generate(mods: list[Module], outdir: Path) -> Stats:
+def WRAP_KEYS(mods: list[Module]) -> list[str]:
+    return [sym(m.name, f.start) for m in mods for f in m.funcs if f.start in WRAP]
+
+
+def generate(mods: list[Module], outdir: Path, memprof: list[Path] | None = None) -> Stats:
     outdir.mkdir(parents=True, exist_ok=True)
     tr = Translator(mods)
+    if memprof:
+        tr.load_memprof(memprof)
+    raw = {m.name: tr.module(m) for m in mods}
+    flows, written = {}, {}
     for m in mods:
-        (outdir / f"{m.name}.c").write_text(tr.module(m), newline="\n")
+        for key, out, flow in raw[m.name]:
+            flows[key] = flow
+            written[key] = text_regs(out[3:])[1]
+    IN, CLOB, D = solve(flows, written)
+    for m in mods:                          # runtime wrappers (WRAP) read a0 themselves
+        for f in m.funcs:
+            if f.start in WRAP:
+                IN[sym(m.name, f.start)] |= 1 << 4
+    for m in mods:
+        (outdir / f"{m.name}.c").write_text(finalize(m, raw[m.name], IN, CLOB, D), newline="\n")
     (outdir / "funcs.h").write_text(prototypes(mods), newline="\n")
     (outdir / "tables.c").write_text(tables(mods), newline="\n")
     return tr.stats

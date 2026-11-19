@@ -99,7 +99,10 @@ def cmd_recomp(args: argparse.Namespace) -> None:
     from .recomp import generate
     mods = build(Path(args.files))
     out = Path(args.out)
-    st = generate(mods, out)
+    prof = [Path(p) for p in args.memprof] or sorted(Path("data/memprof").glob("*.txt"))
+    if args.no_memprof:
+        prof = []
+    st = generate(mods, out, prof)
     (out / "functions.json").write_text(to_json(mods))
     print(f"functions: {st.funcs}  instructions: {st.insns}  dynamic calls: {st.dyn_calls}  "
           f"dynamic jumps: {st.dyn_jumps}  branches in delay slots: {st.ds_branch}")
@@ -130,6 +133,10 @@ def main() -> None:
     r = sub.add_parser("recomp", help="translate all modules to C")
     r.add_argument("--files", default="extracted/files")
     r.add_argument("--out", default="generated")
+    r.add_argument("--memprof", action="append", default=[],
+                   help="memory profile (memprof.txt of a GT2_MEMPROF run); may be given several times "
+                        "(default: data/memprof/*.txt)")
+    r.add_argument("--no-memprof", action="store_true", help="all memory accesses checked (for profiling builds)")
     r.set_defaults(func=cmd_recomp)
     for name, fn, hlp in (("disasm", cmd_disasm, "disassemble main EXE or an overlay"),
                           ("analyze", cmd_analyze, "function discovery, BIOS stubs, I/O accesses")):

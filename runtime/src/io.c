@@ -1,5 +1,6 @@
 /* PS1 I/O area 0x1F801000-0x1F802FFF: interrupt controller, DMA, timers, GPU/SPU/CD ports.
  * Unhandled registers behave like plain memory and are logged on first access. */
+#include <stdio.h>
 #include <string.h>
 #include "rt.h"
 #include "gpu.h"
@@ -223,30 +224,78 @@ void io_w8(uint32_t a, uint32_t v) { io_write(a, v, 1); }
 void io_w16(uint32_t a, uint32_t v) { io_write(a, v, 2); }
 void io_w32(uint32_t a, uint32_t v) { io_write(a, v, 4); }
 
-/* Out-of-line scratchpad/I/O paths of the size-optimized accessors (gt2rt.h, GT2_SMALL_MEM). */
-uint32_t mem_slow_r8(uint32_t a) { uint32_t p = a & 0x1FFFFFFFu; return SCR_HIT(p) ? g_scratch[p & 0x3FF] : io_r8(a); }
-uint32_t mem_slow_r16(uint32_t a)
+/* Out-of-line paths of the checked accessors (gt2rt.h): low KB of RAM -> dummy area, scratchpad, I/O. */
+static uint8_t g_lowram[0x400] __attribute__((aligned(4)));
+static uint8_t *slow_ptr(uint32_t a)
 {
     uint32_t p = a & 0x1FFFFFFFu;
-    return SCR_HIT(p) ? *(uint16_t *)(g_scratch + (p & 0x3FF)) : io_r16(a);
+    if (RAM_HIT(p)) return g_lowram + (p & 0x3FF);
+    if (SCR_HIT(p)) return g_ram + (p & 0x3FF);
+    return 0;
 }
-uint32_t mem_slow_r32(uint32_t a)
+uint32_t mem_slow_r8(uint32_t a) { uint8_t *h = slow_ptr(a); return h ? *h : io_r8(a); }
+uint32_t mem_slow_r16(uint32_t a) { uint8_t *h = slow_ptr(a); return h ? *(uint16_t *)h : io_r16(a); }
+uint32_t mem_slow_r32(uint32_t a) { uint8_t *h = slow_ptr(a); return h ? *(uint32_t *)h : io_r32(a); }
+void mem_slow_w8(uint32_t a, uint32_t v) { uint8_t *h = slow_ptr(a); if (h) *h = (uint8_t)v; else io_w8(a, v); }
+void mem_slow_w16(uint32_t a, uint32_t v) { uint8_t *h = slow_ptr(a); if (h) *(uint16_t *)h = (uint16_t)v; else io_w16(a, v); }
+void mem_slow_w32(uint32_t a, uint32_t v) { uint8_t *h = slow_ptr(a); if (h) *(uint32_t *)h = v; else io_w32(a, v); }
+
+/* ---- memory profile (GT2_MEMPROF builds of the generated code, see gt2rt.h) ------------------------------- */
+
+#define MP_SLOTS 8192
+static uint32_t g_mp_fn[MP_SLOTS];
+static uint8_t g_mp_fl[MP_SLOTS];
+static int g_mp_used, g_mp_dirty;
+static uint8_t g_mp_scr[256];
+
+static void mp_note(uint32_t fn, uint32_t a, int w)
 {
+    static int n_low;
     uint32_t p = a & 0x1FFFFFFFu;
-    return SCR_HIT(p) ? *(uint32_t *)(g_scratch + (p & 0x3FF)) : io_r32(a);
+    int fl = 1;
+    if (SCR_HIT(p) && !g_mp_scr[(p & 0x3FF) >> 2]) { g_mp_scr[(p & 0x3FF) >> 2] = 1; g_mp_dirty = 1; }
+    if (!RAM_HIT(p) && !SCR_HIT(p)) fl |= 2;                    /* I/O, BIOS ROM, expansion, cache control */
+    else if (RAM_HIT(p) && (p & (PSX_RAM_SIZE - 1)) < 0x400) {    /* low RAM: shared with the scratchpad */
+        fl |= 4;
+        if (n_low < 200) { n_low++; logf_("memprof: fn %08x %s low RAM %08x\n", (unsigned)fn, w ? "writes" : "reads", (unsigned)a); }
+    }
+    uint32_t h = (fn * 0x9E3779B1u) >> 19;
+    for (int i = 0; i < MP_SLOTS; i++) {
+        uint32_t j = (h + i) & (MP_SLOTS - 1);
+        if (g_mp_fn[j] == fn) {
+            if ((g_mp_fl[j] | fl) != g_mp_fl[j]) { g_mp_fl[j] |= fl; g_mp_dirty = 1; }
+            return;
+        }
+        if (!g_mp_fn[j]) { g_mp_fn[j] = fn; g_mp_fl[j] = fl; g_mp_used++; g_mp_dirty = 1; return; }
+    }
 }
-void mem_slow_w8(uint32_t a, uint32_t v)
+
+uint32_t memprof_r(uint32_t a, uint32_t fn, int size)
 {
-    uint32_t p = a & 0x1FFFFFFFu;
-    if (SCR_HIT(p)) g_scratch[p & 0x3FF] = (uint8_t)v; else io_w8(a, v);
+    mp_note(fn, a, 0);
+    return size == 1 ? mem_r8(a) : size == 2 ? mem_r16(a) : mem_r32(a);
 }
-void mem_slow_w16(uint32_t a, uint32_t v)
+
+void memprof_w(uint32_t a, uint32_t v, uint32_t fn, int size)
 {
-    uint32_t p = a & 0x1FFFFFFFu;
-    if (SCR_HIT(p)) *(uint16_t *)(g_scratch + (p & 0x3FF)) = (uint16_t)v; else io_w16(a, v);
+    mp_note(fn, a, 1);
+    if (size == 1) mem_w8(a, (uint8_t)v); else if (size == 2) mem_w16(a, (uint16_t)v); else mem_w32(a, v);
 }
-void mem_slow_w32(uint32_t a, uint32_t v)
+
+/* Called from the poll loop every few seconds: memprof.txt = "<module << 24 | address> <flags>" per function. */
+void memprof_dump(void)
 {
-    uint32_t p = a & 0x1FFFFFFFu;
-    if (SCR_HIT(p)) *(uint32_t *)(g_scratch + (p & 0x3FF)) = v; else io_w32(a, v);
+    if (!g_mp_dirty) return;
+    g_mp_dirty = 0;
+    char path[300];
+    snprintf(path, sizeof path, "%smemprof.txt", g_basedir);
+    FILE *f = fopen(path, "w");
+    if (!f) return;
+    fprintf(f, "# scratchpad words used:");
+    for (int j = 0; j < 256; j++)
+        if (g_mp_scr[j]) fprintf(f, " %03x", j * 4);
+    fprintf(f, "\n");
+    for (int j = 0; j < MP_SLOTS; j++)
+        if (g_mp_fn[j]) fprintf(f, "%08x %d\n", (unsigned)g_mp_fn[j], g_mp_fl[j]);
+    fclose(f);
 }

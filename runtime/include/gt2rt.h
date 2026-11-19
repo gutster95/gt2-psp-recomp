@@ -33,7 +33,9 @@ extern const int g_num_modules;
 
 #define PSX_RAM_SIZE 0x200000u
 extern uint8_t g_ram[];         /* 2 MB main RAM (static array: address is a link-time constant) */
-extern uint8_t g_scratch[1024]; /* 0x1F800000 data cache used as scratchpad */
+/* The 1 KB scratchpad (0x1F800000, the R3000A data cache) lives in the first KB of g_ram (physical 0x000-0x3FF,
+ * BIOS RAM on the PS1): then g_ram + (a & 0x1FFFFF) reaches RAM and scratchpad alike (the ram_* accessors). */
+#define g_scratch g_ram
 
 uint32_t io_r8(uint32_t a);
 uint32_t io_r16(uint32_t a);
@@ -46,95 +48,72 @@ void io_w32(uint32_t a, uint32_t v);
 #define RAM_HIT(p) ((p) < 0x00800000u)
 #define SCR_HIT(p) (((p) & 0xFFFFFC00u) == 0x1F800000u)
 
-#ifdef GT2_SMALL_MEM
-/* Size-optimized accessors: only the RAM check is inline; scratchpad and I/O go through one out-of-line function
- * each (the PSP's 16 KB instruction cache makes smaller generated code faster). */
+/* Checked accesses: inline fast path for main RAM above 0x400, everything else out of line - the low KB of RAM
+ * (redirected to a separate dummy area: physical 0x000-0x3FF holds the scratchpad, see above, and on the PS1 it is
+ * BIOS RAM that the game only reaches through null pointers), the scratchpad and I/O. Scratchpad accesses at
+ * addresses known at compile time stay inline. */
 uint32_t mem_slow_r8(uint32_t a);
 uint32_t mem_slow_r16(uint32_t a);
 uint32_t mem_slow_r32(uint32_t a);
 void mem_slow_w8(uint32_t a, uint32_t v);
 void mem_slow_w16(uint32_t a, uint32_t v);
 void mem_slow_w32(uint32_t a, uint32_t v);
-GT2_INLINE uint32_t mem_r8(uint32_t a)
-{
-    uint32_t p = a & 0x1FFFFFFFu;
-    if (__builtin_expect(RAM_HIT(p), 1)) return g_ram[p & (PSX_RAM_SIZE - 1)];
-    return mem_slow_r8(a);
-}
-GT2_INLINE uint32_t mem_r16(uint32_t a)
-{
-    uint32_t p = a & 0x1FFFFFFFu;
-    if (__builtin_expect(RAM_HIT(p), 1)) return *(uint16_t *)(g_ram + (p & (PSX_RAM_SIZE - 1)));
-    return mem_slow_r16(a);
-}
-GT2_INLINE uint32_t mem_r32(uint32_t a)
-{
-    uint32_t p = a & 0x1FFFFFFFu;
-    if (__builtin_expect(RAM_HIT(p), 1)) return *(uint32_t *)(g_ram + (p & (PSX_RAM_SIZE - 1)));
-    return mem_slow_r32(a);
-}
-GT2_INLINE void mem_w8(uint32_t a, uint8_t v)
-{
-    uint32_t p = a & 0x1FFFFFFFu;
-    if (__builtin_expect(RAM_HIT(p), 1)) { g_ram[p & (PSX_RAM_SIZE - 1)] = v; return; }
-    mem_slow_w8(a, v);
-}
-GT2_INLINE void mem_w16(uint32_t a, uint16_t v)
-{
-    uint32_t p = a & 0x1FFFFFFFu;
-    if (__builtin_expect(RAM_HIT(p), 1)) { *(uint16_t *)(g_ram + (p & (PSX_RAM_SIZE - 1))) = v; return; }
-    mem_slow_w16(a, v);
-}
-GT2_INLINE void mem_w32(uint32_t a, uint32_t v)
-{
-    uint32_t p = a & 0x1FFFFFFFu;
-    if (__builtin_expect(RAM_HIT(p), 1)) { *(uint32_t *)(g_ram + (p & (PSX_RAM_SIZE - 1))) = v; return; }
-    mem_slow_w32(a, v);
-}
-#else
-GT2_INLINE uint32_t mem_r8(uint32_t a)
-{
-    uint32_t p = a & 0x1FFFFFFFu;
-    if (__builtin_expect(RAM_HIT(p), 1)) return g_ram[p & (PSX_RAM_SIZE - 1)];
-    if (SCR_HIT(p)) return g_scratch[p & 0x3FF];
-    return io_r8(a);
-}
-GT2_INLINE uint32_t mem_r16(uint32_t a)
-{
-    uint32_t p = a & 0x1FFFFFFFu;
-    if (__builtin_expect(RAM_HIT(p), 1)) return *(uint16_t *)(g_ram + (p & (PSX_RAM_SIZE - 1)));
-    if (SCR_HIT(p)) return *(uint16_t *)(g_scratch + (p & 0x3FF));
-    return io_r16(a);
-}
-GT2_INLINE uint32_t mem_r32(uint32_t a)
-{
-    uint32_t p = a & 0x1FFFFFFFu;
-    if (__builtin_expect(RAM_HIT(p), 1)) return *(uint32_t *)(g_ram + (p & (PSX_RAM_SIZE - 1)));
-    if (SCR_HIT(p)) return *(uint32_t *)(g_scratch + (p & 0x3FF));
-    return io_r32(a);
-}
-GT2_INLINE void mem_w8(uint32_t a, uint8_t v)
-{
-    uint32_t p = a & 0x1FFFFFFFu;
-    if (__builtin_expect(RAM_HIT(p), 1)) { g_ram[p & (PSX_RAM_SIZE - 1)] = v; return; }
-    if (SCR_HIT(p)) { g_scratch[p & 0x3FF] = v; return; }
-    io_w8(a, v);
-}
-GT2_INLINE void mem_w16(uint32_t a, uint16_t v)
-{
-    uint32_t p = a & 0x1FFFFFFFu;
-    if (__builtin_expect(RAM_HIT(p), 1)) { *(uint16_t *)(g_ram + (p & (PSX_RAM_SIZE - 1))) = v; return; }
-    if (SCR_HIT(p)) { *(uint16_t *)(g_scratch + (p & 0x3FF)) = v; return; }
-    io_w16(a, v);
-}
-GT2_INLINE void mem_w32(uint32_t a, uint32_t v)
-{
-    uint32_t p = a & 0x1FFFFFFFu;
-    if (__builtin_expect(RAM_HIT(p), 1)) { *(uint32_t *)(g_ram + (p & (PSX_RAM_SIZE - 1))) = v; return; }
-    if (SCR_HIT(p)) { *(uint32_t *)(g_scratch + (p & 0x3FF)) = v; return; }
-    io_w32(a, v);
-}
+#define RAM_FAST(p) (RAM_HIT(p) && ((p) & (PSX_RAM_SIZE - 0x400u)))
+#define SCR_CONST(p) (__builtin_constant_p(p) && SCR_HIT(p))
+#define MEM_READ(bits, T)                                                                                  \
+    GT2_INLINE uint32_t mem_r##bits(uint32_t a)                                                            \
+    {                                                                                                      \
+        uint32_t p = a & 0x1FFFFFFFu;                                                                      \
+        if (__builtin_expect(RAM_FAST(p), 1)) return *(T *)(g_ram + (p & (PSX_RAM_SIZE - 1)));             \
+        if (SCR_CONST(p)) return *(T *)(g_ram + (p & 0x3FF));                                              \
+        return mem_slow_r##bits(a);                                                                        \
+    }
+#define MEM_WRITE(bits, T)                                                                                 \
+    GT2_INLINE void mem_w##bits(uint32_t a, T v)                                                           \
+    {                                                                                                      \
+        uint32_t p = a & 0x1FFFFFFFu;                                                                      \
+        if (__builtin_expect(RAM_FAST(p), 1)) { *(T *)(g_ram + (p & (PSX_RAM_SIZE - 1))) = v; return; }    \
+        if (SCR_CONST(p)) { *(T *)(g_ram + (p & 0x3FF)) = v; return; }                                     \
+        mem_slow_w##bits(a, v);                                                                            \
+    }
+MEM_READ(8, uint8_t)
+MEM_READ(16, uint16_t)
+MEM_READ(32, uint32_t)
+MEM_WRITE(8, uint8_t)
+MEM_WRITE(16, uint16_t)
+MEM_WRITE(32, uint32_t)
 
+
+/* Unchecked accesses to RAM or scratchpad (no I/O): used for stack accesses (base register sp: sp always points into
+ * main RAM - the recompiler emits rt_check_sp() wherever sp is set from anything but sp + constant) and for all
+ * accesses of functions that were never seen touching I/O registers (memory profile, see recomp.py). */
+void rt_check_sp(uint32_t sp);
+#define RAMP(a) (g_ram + ((a) & (PSX_RAM_SIZE - 1)))
+GT2_INLINE uint32_t ram_r8(uint32_t a) { return *RAMP(a); }
+GT2_INLINE uint32_t ram_r16(uint32_t a) { return *(uint16_t *)RAMP(a); }
+GT2_INLINE uint32_t ram_r32(uint32_t a) { return *(uint32_t *)RAMP(a); }
+GT2_INLINE void ram_w8(uint32_t a, uint8_t v) { *RAMP(a) = v; }
+GT2_INLINE void ram_w16(uint32_t a, uint16_t v) { *(uint16_t *)RAMP(a) = v; }
+GT2_INLINE void ram_w32(uint32_t a, uint32_t v) { *(uint32_t *)RAMP(a) = v; }
+#define stk_r8 ram_r8
+#define stk_r16 ram_r16
+#define stk_r32 ram_r32
+#define stk_w8 ram_w8
+#define stk_w16 ram_w16
+#define stk_w32 ram_w32
+
+/* Memory profile build (generated code compiled with -DGT2_MEMPROF): every access records which function (fn_, a
+ * constant in each generated function: module << 24 | address) touched RAM, I/O or the low 1 KB of RAM. */
+uint32_t memprof_r(uint32_t a, uint32_t fn, int size);
+void memprof_w(uint32_t a, uint32_t v, uint32_t fn, int size);
+#ifdef GT2_MEMPROF
+static const uint32_t fn_ = 0;        /* runtime helpers; generated functions shadow it */
+#define mem_r8(a) memprof_r((a), fn_, 1)
+#define mem_r16(a) memprof_r((a), fn_, 2)
+#define mem_r32(a) memprof_r((a), fn_, 4)
+#define mem_w8(a, v) memprof_w((a), (v), fn_, 1)
+#define mem_w16(a, v) memprof_w((a), (v), fn_, 2)
+#define mem_w32(a, v) memprof_w((a), (v), fn_, 4)
 #endif
 
 /* Unaligned word access (little endian semantics of the R3000A). */
