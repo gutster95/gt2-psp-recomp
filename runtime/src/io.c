@@ -11,6 +11,8 @@
 #include "prof.h"
 #include "mdec.h"
 #include "ge.h"
+#include "raster.h"
+#include <pspkernel.h>
 
 uint32_t g_i_stat, g_i_mask;
 /* indexed by address - 0x1F800000, so offsets below read like the hardware addresses */
@@ -81,6 +83,19 @@ static void gpu_walk(uint32_t madr)
     int bl = 0, pk = 0;
     for (;;) {
         uint32_t hdr = *(uint32_t *)(g_ram + a);
+        if (!wl) {
+            /* Runs of empty ordering table entries (most of the race's 2 x 8515): a tight loop, ~4x faster than the
+             * general path. Stops at a packet, the list end, the HUD layer's entry and after 0x40000 links. */
+            uint32_t skipped = 0;
+            while (!(hdr >> 24) && !(hdr & 0x800000) && a != hud_ot && skipped < 0x40000) {
+                a = hdr & 0x1FFFFC;
+                hdr = *(uint32_t *)(g_ram + a);
+                skipped++;
+            }
+            g_ot_entries += skipped;
+            g_ot_empty += skipped;
+            guard += skipped;
+        }
         uint32_t n = hdr >> 24;
         g_ot_entries++;
         if (wl && n) {
@@ -110,6 +125,57 @@ static void gpu_walk(uint32_t madr)
 
 /* Deterministic benchmark of the GPU -> GE path: the first big display list after vblank <gebench> is executed 100
  * more times (same RAM contents, so the same primitives); logs the time per pass without and with the GE's work. */
+/* settings.txt gedump=<vblank>: the first big display list after that vblank is saved with PS1 RAM, VRAM and the
+ * drawing state to geframe.bin; gebenchfile=1 replays that file at startup (ge_bench_file) - the same frame for
+ * every build, so GPU path changes can be compared exactly (the live gebench frame depends on timing). */
+int g_gedump, g_gebenchfile;
+typedef struct { uint32_t magic, madr, draw_mode; int overlay; RasterState rs; } GeFrameHdr;
+#define GEFRAME_MAGIC 0x47454631u
+
+static void gpu_dump(uint32_t madr)
+{
+    char path[300];
+    snprintf(path, sizeof path, "%sgeframe.bin", g_basedir);
+    FILE *f = fopen(path, "wb");
+    if (!f) return;
+    ge_sync();
+    GeFrameHdr h = {GEFRAME_MAGIC, madr, gpu_draw_mode(), g_cur_overlay, g_rs};
+    fwrite(&h, sizeof h, 1, f);
+    fwrite(g_ram, 1, PSX_RAM_SIZE, f);
+    fwrite(g_vram, 2, 1024 * 512, f);
+    fclose(f);
+    logf_("gedump: frame at vblank %u saved (madr %06x)\n", (unsigned)g_vblank_count, (unsigned)madr);
+}
+
+static void gpu_bench_passes(uint32_t madr, uint32_t prims);
+
+void ge_bench_file(void)
+{
+    if (!g_gebenchfile) return;
+    char path[300];
+    snprintf(path, sizeof path, "%sgeframe.bin", g_basedir);
+    FILE *f = fopen(path, "rb");
+    if (!f) { logf_("gebenchfile: no geframe.bin\n"); return; }
+    GeFrameHdr h;
+    int ok = fread(&h, sizeof h, 1, f) == 1 && h.magic == GEFRAME_MAGIC &&
+             fread(g_ram, 1, PSX_RAM_SIZE, f) == PSX_RAM_SIZE && fread(g_vram, 2, 1024 * 512, f) == 1024 * 512;
+    fclose(f);
+    if (!ok) { logf_("gebenchfile: bad geframe.bin\n"); return; }
+    sceKernelDcacheWritebackAll();
+    ge_vram_written(0, 0, 1024, 512);
+    int ovl = g_cur_overlay;
+    g_cur_overlay = h.overlay;
+    g_rs = h.rs;
+    gpu_set_draw_mode(h.draw_mode);
+    extern uint32_t g_ge_prims;
+    uint32_t p0 = g_ge_prims;
+    gpu_walk(h.madr);
+    ge_sync();
+    gpu_bench_passes(h.madr, g_ge_prims - p0);
+    g_cur_overlay = ovl;
+    memset(g_ram, 0, PSX_RAM_SIZE);
+}
+
 static void gpu_bench(uint32_t madr)
 {
     extern uint32_t g_ge_prims;
@@ -118,18 +184,28 @@ static void gpu_bench(uint32_t madr)
     ge_sync();
     uint32_t prims = g_ge_prims - p0;
     if (prims < 500) return;                    /* not a race frame */
+    if (g_gedump) { g_gedump = 0; gpu_dump(madr); return; }
     g_gebench = 0;
-    static const int order[] = {1, 2, 3, 7, 8, 9, 4, 5, 6, 0};
+    gpu_bench_passes(madr, prims);
+}
+
+static void gpu_bench_passes(uint32_t madr, uint32_t prims)
+{
+    static const int order[] = {1, 2, 3, 7, 8, 9, 4, 10, 11, 12, 13, 5, 6, 14, 0};
     for (unsigned si = 0; si < sizeof order / sizeof order[0]; si++) {
         g_bench_stage = order[si];
-        uint64_t t0 = now_us(), tw = 0;
+        /* each pass from an empty list, the GE's tail after the CPU work (tg) measured separately: tw is CPU only */
+        uint64_t t0 = now_us(), tw = 0, tg = 0;
         for (int i = 0; i < 100; i++) {
             uint64_t a = now_us();
             gpu_walk(madr);
-            tw += now_us() - a;
+            uint64_t b = now_us();
+            ge_sync();
+            tw += b - a;
+            tg += now_us() - b;
         }
-        ge_sync();
         uint64_t t1 = now_us();
+        logf_("gebench stage %d: GE tail %u us per pass\n", g_bench_stage, (unsigned)(tg / 100));
         extern uint32_t g_memo_hits, g_memo_miss, g_clut_conv;
         logf_("gebench: memo %u hits %u misses, %u CLUT conversions (100 passes)\n", (unsigned)g_memo_hits,
               (unsigned)g_memo_miss, (unsigned)g_clut_conv);
@@ -150,7 +226,8 @@ static void dma_run(int ch)
             PHASE_BEGIN(PH_GPU);
             g_gpu_lists++;
             uint64_t t0 = now_us();
-            if (g_gebench && g_vblank_count >= (uint32_t)g_gebench) gpu_bench(madr);
+            if ((g_gebench && g_vblank_count >= (uint32_t)g_gebench) || (g_gedump && g_vblank_count >= (uint32_t)g_gedump))
+                gpu_bench(madr);
             gpu_walk(madr);
             g_gpu_us += now_us() - t0;
             PHASE_END();

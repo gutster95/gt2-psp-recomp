@@ -16,7 +16,10 @@ typedef struct {
     uint32_t clut_word;
 } PrimInfo;
 
-extern RasterState g_rs;
+/* The drawing state lives in the PSP's scratchpad (on-chip, 0x10000-0x13FFF): it is read for every primitive, and
+ * in the data cache the streams of display list, vertex and packet data kept evicting it. */
+#define g_rs (*(RasterState *)0x00010100u)
+void raster_state_init(void);
 
 void raster_polygon(const uint32_t *w);
 void raster_rect(const uint32_t *w);

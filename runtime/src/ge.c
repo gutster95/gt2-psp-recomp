@@ -57,19 +57,39 @@ static inline void cmd(uint32_t c, uint32_t a) { *gu_list->current++ = (c << 24)
  * vertices still sitting in the cache. */
 #define VARENA (512 * 1024)
 static uint8_t g_varena[VARENA] __attribute__((aligned(65536)));
-static uint32_t g_vtop, g_vflushed;
+/* ---- scratchpad --------------------------------------------------------------------------------------------
+ * The PSP's 16 KB on-chip scratchpad (0x10000) holds the state read for every primitive: in the data cache (16 KB,
+ * 2-way) the streams of PS1 packets, vertices and display list kept evicting it (GPU path -11% for the GE state and
+ * the drawing state alone). 0x10000 GE state cache (S), 0x10100 drawing state (raster.h g_rs), 0x10200 GeHot. */
+typedef struct {
+    uint32_t vtop, vflushed;                 /* vertex arena fill / written back */
+    uint32_t page_ver[32], page_dirty;       /* VRAM page versions (lazy, see touch) */
+    uint32_t ge_pending;                     /* pages the GE has drawn into since the last sync */
+    int16_t pend_box[32][4];                 /* per pending page: bounding box (x0, y0, x1, y1) of the GE's drawing */
+    int disp_rect[4], disp_dirty;            /* 1x presentation: displayed VRAM rectangle, written since the blit */
+    uint16_t blk_dirty[16];                  /* CLUT block versions (lazy) */
+    uint32_t blk_ver[256];
+} GeHot;
+#define H (*(GeHot *)0x00010200u)
+#define g_vtop H.vtop
+#define g_vflushed H.vflushed
 int g_varena_uncached;   /* settings.txt varena_uncached=1: vertices written uncached (14 vs 24 ns per word on the
                           * PSP-3000 for sequential stores), no writeback needed (experiment, default off) */
+int g_varena_edram = 1;  /* vertex arena in the free eDRAM tail: the GE reads vertices without the main bus (race
+                          * GPU path -7%); settings.txt varena_edram=0: arena in RAM */
+#define VARENA_EDRAM_OFF 0x1CC000u              /* after display buffer 2 (FB_OFF(2) + 0x44000): 208 KB */
+static uint32_t g_varena_size = VARENA;
 static inline void *valloc_v(int bytes)
 {
     void *p = g_varena + g_vtop;
-    if (g_varena_uncached) p = (void *)((uintptr_t)p | 0x40000000u);
+    if (g_varena_edram) p = (void *)(0x40000000u + EDRAM + VARENA_EDRAM_OFF + g_vtop);
+    else if (g_varena_uncached) p = (void *)((uintptr_t)p | 0x40000000u);
     g_vtop += ((uint32_t)bytes + 15) & ~15u;
     return p;
 }
 static inline void vflush(void)
 {
-    if (!g_varena_uncached && g_vtop > g_vflushed) {
+    if (!g_varena_uncached && !g_varena_edram && g_vtop > g_vflushed) {
         uint32_t a = g_vflushed & ~63u;
         sceKernelDcacheWritebackRange(g_varena + a, g_vtop - a);
         g_vflushed = g_vtop;
@@ -90,16 +110,34 @@ static inline int sx11(uint32_t v) { return ((int32_t)(v << 21)) >> 21; }
 
 /* ---- VRAM page versions ------------------------------------------------------------------------------------ */
 
-static uint32_t g_page_ver[32];
+/* Versions are bumped lazily: touch() only sets dirty bits (a few ORs per primitive - bumping every covered page
+ * and block was ~1.7 us per primitive, 3 ms of a heavy race frame), a reader folds them in first. A version read
+ * after any write since the previous read differs, which is all the caches need. */
+#define g_page_ver_ H.page_ver
+#define g_page_dirty H.page_dirty
+static inline uint32_t page_ver(int pg)
+{
+    uint32_t bit = 1u << pg;
+    if (g_page_dirty & bit) { g_page_dirty &= ~bit; g_page_ver_[pg]++; }
+    return g_page_ver_[pg];
+}
 /* Finer versions for CLUTs, 64x32 blocks: GT2 keeps palettes in rows 480-511, in the same 64x256 pages as the frame
  * buffers, so page versions changed with every primitive drawn and each CLUT was converted again on every use. */
-static uint32_t g_blk_ver[16 * 16];
+#define g_blk_ver_ H.blk_ver
+#define g_blk_dirty H.blk_dirty
 static inline int clut_blk(int clx, int cly) { return (cly >> 5) * 16 + ((clx & 1023) >> 6); }
-static uint32_t g_ge_pending;           /* pages the GE has drawn into since the last sync */
-static int16_t g_pend_box[32][4];       /* per pending page: bounding box (x0, y0, x1, y1) of the GE's drawing */
+static inline uint32_t blk_ver(int b)
+{
+    uint32_t bit = 1u << (b & 15);
+    if (g_blk_dirty[b >> 4] & bit) { g_blk_dirty[b >> 4] &= (uint16_t)~bit; g_blk_ver_[b]++; }
+    return g_blk_ver_[b];
+}
+#define g_ge_pending H.ge_pending
+#define g_pend_box H.pend_box
 
 /* 1x presentation: the displayed VRAM rectangle and whether anything was written into it since the last blit */
-static int g_disp_rect[4] = {-1, -1, -1, -1}, g_disp_dirty = 1;
+#define g_disp_rect H.disp_rect
+#define g_disp_dirty H.disp_dirty
 
 static void touch(int x0, int y0, int x1, int y1, int by_ge)   /* inclusive */
 {
@@ -109,14 +147,14 @@ static void touch(int x0, int y0, int x1, int y1, int by_ge)   /* inclusive */
     if (x1 > 1023) x1 = 1023;
     if (y1 > 511) y1 = 511;
     if (x0 > x1 || y0 > y1) return;
+    uint32_t cols = (2u << (x1 >> 6)) - (1u << (x0 >> 6));       /* 64-pixel columns x0..x1 */
+    for (int py = y0 >> 8; py <= y1 >> 8; py++) g_page_dirty |= cols << (py * 16);
+    for (int by = y0 >> 5; by <= y1 >> 5; by++) g_blk_dirty[by] |= (uint16_t)cols;
+    if (!by_ge) return;
     for (int py = y0 >> 8; py <= y1 >> 8; py++)
         for (int px = x0 >> 6; px <= x1 >> 6; px++) {
             int pg = py * 16 + px;
-            g_page_ver[pg]++;
-            for (int by = (py * 256 > y0 ? py * 256 : y0) >> 5, bye = (py * 256 + 255 < y1 ? py * 256 + 255 : y1) >> 5;
-                 by <= bye; by++)
-                g_blk_ver[by * 16 + px]++;
-            if (by_ge) {
+            {
                 int16_t *b = g_pend_box[pg];
                 if (!(g_ge_pending & (1u << pg))) { b[0] = (int16_t)x0; b[1] = (int16_t)y0; b[2] = (int16_t)x1; b[3] = (int16_t)y1; }
                 else {
@@ -138,12 +176,14 @@ void ge_vram_written(int x, int y, int w, int h)
 
 /* ---- GE state cache ---------------------------------------------------------------------------------------- */
 
-static struct {
+typedef struct {
     int tex, tfx, blend, atest, stencil, dither, tex_psm, filter;
     int sc[4];
     uintptr_t tex_ptr;
     const void *clut;
-} S;
+} GeState;
+/* in the PSP's scratchpad (16 KB on-chip RAM at 0x10000, never misses): see raster.h g_rs */
+#define S (*(GeState *)0x00010000u)
 
 /* -1 is a valid value for blend (opaque), so "unknown" is -99 there; everything else uses -1. The GE keeps its
  * state across display lists, so after a restart nothing may be assumed. */
@@ -263,7 +303,7 @@ static const uint32_t *clut_get(int clx, int cly, int n)
         }
     }
     uint32_t key = (n == 256 ? 0x80000000u : 0) | ((uint32_t)cly << 10) | (uint32_t)clx | 0x40000000u;
-    uint32_t ver = g_blk_ver[clut_blk(clx, cly)] ^ (g_blk_ver[clut_blk(clx + n - 1, cly)] * 0x9E3779B1u);
+    uint32_t ver = blk_ver(clut_blk(clx, cly)) ^ (blk_ver(clut_blk(clx + n - 1, cly)) * 0x9E3779B1u);
     int set = (int)((key * 0x9E3779B1u) >> (32 - CLUT_SET_BITS));
     ClutEnt *e = &g_cluts[set * CLUT_WAYS], *victim = 0;
     for (int i = 0; i < CLUT_WAYS; i++)
@@ -340,7 +380,7 @@ static const uint8_t *tex_page(int depth, int tpx, int tpy)
         slot_of[mi] = (int8_t)(s - g_slots);
         fresh = 1;
     }
-    uint32_t v0 = g_page_ver[p0], v1 = np > 1 ? g_page_ver[p1] : 0;
+    uint32_t v0 = page_ver(p0), v1 = np > 1 ? page_ver(p1) : 0;
     if (fresh || s->ver[0] != v0 || s->ver[1] != v1) {
         int w = 64 * np;
         if (tpx + w > 1024) w = 1024 - tpx;
@@ -443,12 +483,14 @@ static void setup_texture(int depth, int page, uint32_t clut)
 {
     /* Same texture and CLUT as the previous primitive, nothing written into their pages and no GE sync since then
      * (a sync recycles the CLUT arena): the GE state is already right. Most consecutive primitives share them. */
-    static struct { int depth, page; uint32_t clut, sync, v[4]; const void *cl; uintptr_t tex; Slot *slot; } M = {-1};
+    typedef struct { int depth, page; uint32_t clut, sync, v[4]; const void *cl; uintptr_t tex; Slot *slot; } Memo;
+    Memo *const mp = (Memo *)0x00010B00u;   /* scratchpad, after GeHot; depth = -1 from ge_init */
+#define M (*mp)
     int clx = (int)(clut & 0x3F) * 16, cly = (int)(clut >> 6) & 0x1FF, cn = depth ? 256 : 16;
     int tp0 = ((page >> 4) & 1) * 16 + (page & 15), tp1 = (tp0 & 16) | ((tp0 + 1) & 15);
     int cp0 = clut_blk(clx, cly), cp1 = clut_blk(clx + cn - 1, cly);
-    if (M.depth == depth && M.page == page && M.clut == clut && M.sync == g_ge_syncs && M.v[0] == g_page_ver[tp0] &&
-        M.v[1] == g_page_ver[tp1] && M.v[2] == g_blk_ver[cp0] && M.v[3] == g_blk_ver[cp1] && S.clut == M.cl &&
+    if (M.depth == depth && M.page == page && M.clut == clut && M.sync == g_ge_syncs && M.v[0] == page_ver(tp0) &&
+        M.v[1] == page_ver(tp1) && M.v[2] == blk_ver(cp0) && M.v[3] == blk_ver(cp1) && S.clut == M.cl &&
         S.tex_ptr == M.tex && S.tex_psm == depth && !g_hires) {
         M.slot->use = ++g_use_clock;                     /* keep the LRU order of the texture page cache */
         g_memo_hits++;
@@ -457,8 +499,9 @@ static void setup_texture(int depth, int page, uint32_t clut)
     g_memo_miss++;
     setup_texture_full(depth, page, clut);
     M.depth = depth; M.page = page; M.clut = clut; M.sync = g_ge_syncs;
-    M.v[0] = g_page_ver[tp0]; M.v[1] = g_page_ver[tp1]; M.v[2] = g_blk_ver[cp0]; M.v[3] = g_blk_ver[cp1];
+    M.v[0] = page_ver(tp0); M.v[1] = page_ver(tp1); M.v[2] = blk_ver(cp0); M.v[3] = blk_ver(cp1);
     M.cl = S.clut; M.tex = S.tex_ptr; M.slot = g_last_slot;
+#undef M
 }
 
 static void setup_texture_full(int depth, int page, uint32_t clut)
@@ -746,11 +789,15 @@ static void draw(int prim, int n, const GeVtx *v, int tex, int semi, int mode, i
 {
     set_mask();
     set_dither();
+    if (g_bench_stage == 10) { check_list(); return; }
     if (vis1 && (fk < 0 || g_frames_read || g_frames_forced)) {
         bind(-1);
+        if (g_bench_stage == 11) { check_list(); return; }
         set_filter(g_hud_mode && tex);      /* squeezed 16:9 HUD: filtered instead of dropping texel columns */
         set_scissor(g_rs.clip_x0, g_rs.clip_y0, g_rs.clip_x1, g_rs.clip_y1);
+        if (g_bench_stage == 12) { check_list(); return; }
         GeVtx *gv = valloc_v(n * (int)sizeof(GeVtx));
+        if (g_bench_stage == 13) { check_list(); return; }
         memcpy(gv, v, n * sizeof(GeVtx));
         if (g_bench_stage == 5) { check_list(); return; }
         passes(prim, VFMT, n, gv, tex, semi, mode);
@@ -856,17 +903,18 @@ static void submit(int prim, int n, const GeVtx *v, int *box, int tex, int depth
         return;
     }
     if (g_bench_stage == 3) return;
-    if (g_vtop > VARENA - 1024) { g_sync_why = 9; ge_sync(); }
+    if (g_vtop > g_varena_size - 1024) { g_sync_why = 9; ge_sync(); }
     ge_begin();
     if (fk >= 0) prepare_frame(fk);
     int ph = g_phase;
     g_phase = PH_GE_TEX;
     if (tex) { setup_texture(depth, page, clut); set_tfx(raw); }
     set_tex(tex);
-    if (g_bench_stage == 4 || g_bench_stage >= 7) { check_list(); return; }
+    if (g_bench_stage == 4 || (g_bench_stage >= 7 && g_bench_stage <= 9)) { check_list(); return; }
     g_phase = PH_GE_DRAW;
     draw(prim, n, v, tex, semi, mode, vis1, fk, is3d && g_widescreen, xyj);
     g_phase = PH_GE_TOUCH;
+    if (g_bench_stage >= 10 && g_bench_stage <= 14) { g_phase = ph; return; }
     if (vis1) touch(box[0], box[1], box[2], box[3], 1);
     g_phase = ph;
 }
@@ -1308,6 +1356,12 @@ static void selftest_3d(void)
 
 void ge_init(void)
 {
+    if (g_varena_edram) g_varena_size = 0x200000u - VARENA_EDRAM_OFF;
+    memset((void *)0x00010000u, 0, 0x1000);         /* scratchpad: S, g_rs (raster_state_init), GeHot, memo */
+    raster_state_init();
+    for (int i = 0; i < 4; i++) g_disp_rect[i] = -1;
+    g_disp_dirty = 1;
+    *(int *)0x00010B00u = -1;                        /* texture memo: depth -1 = empty */
     /* Lines of the zero-initialized BSS (display list, vertex arena) may still be dirty in the data cache; written
      * back later they would overwrite what was written through the uncached mirror (PPSSPP has no cache). */
     sceKernelDcacheWritebackInvalidateAll();

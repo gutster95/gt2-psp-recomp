@@ -511,3 +511,23 @@ over 200000 random register sets incl. extreme values - 0 mismatches):
   (FLAG assumed dead across calls/returns): 66 of 202 commands. Checked at run time with `-DGT2_FLAG_POISON`
   (FLAG-free commands write an impossible FLAG, all 112 reads check it): 0 hits in attract race and menus.
 * Race (attract, 16:9, PSP-3000): 25.0 -> 26.6-26.9 fps.
+
+## 2026-11-19 - GPU path: deterministic frame benchmark, scratchpad state, vertex arena in eDRAM
+
+* `settings.txt gedump=<vblank>` saves the first big display list after that vblank with PS1 RAM, VRAM and drawing
+  state to `geframe.bin`; `gebenchfile=1` replays it at startup (100 passes per stage, each from an empty list, GE
+  tail measured separately). Identical numbers run to run - the live gebench frame depended on timing, and the
+  race fps differ by +-1.5 between builds from code layout alone.
+* The CPU is the bottleneck (GE tail after the CPU work ~80 us). Costs behaved like cache misses everywhere: the
+  16 KB 2-way data cache is swept by the streams of PS1 packets, vertices and display list, evicting the state read
+  for every primitive. Measured on one heavy race frame (1806 primitives):
+  * 15.4 ms (old method, list-full syncs inside) / 13.3 ms CPU (new method) at the start;
+  * `touch()` with lazy page/block versions (dirty bits, bumped when read): touch 3 ms -> ~0.6 ms;
+  * GE state cache `S`, drawing state `g_rs`, page versions/dirty bits/pending boxes, arena pointers and the
+    texture memo in the PSP scratchpad (16 KB on-chip at 0x10000, never misses);
+  * vertex arena in the free eDRAM tail (0x1CC000-0x1FFFFF, 208 KB, uncached writes, no writeback): 13.3 -> 12.45 ms.
+    The display list there too was slower (80 KB left -> more mid-frame syncs), it stays in RAM.
+  * OT walk: tight loop over empty entries (17000 per race frame): 0.80 ms -> 0.44 ms per heavy frame... the walk
+    stage alone went 802 -> 440 ns per primitive.
+* Race (attract, 16:9): 26.7 -> 27.4 (scratchpad, walk, lazy versions) -> 27.8 fps (eDRAM arena).
+* Not worth it: `varena_uncached` (RAM, uncached), fewer stall-address updates (slower: the GE then starts late).

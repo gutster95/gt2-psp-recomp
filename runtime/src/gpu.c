@@ -29,10 +29,14 @@ static uint32_t g_draw_mode;
 static uint32_t g_prims, g_prims_frame;
 static int g_log_prims;
 
+uint32_t gpu_draw_mode(void) { return g_draw_mode; }
+void gpu_set_draw_mode(uint32_t m) { g_draw_mode = m; g_status = (g_status & ~0x7FFu) | (m & 0x7FF); }
+
 void gpu_init(void)
 {
     sceDisplaySetMode(0, 480, 272);
     memset((void *)0x44000000u, 0, 0x1CC000);       /* PS1 VRAM + three display buffers */
+    raster_state_init();
     g_vram = (uint16_t *)0x44000000u;
     ge_init();
 }

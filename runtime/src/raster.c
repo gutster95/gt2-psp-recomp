@@ -7,7 +7,12 @@
 #include "gpu.h"
 #include "raster.h"
 
-RasterState g_rs = { .clip_x1 = 1023, .clip_y1 = 511 };
+void raster_state_init(void)
+{
+    memset(&g_rs, 0, sizeof g_rs);
+    g_rs.clip_x1 = 1023;
+    g_rs.clip_y1 = 511;
+}
 
 static inline int sx11(uint32_t v) { return ((int32_t)(v << 21)) >> 21; }
 
