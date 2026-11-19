@@ -58,15 +58,18 @@ static inline void cmd(uint32_t c, uint32_t a) { *gu_list->current++ = (c << 24)
 #define VARENA (512 * 1024)
 static uint8_t g_varena[VARENA] __attribute__((aligned(65536)));
 static uint32_t g_vtop, g_vflushed;
+int g_varena_uncached;   /* settings.txt varena_uncached=1: vertices written uncached (14 vs 24 ns per word on the
+                          * PSP-3000 for sequential stores), no writeback needed (experiment, default off) */
 static inline void *valloc_v(int bytes)
 {
     void *p = g_varena + g_vtop;
+    if (g_varena_uncached) p = (void *)((uintptr_t)p | 0x40000000u);
     g_vtop += ((uint32_t)bytes + 15) & ~15u;
     return p;
 }
 static inline void vflush(void)
 {
-    if (g_vtop > g_vflushed) {
+    if (!g_varena_uncached && g_vtop > g_vflushed) {
         uint32_t a = g_vflushed & ~63u;
         sceKernelDcacheWritebackRange(g_varena + a, g_vtop - a);
         g_vflushed = g_vtop;
