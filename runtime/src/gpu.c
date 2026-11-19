@@ -470,6 +470,13 @@ stats:
             }
             logf_("ge syncs by reason (other fill upload readback copy list clut-drawn clut-full sw vtx present):%s\n", buf);
         }
+        {
+            extern uint64_t g_wait_us[3]; extern uint32_t g_wait_n[3];
+            logf_("waits: scanout %u x %u ms, present %u x %u ms, ge sync %u x %u ms\n",
+                  (unsigned)g_wait_n[0], (unsigned)(g_wait_us[0] / 1000), (unsigned)g_wait_n[1], (unsigned)(g_wait_us[1] / 1000),
+                  (unsigned)g_wait_n[2], (unsigned)(g_wait_us[2] / 1000));
+            memset(g_wait_us, 0, sizeof g_wait_us); memset(g_wait_n, 0, sizeof g_wait_n);
+        }
         extern uint32_t g_wide_clipped, g_wide_tris;
         logf_("widescreen clipper: %u polygons, %u triangles (totals)\n", (unsigned)g_wide_clipped,
               (unsigned)g_wide_tris);

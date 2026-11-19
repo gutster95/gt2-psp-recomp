@@ -206,6 +206,8 @@ static int g_clut_transparent;   /* the CLUT of the current texture has transpar
 static uint32_t g_clut_clock;
 
 static void ge_begin(void);
+uint64_t g_wait_us[3]; uint32_t g_wait_n[3];   /* debug: time in scanout wait, 1x present wait, GE sync */
+extern uint64_t g_vblank_sync_us;              /* present_scaled */
 
 void ge_sync(void)
 {
@@ -213,7 +215,7 @@ void ge_sync(void)
     int ph = g_phase;
     g_phase = PH_GE_SYNC;
     sceGuFinish();
-    sceGuSync(0, 0);
+    { uint64_t t = now_us(); sceGuSync(0, 0); g_wait_us[2] += now_us() - t; g_wait_n[2]++; }
     g_phase = ph;
     g_open = 0;
     g_vtop = 0;
@@ -617,10 +619,14 @@ static int is_3d_xy(uint32_t xy) { return xy_find(xy) >= 0; }
  * stretches the 320-pixel picture to the full 16:9 screen. 2D HUD elements would be stretched too: while gpu_walk
  * reports the race HUD (g_hud_mode), each element is squeezed by 3/4 towards its anchor - the left or right edge of
  * the drawing area for elements entirely in its outer 30%, the centre for all others - so it keeps its 4:3 shape and
- * edge elements keep their distance to the screen edge. Elements wider than half the screen (fades, banners) stay as they are. Text is drawn glyph by
- * glyph: a glyph next to the previous element on the same line belongs to the same string and takes its anchor. */
+ * edge elements keep their distance to the screen edge. Elements wider than half the screen (fades, banners) stay
+ * as they are. Elements that touch or overlap within a frame form a group with one anchor (text drawn glyph by glyph,
+ * the minimap's segments and their black shadow pass): deciding per primitive tore the minimap apart where it
+ * crosses the 30% limit. */
 int g_hud_mode;
-static int run_lo, run_hi, run_y0, run_y1, run_anchor, run_valid;
+#define HUD_GROUPS 32
+static struct { int16_t lo, hi, y0, y1, anchor; } g_hg[HUD_GROUPS];
+static int g_nhg;
 
 static uint32_t g_race_vblank;
 static int g_race_valid;
@@ -631,7 +637,7 @@ void ge_hud_begin(void)
     g_race_vblank = g_vblank_count;
     g_race_valid = 1;
     g_hud_mode = g_hud_anchor;
-    run_valid = 0;
+    g_nhg = 0;
 }
 
 /* 16:9 presentation: in races (race HUD layer seen in the last half second) or everywhere with widescreen_menus */
@@ -644,17 +650,29 @@ static void hud_squeeze(GeVtx *v, int n, int *box)
 {
     int x0 = g_rs.clip_x0, w = g_rs.clip_x1 - g_rs.clip_x0 + 1;
     int lo = box[0], hi = box[2], anchor;
-    if (hi - lo > w / 2) { run_valid = 0; return; }
-    if (run_valid && box[1] <= run_y1 && box[3] >= run_y0 && lo <= run_hi + 12 && hi >= run_lo - 12) {
-        anchor = run_anchor;
-        if (lo < run_lo) run_lo = lo;
-        if (hi > run_hi) run_hi = hi;
+    if (hi - lo > w / 2) return;
+    int g = -1;
+    for (int i = g_nhg - 1; i >= 0; i--)          /* touching or overlapping (glyph gaps up to 12 pixels) */
+        if (box[1] <= g_hg[i].y1 + 2 && box[3] >= g_hg[i].y0 - 2 && lo <= g_hg[i].hi + 12 && hi >= g_hg[i].lo - 12) {
+            g = i;
+            break;
+        }
+    if (g >= 0) {
+        anchor = g_hg[g].anchor;
+        if (lo < g_hg[g].lo) g_hg[g].lo = (int16_t)lo;
+        if (hi > g_hg[g].hi) g_hg[g].hi = (int16_t)hi;
+        if (box[1] < g_hg[g].y0) g_hg[g].y0 = (int16_t)box[1];
+        if (box[3] > g_hg[g].y1) g_hg[g].y1 = (int16_t)box[3];
     } else {
         /* edge anchors only for elements entirely in the outer 30% (lap times, records, tachometer); everything else
          * is squeezed towards the centre, so centred texts and menus keep their layout (by the element's centre with
          * 40/60% limits, "BRONZE PRIZE!" fell apart and the pause menu moved right) */
         anchor = (hi - x0) * 10 <= w * 3 ? x0 : (lo - x0) * 10 >= w * 7 ? x0 + w : x0 + w / 2;
-        run_lo = lo; run_hi = hi; run_y0 = box[1]; run_y1 = box[3]; run_anchor = anchor; run_valid = 1;
+        if (g_nhg < HUD_GROUPS) {
+            g = g_nhg++;
+            g_hg[g].lo = (int16_t)lo; g_hg[g].hi = (int16_t)hi; g_hg[g].y0 = (int16_t)box[1]; g_hg[g].y1 = (int16_t)box[3];
+            g_hg[g].anchor = (int16_t)anchor;
+        }
     }
     /* x' = anchor + 3/4 (x - anchor), rounded to the nearest pixel */
     for (int i = 0; i < n; i++) v[i].x = (int16_t)(anchor + (((v[i].x - anchor) * 3 + 2) >> 2));
@@ -672,7 +690,12 @@ static int g_swap_vcount;
 static void wait_scanout_done(int target)
 {
     if (target == g_prev_shown) {
-        if (sceDisplayGetVcount() == (unsigned)g_swap_vcount) sceDisplayWaitVblankStart();
+        if (sceDisplayGetVcount() == (unsigned)g_swap_vcount) {
+            uint64_t t = now_us();
+            sceDisplayWaitVblankStart();
+            g_vblank_sync_us = now_us();      /* re-phase the emulated vblank (core.c), as in present_scaled */
+            g_wait_us[0] += g_vblank_sync_us - t; g_wait_n[0]++;
+        }
         g_prev_shown = -1;
     }
 }
@@ -1163,7 +1186,11 @@ static void present_scaled(int tgt, int dx, int dy, int w, int h, int blank)
     if (on_screen) {                /* redrawing the shown buffer: the game's queued drawing first, then the clear and
                                      * blit right at the start of the vblank (no double buffer left for 1x screens) */
         ge_sync();
-        if (!sceDisplayIsVblank()) sceDisplayWaitVblankStart();
+        if (!sceDisplayIsVblank()) {
+            uint64_t t = now_us();
+            sceDisplayWaitVblankStart();
+            g_wait_us[1] += now_us() - t; g_wait_n[1]++;
+        }
         g_vblank_sync_us = now_us();
     }
     ge_begin();

@@ -556,3 +556,9 @@ over 200000 random register sets incl. extreme values - 0 mismatches):
   removed the VRAM stripe at the right edge of the 368-pixel menus.
 * Ideas for later (user): menus truly in 16:9 would need per-screen relayout (fixed 4:3 compositions); texture
   replacement with assets converted on the PC (hash lookup, hi-res 2D path) - biggest gain for the font.
+* **Loading took 15-30 s again** (menu -> race): the same phase lock as in the afternoon, in the second vblank wait
+  (scanout wait before drawing into the buffer shown before the last swap, 120 x ~15 ms per 2 s; new `waits:` log
+  line). That wait now re-phases the emulated vblank too. PSP: race overlay 142 sectors 2385 -> 242 ms, scanout waits
+  ~1 ms.
+* 16:9 HUD: elements that touch or overlap within a frame form a group with one anchor (32 groups per frame; was
+  only the previous glyph on the same line).
