@@ -163,6 +163,7 @@ static void snapshot(void)
     n++;
 }
 
+extern int g_bench_stage;
 static void exec(const uint32_t *f)
 {
     uint32_t c = f[0], op = c >> 24;
@@ -235,6 +236,7 @@ static void exec(const uint32_t *f)
                   (unsigned)f[2], (unsigned)f[3], (unsigned)f[4], (unsigned)g_rs.texpage);
         }
         if (g_use_ge) {
+            if (g_bench_stage == 15) return;     /* benchmark: dispatch only */
             if (op < 0x40) ge_polygon(f);
             else if (op < 0x60) {
                 int gour = op & 0x10;
@@ -373,6 +375,21 @@ void rt_vsync_enter(int waits)
     while (b < 6 && w >= lim[b]) b++;
     g_work_hist[b]++;
     if (w > g_work_max) g_work_max = w;
+    {   /* deterministic per-race statistics: the same frames of a replay in every run (frame index since the race
+         * overlay was loaded), "race work" every 300 frames: average work and frames over 33 ms */
+        extern uint32_t g_overlay_loads;
+        static uint32_t seen = ~0u, idx, n_over;
+        static uint64_t sum;
+        if (g_cur_overlay != 0) return;
+        if (seen != g_overlay_loads) { seen = g_overlay_loads; idx = 0; sum = 0; n_over = 0; }
+        sum += w;
+        n_over += w > 33366;
+        if (++idx % 300 == 0) {
+            logf_("race work: frames %u-%u avg %u us, %u over 33.4 ms\n", (unsigned)(idx - 300), (unsigned)(idx - 1),
+                  (unsigned)(sum / 300), (unsigned)n_over);
+            sum = 0; n_over = 0;
+        }
+    }
 }
 void rt_vsync_leave(void) { if (g_vs_wait) g_vs_leave = now_us(); }
 
@@ -490,9 +507,10 @@ stats:
             logf_("ge syncs by reason (other fill upload readback copy list clut-drawn clut-full sw vtx present):%s\n", buf);
         }
         {
-            extern uint64_t g_wait_us[3]; extern uint32_t g_wait_n[3]; extern uint32_t g_vtop_max;
-            logf_("vertex arena: max %u bytes per batch\n", (unsigned)g_vtop_max);
-            g_vtop_max = 0;
+            extern uint64_t g_wait_us[3]; extern uint32_t g_wait_n[3]; extern uint32_t g_vtop_max, g_list_max;
+            logf_("vertex arena: max %u bytes per batch, display list max %u bytes\n", (unsigned)g_vtop_max,
+                  (unsigned)g_list_max);
+            g_vtop_max = g_list_max = 0;
             logf_("waits: scanout %u x %u ms, present %u x %u ms, ge sync %u x %u ms\n",
                   (unsigned)g_wait_n[0], (unsigned)(g_wait_us[0] / 1000), (unsigned)g_wait_n[1], (unsigned)(g_wait_us[1] / 1000),
                   (unsigned)g_wait_n[2], (unsigned)(g_wait_us[2] / 1000));

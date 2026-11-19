@@ -600,3 +600,16 @@ over 200000 random register sets incl. extreme values - 0 mismatches):
   (sceGuSetCallback) never fired on the PSP-3000. Display buffer 2 is unused at 1x, so the vertex ring runs from
   there to the end of eDRAM (480 KB; a race frame needs up to 168 KB).
 * PSP race: GE sync waits 97 ms per 2 s -> 0; frames over 33 ms 51.6% -> 45.6%, 28.5 fps.
+
+## 2026-11-20 - Inline MVMVA variants, deterministic race work statistics
+
+* `race work` log line: average frame work and frames over 33.4 ms per 300 race frames, counted from the race overlay
+  load (`build/racework.sh <label>` runs the attract race 150 s on the PSP and sums the blocks). Blocks still differ
+  by up to 4 ms between runs of the same build (frame alignment / replay timing), the average over ~2700 frames is the
+  usable number.
+* MVMVA variants inline in the generated code (~60 instructions each after folding; `GT2_GTE_MV_OUTLINE` for the
+  outlined ones): race frames 300-2999 average 34.5 -> 33.4 ms.
+* GE frame benchmark, finer stages (1428 primitives, CPU us per pass): walk 671, + dispatch (stage 15, new) 1391,
+  + decode incl. rects/lines (stage 2 now stops them too) 3066, + clip 3769, + texture setup 6808, + draw state/
+  emit 10153, full 10164. `list_uncached=1` (display list through the uncached mirror): no difference. The runtime
+  with -Os instead of -O2: 12.6 ms (slower).

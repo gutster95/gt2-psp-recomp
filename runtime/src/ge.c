@@ -52,6 +52,7 @@ static int g_open, g_shown;
  * ge_sync waits for it too, so every CPU access to VRAM still sees the finished picture. CLUT slots stay protected
  * until the next real sync (the batch number only advances there). */
 int g_async_present = 1;
+int g_list_uncached = 0;   /* settings.txt list_uncached: display list written through the uncached mirror (no write-allocate misses) */
 static int g_async;                        /* async presentation active (decided in ge_init) */
 static int g_list_idx;                     /* list buffer of the current/next list */
 static int g_inflight;                     /* a kicked list may still be running */
@@ -232,7 +233,7 @@ static int g_clut_transparent;   /* the CLUT of the current texture has transpar
 static uint32_t g_clut_clock;
 
 static void ge_begin(void);
-uint32_t g_vtop_max;                           /* debug: highest vertex arena fill at a sync */
+uint32_t g_vtop_max, g_list_max;                           /* debug: highest vertex arena fill at a sync */
 uint64_t g_wait_us[3]; uint32_t g_wait_n[3];   /* debug: time in scanout wait, 1x present wait, GE sync */
 extern uint64_t g_vblank_sync_us;              /* present_scaled */
 
@@ -285,7 +286,7 @@ static void ge_begin(void)
 {
     if (g_open) return;
     if (g_inflight) ge_poll_async();             /* before a new queue id can reuse the in-flight list's */
-    sceGuStart(GU_DIRECT, g_list[g_list_idx]);
+    sceGuStart(GU_DIRECT, g_list_uncached ? (void *)((uintptr_t)g_list[g_list_idx] | 0x40000000u) : (void *)g_list[g_list_idx]);
     sceGuDrawBufferList(GU_PSM_5551, (void *)0, 1024);
     sceGuSendCommandi(0x15, 0);                          /* drawing region: the whole PS1 VRAM */
     sceGuSendCommandi(0x16, (511 << 10) | 1023);
@@ -352,6 +353,7 @@ static void ge_kick(int show)
     g_inflight = 0;
     if (!g_open) { g_pending_show = show; apply_swap(); return; }
     g_infl_qid = (int)ge_list_executed[0];
+    { uint32_t lb = (uint32_t)sceGuCheckList(); if (lb > g_list_max) g_list_max = lb; }
     sceGuFinish();
     g_kicks++;
     g_inflight = 1;
@@ -1121,6 +1123,7 @@ void ge_rect(const uint32_t *w)
         {(uint16_t)(u0 + ww), (uint16_t)(v0 + hh), 0xFF000000u | col, (int16_t)(x0 + ww), (int16_t)(y0 + hh), 0, 0},
     };
     if (g_hud_mode) hud_squeeze(v, 2, box);
+    if (g_bench_stage == 2) return;
     submit(GU_SPRITES, 2, v, box, tex, depth, (int)(g_rs.texpage & 0x1F) | (depth << 7), clut, raw, semi, mode,
            raster_rect, w, 0, 0);
     g_phase = ph_;
@@ -1138,6 +1141,7 @@ void ge_line(int x0, int y0, uint32_t c0, int x1, int y1, uint32_t c1, int semi)
     };
     int n3d = is_3d_xy(((uint32_t)y0r << 16) | (x0r & 0xFFFF)) + is_3d_xy(((uint32_t)y1r << 16) | (x1r & 0xFFFF));
     if (g_hud_mode) hud_squeeze(v, 2, box);
+    if (g_bench_stage == 2) return;
     submit(GU_LINES, 2, v, box, 0, 0, 0, 0, 0, semi, (g_rs.texpage >> 5) & 3, 0, 0, n3d >= 2, 0);
 }
 

@@ -192,7 +192,7 @@ static void gpu_bench(uint32_t madr)
 
 static void gpu_bench_passes(uint32_t madr, uint32_t prims)
 {
-    static const int order[] = {1, 2, 3, 7, 8, 9, 4, 10, 11, 12, 13, 5, 6, 14, 0};
+    static const int order[] = {1, 15, 2, 3, 7, 8, 9, 4, 10, 11, 12, 13, 5, 6, 14, 0};
     for (unsigned si = 0; si < sizeof order / sizeof order[0]; si++) {
         g_bench_stage = order[si];
         /* each pass from an empty list, the GE's tail after the CPU work (tg) measured separately: tw is CPU only */

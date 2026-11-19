@@ -127,6 +127,7 @@ void run_program(PsxCpu *c)
 
 /* ---- overlay loader hook ------------------------------------------------------------------------------ */
 
+uint32_t g_overlay_loads;   /* bumped by every overlay load (gpu.c race work statistics) */
 void f_8005dad8(PsxCpu *c)
 {
     int n = (int)c->r[4];
@@ -134,6 +135,7 @@ void f_8005dad8(PsxCpu *c)
           (unsigned)g_vblank_count);
     f_8005dad8_impl(c);
     g_cur_overlay = n;
+    g_overlay_loads++;
 }
 
 /* ---- time & interrupts ---------------------------------------------------------------------------------- */

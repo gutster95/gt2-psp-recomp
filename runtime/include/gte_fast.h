@@ -347,7 +347,13 @@ void gte_mvmva_nf(PsxCpu *c, uint32_t insn);
 GTE_MVMVA_VARIANTS(GTE_DECL_V)
 void gte_rtps_k(PsxCpu *c); void gte_rtps_k_nf(PsxCpu *c);      /* 0x4a180001 */
 void gte_rtpt_k(PsxCpu *c); void gte_rtpt_k_nf(PsxCpu *c);      /* 0x4a280030 */
+/* MVMVA inline (~60 instructions per variant): the compiler keeps the vector in registers and can hoist the matrix
+ * loads out of the game's vertex loops (c is restrict); GT2_GTE_MV_OUTLINE calls the out-of-line variants instead. */
+#ifdef GT2_GTE_MV_OUTLINE
 #define GTE_CASE_V(k) case 0x##k##u: fl ? gte_mv_##k(c) : gte_mv_##k##_nf(c); return 1;
+#else
+#define GTE_CASE_V(k) case 0x##k##u: gte_mvmva_fast2(c, 0x##k##u, fl, 1); return 1;
+#endif
 GT2_INLINE int gte_variant(PsxCpu *c, uint32_t insn, int fl)
 {
     switch (insn) {
