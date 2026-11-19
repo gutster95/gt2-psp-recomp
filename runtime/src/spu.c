@@ -334,13 +334,18 @@ static void mix_xa(int16_t *out, int n)
 
 #define SPU_BLOCK (BLOCK / SPU_DIV)
 
+/* Shutdown (HOME -> quit): the audio threads leave their loops and release their channels, see main.c. */
+volatile int g_quit;
+volatile int g_audio_running;
+
 static int spu_thread(SceSize args, void *argp)
 {
     (void)args; (void)argp;
     static int16_t buf[2][SPU_BLOCK * 2] __attribute__((aligned(64)));
     int r = sceAudioSRCChReserve(SPU_BLOCK, 44100 / SPU_DIV, 2);
     if (r < 0) { logf_("spu: no SRC channel (%08x)\n", (unsigned)r); return 0; }
-    for (int k = 0;; k ^= 1) {
+    g_audio_running++;
+    for (int k = 0; !g_quit; k ^= 1) {
         uint64_t t0 = now_us();
         mix_spu(buf[k], SPU_BLOCK);
         {   /* statistics: mixer CPU time per ~5 s and number of active voices */
@@ -360,6 +365,9 @@ static int spu_thread(SceSize args, void *argp)
         }
         sceAudioSRCOutputBlocking(PSP_AUDIO_VOLUME_MAX, buf[k]);
     }
+    for (int i = 0; i < 50 && sceAudioOutput2GetRestSample() > 0; i++) sceKernelDelayThread(1000);
+    sceAudioSRCChRelease();
+    g_audio_running--;
     return 0;
 }
 
@@ -369,6 +377,7 @@ static int xa_thread(SceSize args, void *argp)
     static int16_t buf[2][BLOCK * 2] __attribute__((aligned(64)));
     int ch = sceAudioChReserve(PSP_AUDIO_NEXT_CHANNEL, BLOCK, PSP_AUDIO_FORMAT_STEREO);
     if (ch < 0) { logf_("spu: no audio channel (%08x)\n", (unsigned)ch); return 0; }
+    g_audio_running++;
     /* debug: audiodump.txt next to the EBOOT -> the first 3 minutes of the music output as raw 44.1 kHz audio.raw */
     char path[300];
     snprintf(path, sizeof path, "%saudiodump.txt", g_basedir);
@@ -380,7 +389,7 @@ static int xa_thread(SceSize args, void *argp)
         dump = fopen(path, "wb");
         dump_blocks = 44100 * 180 / BLOCK;
     }
-    for (int k = 0;; k ^= 1) {
+    for (int k = 0; !g_quit; k ^= 1) {
         mix_xa(buf[k], BLOCK);
         if (dump && dump_blocks > 0) {
             fwrite(buf[k], 4, BLOCK, dump);
@@ -388,6 +397,10 @@ static int xa_thread(SceSize args, void *argp)
         }
         sceAudioOutputBlocking(ch, PSP_AUDIO_VOLUME_MAX, buf[k]);
     }
+    if (dump) fclose(dump);
+    for (int i = 0; i < 50 && sceAudioGetChannelRestLen(ch) > 0; i++) sceKernelDelayThread(1000);
+    sceAudioChRelease(ch);
+    g_audio_running--;
     return 0;
 }
 

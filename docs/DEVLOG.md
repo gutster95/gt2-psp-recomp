@@ -469,3 +469,23 @@ is a stable 30 fps.
 * Menu screens with 3D views (car selection, post-race, GT mode) keep 4:3 by default; `widescreen_menus=1` turns
   their patches on and presents every screen 16:9 (emulator-with-cheat behaviour).
 * PPSSPP: race replay 16:9 with a 4:3-shaped HUD at the screen edges, no missing geometry at the edges, 30 fps.
+
+## 2026-11-19 - Real PSP: slow menu transitions, HOME quit hang, CLUT cache thrashing
+
+The user reported the PSP "hanging" when going into a menu, and HOME -> quit hanging as well.
+* **Loading took 15-20 s** (log: exactly 120 rt_poll calls per 2 s, i.e. one per vblank). 1x screens without a
+  double buffer (loading screens, title menus) present with `sceDisplayWaitVblankStart`; the emulated vblank runs
+  on its own 16683 us clock at the same rate as the PSP's display, so an unlucky phase stays locked and every
+  emulated vblank blocked the game for almost a whole frame. CD sectors are handed out per poll, so loading crawled
+  at ~60 sectors/s. Fix: after such a wait, the emulated vblank re-phases itself to come 1.2 ms before the next real
+  one (`g_vblank_sync_us`, ge.c/core.c), and the wait is skipped when the display is already in vblank. PSP: title
+  menus 42000 polls per 2 s (was 120), loading into GT mode ~4.5 s (was ~20 s).
+* **HOME quit hang**: quitting now goes through `quit_game()` (main.c): the audio threads leave their loops and
+  release their channels (SRC + XA), the game thread parks in rt_poll, the log is closed with a bounded semaphore
+  wait, then `sceKernelExitGame`. Verified on the PSP with `autoexit` (both audio threads stopped, PSPLink back).
+* **CLUT cache thrashing** (GT mode map 23 ms per frame, 40 GE syncs per frame): GT2 keeps palettes in rows
+  480-511, inside the same 64x256 VRAM pages as the frame buffers, so the page version changed with every primitive
+  and every CLUT use converted again into a new way until the set was full -> sync. CLUT validity now uses versions
+  of 64x32 blocks (`g_blk_ver`), the cache grew to 64 sets x 8 ways. Map: 13 ms per frame, 0 CLUT syncs.
+* Race (attract, PSP-3000, no profiler): 16:9 25.0 fps, 4:3 25.7 fps.
+* The memory stick still had `PROFILE.TXT` (1 kHz sampling profiler at top priority) - removed.

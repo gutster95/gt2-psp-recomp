@@ -63,12 +63,24 @@ static void load_settings(void)
 }
 
 /* HOME button: the XMB "quit game" dialog only appears with a registered exit callback. */
+/* Quit: stop the audio threads first (they release their channels; a reserved SRC channel or a thread blocked in an
+ * audio output can keep sceKernelExitGame from finishing), then close the log with a bounded wait. The game thread is
+ * parked by rt_poll (core.c) once g_quit is set. */
+void quit_game(const char *why)
+{
+    extern volatile int g_quit, g_audio_running;
+    logf_("exit requested (%s)\n", why);
+    g_quit = 1;
+    for (int i = 0; i < 100 && g_audio_running > 0; i++) sceKernelDelayThread(5000);
+    logf_("audio stopped (%d still running)\n", g_audio_running);
+    log_close();
+    sceKernelExitGame();
+}
+
 static int exit_callback(int a, int b, void *arg)
 {
     (void)a; (void)b; (void)arg;
-    logf_("exit requested (HOME)\n");
-    log_close();
-    sceKernelExitGame();
+    quit_game("HOME");
     return 0;
 }
 

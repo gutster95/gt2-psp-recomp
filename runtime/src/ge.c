@@ -91,6 +91,10 @@ static inline int sx11(uint32_t v) { return ((int32_t)(v << 21)) >> 21; }
 /* ---- VRAM page versions ------------------------------------------------------------------------------------ */
 
 static uint32_t g_page_ver[32];
+/* Finer versions for CLUTs, 64x32 blocks: GT2 keeps palettes in rows 480-511, in the same 64x256 pages as the frame
+ * buffers, so page versions changed with every primitive drawn and each CLUT was converted again on every use. */
+static uint32_t g_blk_ver[16 * 16];
+static inline int clut_blk(int clx, int cly) { return (cly >> 5) * 16 + ((clx & 1023) >> 6); }
 static uint32_t g_ge_pending;           /* pages the GE has drawn into since the last sync */
 static int16_t g_pend_box[32][4];       /* per pending page: bounding box (x0, y0, x1, y1) of the GE's drawing */
 
@@ -109,6 +113,9 @@ static void touch(int x0, int y0, int x1, int y1, int by_ge)   /* inclusive */
         for (int px = x0 >> 6; px <= x1 >> 6; px++) {
             int pg = py * 16 + px;
             g_page_ver[pg]++;
+            for (int by = (py * 256 > y0 ? py * 256 : y0) >> 5, bye = (py * 256 + 255 < y1 ? py * 256 + 255 : y1) >> 5;
+                 by <= bye; by++)
+                g_blk_ver[by * 16 + px]++;
             if (by_ge) {
                 int16_t *b = g_pend_box[pg];
                 if (!(g_ge_pending & (1u << pg))) { b[0] = (int16_t)x0; b[1] = (int16_t)y0; b[2] = (int16_t)x1; b[3] = (int16_t)y1; }
@@ -144,13 +151,14 @@ static void invalidate_state(void) { memset(&S, 0xFF, sizeof S); S.blend = -99; 
 
 /* ---- CLUT cache --------------------------------------------------------------------------------------------
  * Converted CLUTs (PS1 15-bit -> 8888) stay valid across frames while their VRAM pages are unchanged (version).
- * 32 sets x 4 ways, one 1 KB slot each. The GE copies a CLUT when it executes the load command, so a slot used since
- * the last sync must not be overwritten (batch == g_ge_syncs); then the oldest other way is taken, or the GE is
- * synced if all four were used in this batch. (Before: a per-batch arena, every CLUT converted again each frame with
+ * 64 sets x 8 ways, one 1 KB slot each (32 x 4 synced the GE 15x per race frame and 40x per GT mode map frame).
+ * The GE copies a CLUT when it executes the load command, so a slot used since the last sync must not be overwritten (batch == g_ge_syncs); then the oldest other way is taken, or the GE is
+ * synced if all ways were used in this batch. (Before: a per-batch arena, every CLUT converted again each frame with
  * uncached stores - 55 conversions per race frame, ~1.5 ms.) */
 
-#define CLUT_SETS 32
-#define CLUT_WAYS 4
+#define CLUT_SET_BITS 6
+#define CLUT_SETS (1 << CLUT_SET_BITS)
+#define CLUT_WAYS 8
 static uint32_t g_clut_arena[CLUT_SETS * CLUT_WAYS * 256] __attribute__((aligned(65536)));
 typedef struct { uint32_t key, ver, batch, use; int transparent; } ClutEnt;
 static ClutEnt g_cluts[CLUT_SETS * CLUT_WAYS];
@@ -255,8 +263,8 @@ static const uint32_t *clut_get(int clx, int cly, int n)
         }
     }
     uint32_t key = (n == 256 ? 0x80000000u : 0) | ((uint32_t)cly << 10) | (uint32_t)clx | 0x40000000u;
-    uint32_t ver = g_page_ver[p] ^ (g_page_ver[p2] * 0x9E3779B1u);
-    int set = (int)(((key * 0x9E3779B1u) >> 27) & (CLUT_SETS - 1));
+    uint32_t ver = g_blk_ver[clut_blk(clx, cly)] ^ (g_blk_ver[clut_blk(clx + n - 1, cly)] * 0x9E3779B1u);
+    int set = (int)((key * 0x9E3779B1u) >> (32 - CLUT_SET_BITS));
     ClutEnt *e = &g_cluts[set * CLUT_WAYS], *victim = 0;
     for (int i = 0; i < CLUT_WAYS; i++)
         if (e[i].key == key) {
@@ -273,7 +281,7 @@ static const uint32_t *clut_get(int clx, int cly, int n)
     if (!victim)
         for (int i = 0; i < CLUT_WAYS; i++)
             if (e[i].batch != g_ge_syncs && (!victim || e[i].use < victim->use)) victim = &e[i];
-    if (!victim) {                                /* all four ways loaded in this batch */
+    if (!victim) {                                /* all ways loaded in this batch */
         g_sync_why = 7; ge_sync(); ge_begin();
         victim = &e[0];
         for (int i = 1; i < CLUT_WAYS; i++) if (e[i].use < victim->use) victim = &e[i];
@@ -438,9 +446,9 @@ static void setup_texture(int depth, int page, uint32_t clut)
     static struct { int depth, page; uint32_t clut, sync, v[4]; const void *cl; uintptr_t tex; Slot *slot; } M = {-1};
     int clx = (int)(clut & 0x3F) * 16, cly = (int)(clut >> 6) & 0x1FF, cn = depth ? 256 : 16;
     int tp0 = ((page >> 4) & 1) * 16 + (page & 15), tp1 = (tp0 & 16) | ((tp0 + 1) & 15);
-    int cp0 = (cly >> 8) * 16 + (clx >> 6), cp1 = (cly >> 8) * 16 + (((clx + cn - 1) & 1023) >> 6);
+    int cp0 = clut_blk(clx, cly), cp1 = clut_blk(clx + cn - 1, cly);
     if (M.depth == depth && M.page == page && M.clut == clut && M.sync == g_ge_syncs && M.v[0] == g_page_ver[tp0] &&
-        M.v[1] == g_page_ver[tp1] && M.v[2] == g_page_ver[cp0] && M.v[3] == g_page_ver[cp1] && S.clut == M.cl &&
+        M.v[1] == g_page_ver[tp1] && M.v[2] == g_blk_ver[cp0] && M.v[3] == g_blk_ver[cp1] && S.clut == M.cl &&
         S.tex_ptr == M.tex && S.tex_psm == depth && !g_hires) {
         M.slot->use = ++g_use_clock;                     /* keep the LRU order of the texture page cache */
         g_memo_hits++;
@@ -449,7 +457,7 @@ static void setup_texture(int depth, int page, uint32_t clut)
     g_memo_miss++;
     setup_texture_full(depth, page, clut);
     M.depth = depth; M.page = page; M.clut = clut; M.sync = g_ge_syncs;
-    M.v[0] = g_page_ver[tp0]; M.v[1] = g_page_ver[tp1]; M.v[2] = g_page_ver[cp0]; M.v[3] = g_page_ver[cp1];
+    M.v[0] = g_page_ver[tp0]; M.v[1] = g_page_ver[tp1]; M.v[2] = g_blk_ver[cp0]; M.v[3] = g_blk_ver[cp1];
     M.cl = S.clut; M.tex = S.tex_ptr; M.slot = g_last_slot;
 }
 
@@ -1083,6 +1091,11 @@ static int frame_for_display(int dx, int dy, int w, int h)
 }
 
 /* Fallback: scale the 1x display area from PS1 VRAM into buffer 2 (frames never drawn in hi-res, 24-bit, ...). */
+/* Time of the real vblank a 1x present just waited for: the emulated vblank (core.c) re-phases itself to come shortly
+ * before the next real one. Both run at ~59.94 Hz, so without this an unlucky phase stays locked for minutes and every
+ * emulated vblank blocks the game for almost a whole frame (loading screens took 15-20 s on the PSP). */
+uint64_t g_vblank_sync_us;
+
 static void present_scaled(int tgt, int dx, int dy, int w, int h, int blank)
 {
     const int ow = ge_wide_now() ? 480 : 363, oh = 272, ox = (480 - ow) / 2;   /* 16:9: anamorphic picture */
@@ -1090,7 +1103,8 @@ static void present_scaled(int tgt, int dx, int dy, int w, int h, int blank)
     if (on_screen) {                /* redrawing the shown buffer: the game's queued drawing first, then the clear and
                                      * blit right at the start of the vblank (no double buffer left for 1x screens) */
         ge_sync();
-        sceDisplayWaitVblankStart();
+        if (!sceDisplayIsVblank()) sceDisplayWaitVblankStart();
+        g_vblank_sync_us = now_us();
     }
     ge_begin();
     bind(tgt);

@@ -389,9 +389,8 @@ stats:
         static uint64_t start;
         if (!start) start = now_us();
         if (g_autoexit > 0 && now_us() - start > (uint64_t)g_autoexit * 1000000u) {
-            logf_("autoexit after %d s\n", g_autoexit);
-            log_close();
-            sceKernelExitGame();
+            extern void quit_game(const char *why);
+            quit_game("autoexit");
         }
     }
     if (++frame % 120 == 0) {
@@ -418,7 +417,7 @@ stats:
                 n += snprintf(buf + n, sizeof buf - n, " %u", (unsigned)(g_sync_stats[i] - last[i]));
                 last[i] = g_sync_stats[i];
             }
-            logf_("ge syncs by reason (other fill upload readback copy list clut arena sw vtx present):%s\n", buf);
+            logf_("ge syncs by reason (other fill upload readback copy list clut-drawn clut-full sw vtx present):%s\n", buf);
         }
         extern uint32_t g_wide_clipped, g_wide_tris;
         logf_("widescreen clipper: %u polygons, %u triangles (totals)\n", (unsigned)g_wide_clipped,

@@ -24,10 +24,12 @@ void log_init(const char *dir)
 
 void log_close(void)
 {
-    if (g_log_sema >= 0) sceKernelWaitSema(g_log_sema, 1, 0);
+    /* bounded wait: on the quit path a stuck holder must not keep the game from exiting */
+    SceUInt timeout = 500000;
+    int got = g_log_sema >= 0 && sceKernelWaitSema(g_log_sema, 1, &timeout) >= 0;
     if (g_log) fclose(g_log);
     g_log = 0;
-    if (g_log_sema >= 0) sceKernelSignalSema(g_log_sema, 1);
+    if (got) sceKernelSignalSema(g_log_sema, 1);
 }
 
 void logf_(const char *fmt, ...)

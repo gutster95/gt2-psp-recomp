@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <psprtc.h>
+#include <pspthreadman.h>
 #include "rt.h"
 #include "funcs.h"
 #include "cdrom.h"
@@ -216,6 +217,8 @@ void bios_return_from_exception(PsxCpu *c)
 void rt_poll(PsxCpu *c)
 {
     PHASE_BEGIN(PH_IRQ);
+    extern volatile int g_quit;
+    if (g_quit) for (;;) sceKernelDelayThread(100000);   /* quitting (main.c quit_game): park the game thread */
     g_poll_budget = POLL_INTERVAL;
     g_n_polls++;
     uint64_t t = now_us();
@@ -236,7 +239,10 @@ void rt_poll(PsxCpu *c)
     cdrom_tick();
     if (t >= g_next_vblank) {
         g_next_vblank = (g_next_vblank && t - g_next_vblank < 100000) ? g_next_vblank + 16683 : t + 16683;
+        extern uint64_t g_vblank_sync_us;
+        g_vblank_sync_us = 0;
         io_vblank();
+        if (g_vblank_sync_us) g_next_vblank = g_vblank_sync_us + 16683 - 1200;   /* see ge.c present_scaled */
     }
     if (!g_in_irq && g_irq_enabled && (c->cop0[12] & 0x401) == 0x401 && (g_i_stat & g_i_mask))
         call_irq_handlers(c);
