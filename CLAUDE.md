@@ -42,6 +42,7 @@ python -m gt2psp extract "ISO/Gran Turismo 2 (USA) (Simulation Mode) (Rev 2).cue
 python -m gt2psp recomp                      # -> generated/*.c (2853 functions)
 python -m gt2psp pack "ISO/...cue"          # -> build/GT2.PAK (PSP data pack, converted once)
 wsl -d GT2PSPDev -u root --cd "<proj>" -- bash scripts/build.sh      # -> build/gt2psp/EBOOT.PBP
+bash scripts/pgo.sh profile && bash scripts/pgo.sh build             # release: profile-guided (PSP via PSPLink) -> build/gt2psp
 powershell -ExecutionPolicy Bypass -File scripts/run-ppsspp.ps1 -Seconds 40 -Shot <png>   # stages + runs + log
 powershell -ExecutionPolicy Bypass -File scripts/package-psp.ps1   # -> build/psp/PSP/GAME/GT2PSP for a real PSP
 ```
@@ -52,7 +53,7 @@ no raw disc image, no hardware emulation where a native PSP implementation is po
 Runtime log: `gt2log.txt` there (watchdog "alive" lines every 2 s with the last called functions).
 
 Pitfalls: in Git-Bash heredocs `
-` inside C strings gets mangled — edit C files with the Edit tool.
+` inside C strings gets mangled â€” edit C files with the Edit tool.
 PowerShell `Set-Content -Encoding utf8` writes a BOM. CMake globs: build.sh re-runs cmake every time.
 
 ## Status (2026-11-18)
