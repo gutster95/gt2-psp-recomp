@@ -1,0 +1,22 @@
+ME bench  CPU 333 MHz bus 166 MHz
+table 2
+ME alive: 1
+
+kernel                         ME us   CPU us
+alu chain 10M                 227288   227908
+mac dot3 10M                  681483   683318
+read RAM cached 1MBx8          39337    42335
+read RAM 16KB x512 (hits)      21501    21598
+read RAM uncached 1MBx8       209457   301911
+write RAM uncached 1MBx8       30971    56703
+write RAM cached 1MBx8         45128    50379
+random read RAM 2MB 1M        169688   172882
+ME eDRAM write 1MBx8           33306
+ME eDRAM read 1MBx8            28909
+ME eDRAM random 1MB 1M         99134
+GE eDRAM read (VRAM) 1MBx8     57201   157451
+
+contention: CPU read 1MBx16 alone 84612 us, with ME writing RAM 84405 us (ok)
+contention: CPU alu 10M alone 227872 us, with ME reading RAM 227977 us (ok)
+
+done

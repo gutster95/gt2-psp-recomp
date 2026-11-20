@@ -8,6 +8,8 @@ SAMPLE=${1:-poc}
 rm -rf /root/me-src /root/meinc /root/mepoc
 cp -r "$PROJ/tools/downloads/me-custom-core" /root/me-src
 mkdir -p /root/meinc && ln -s /root/me-src /root/meinc/me-core-mapper
+# own samples: scripts/me/<sample>/main.cpp
+if [ -f "$PROJ/scripts/me/$SAMPLE/main.cpp" ]; then mkdir -p /root/me-src/samples/$SAMPLE; cp "$PROJ/scripts/me/$SAMPLE/main.cpp" /root/me-src/samples/$SAMPLE/; fi
 # psp-build-exports -s writes kcall.S itself; the redirect in the upstream CMakeLists left it empty
 sed -i 's#COMMAND psp-build-exports -s ${CMAKE_SOURCE_DIR}/kernel/exports.exp > kcall.S#COMMAND psp-build-exports -s ${CMAKE_CURRENT_SOURCE_DIR}/kernel/exports.exp#' /root/me-src/CMakeLists.txt
 grep -n "psp-build-exports -s" /root/me-src/CMakeLists.txt

@@ -681,3 +681,34 @@ over 200000 random register sets incl. extreme values - 0 mismatches):
   answering - no hang, no power cycle needed.
 * Next: benchmark from the ME (main RAM reads through the uncached mirror, compute loop speed) to size an offload
   of the GPU->GE path or of GTE work.
+
+## 2026-11-20 - Media Engine benchmark (scripts/me/bench, PSP-3000, 333/166 MHz)
+
+Same kernels on the ME (command loop polling uncached shared words) and on the main CPU, times in us:
+
+| kernel | ME | main CPU |
+|---|---|---|
+| ALU chain 10M | 227288 | 227908 |
+| mult/madd/madd (GTE dot3) 10M | 681483 | 683318 |
+| RAM read cached 1 MB x8 | 39337 | 42335 |
+| RAM read 16 KB x512 (cache hits) | 21501 | 21598 |
+| RAM read uncached 1 MB x8 | 209457 | 301911 |
+| RAM write uncached 1 MB x8 | 30971 | 56703 |
+| RAM write cached 1 MB x8 | 45128 | 50379 |
+| random reads RAM 2 MB, 1M | 169688 | 172882 |
+| ME local eDRAM write / read 1 MB x8 | 33306 / 28909 | - |
+| ME local eDRAM random 1 MB, 1M | 99134 | - |
+| GE eDRAM (VRAM) read 1 MB x8 | 57201 | 157451 |
+
+* The ME is a full second Allegrex at the same 333 MHz: identical compute speed, same cached RAM speed, faster
+  uncached RAM and much faster VRAM reads; its local eDRAM halves the cost of random reads (170 -> 99 ns).
+* No measurable contention: the main CPU's RAM reads (1 MB x16, 84.6 ms) and ALU loop were unchanged while the ME
+  streamed RAM at full speed.
+* Coherency: the ME's data cache is separate. Cheap per-frame handoff: main CPU `sceKernelDcacheWritebackAll`
+  (16 KB cache), ME invalidates its own data cache before reading PS1 RAM; results through uncached memory.
+* Consequence: the GPU->GE path (~10 ms per heavy race frame) can run in parallel with the game code on the ME;
+  the frame would take max(game + GTE ~22 ms, GE path ~10 ms) instead of their sum. Constraints for the design:
+  the ME makes no syscalls (no sceGeListUpdateStallAddr / sceGuSync / sceGuDrawArray kick: the list is built on
+  the ME and enqueued/stalled by the main CPU), DrawSync / GPUSTAT and every CPU VRAM access (LoadImage,
+  StoreImage, readback) must wait for the ME, and the ordering-table buffer must not be reused by the game before
+  the ME has walked it.
