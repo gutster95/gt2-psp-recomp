@@ -84,6 +84,11 @@ Real PSP-3000, attract race 16:9: pacing ~29.4 fps, `race work` avg ~32.4 ms, ~2
 "Code layout and PGO"). Release = `scripts/pgo.sh build` (profile in build/pgo-data).
 
 0. **Done 2026-11-20: races at a locked 30 fps with the GPU path on the Media Engine** (me.c, `me_gpu=1` default).
+   Same day: settings menu in game (L+R+SELECT, menu.c), quality (30 fps) / performance mode (`performance=1`: 60 fps,
+   no mirror/tire smoke, low-LOD opponents, track_lod 2), fps60_dynamic (game time = real time at any frame rate),
+   fps60_auto (locks to a steady 30 when 60 cannot be held). Full 60 fps in heavy races is out of reach: main CPU
+   20-30 ms per frame there (GTE emulation in the game's mesh renderers), ME 12-18 ms. ME profiling builds:
+   `-DGT2_ME_PROF`, `-DGT2_ME_FPROF` + `RT_EXTRA=-finstrument-functions` (DEVLOG).
 1. **30 fps in races** (historical notes): GTE ~21% of the race time (RTPS ~100k/s, MVMVA ~145k/s, RTPT ~22k/s), GE path ~30%
    (benchmark ~10 ms per heavy frame), game code ~30%. Biggest lever: the GE path on the Media Engine
    (tools/downloads/me-custom-core reviewed, not run - needs the user's OK; multi-day). Smaller: RTPS/RTPT cost
