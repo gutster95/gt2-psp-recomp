@@ -27,6 +27,9 @@ uint32_t me_gpu_read(void);          /* GPUREAD port (waits for the ME) */
 uint32_t me_gpu_status(void);        /* GPUSTAT as published by the ME */
 void me_service(void);               /* rt_poll: DMA completion, ME log lines */
 void me_join(void);                  /* wait until the ME has processed everything posted */
+void me_note_wait(void);             /* io.c: the game polls DMA2 while the ME is busy */
+extern uint64_t g_me_wait_us;
+extern uint32_t g_me_walks, g_me_walk_us, g_me_walk_max, g_me_waits;
 
 /* ---- ME side (called by ge.c / gpu.c / log.c / core.c when running on the ME) ---- */
 void me_log(const char *fmt, const uint32_t *args, int n);

@@ -738,3 +738,17 @@ Same kernels on the ME (command loop polling uncached shared words) and on the m
 * 16:9 HUD: lines starting in the left 10% (or ending in the right 10%) of the drawing area are anchored to that edge
   ("Replay" and the car name sit at the left edge as in the 4:3 original), and HUD groups form only within one kind
   (textured sprites / lines and polygons). The minimap now keeps its 4:3 distance to the "Replay" text (user's choice).
+
+## 2026-11-20 - Headroom with the GPU path on the Media Engine
+
+New log lines: `idle:` (time the game spends in its frame wait 0x8007d23c / waiting VSync per 2 s - the real
+headroom), `me: N walks avg/max` (ordering-table walk, post -> completion seen by the main CPU) and the game's waits
+for the ME (DrawSync polling DMA2 while busy). The `race work` frame histogram merges two frames whenever the game
+calls its wait with a count <= 0 (about every 4th frame, maxima ~65 ms), so it overstates; the idle time does not.
+
+Attract race 16:9, PSP-3000 (pacing 100% at 2 vblanks, 30.0 fps):
+* main CPU idle: average 25% of the time (~8 ms per frame), worst 2-s window 7.7% (~2.5 ms per frame);
+* ME walk: average 15.5 ms, worst 33 ms (incl. waiting behind the previous presentation in the ring) - the ME is
+  the tighter side in heavy stretches; its path is slower than on the main CPU (~10 ms) because lists, vertices,
+  CLUTs and the VRAM shadow are written uncached to main RAM;
+* the game waited for the ME 0-2 times per 2 s, for < 1 ms.

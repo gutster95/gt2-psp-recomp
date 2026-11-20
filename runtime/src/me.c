@@ -153,6 +153,12 @@ __attribute__((noinline, aligned(4))) void meLibOnProcess(void)
 #include <me-core-mapper/me-core.h>   /* boot code of the ME (meLibHandler, meLibOnPreProcess); included once */
 
 static uint32_t g_dma_idx;            /* ring position after the pending DMA2 job, 0 = none */
+/* headroom statistics (main CPU): time the game waited for the ME (DrawSync polling DMA2 while busy) and how long
+ * the ME took per ordering-table walk (post -> completion seen by the main CPU) */
+uint64_t g_me_wait_us;                /* total */
+static uint64_t g_wait_t0, g_walk_t0;
+uint32_t g_me_walks, g_me_walk_us, g_me_walk_max, g_me_waits;
+void me_note_wait(void) { if (!g_wait_t0) { g_wait_t0 = now_us(); g_me_waits++; } }
 
 static void post(uint32_t cmd, uint32_t a, uint32_t n)
 {
@@ -172,6 +178,7 @@ void me_post_walk(uint32_t madr)
     sceKernelDcacheWritebackAll();                    /* the ME reads the ordering table and packets from RAM */
     post(CMD_WALK, madr, 0);
     g_dma_idx = SH->head;
+    g_walk_t0 = now_us();
 }
 void me_post_block(uint32_t madr, uint32_t words, int to_gpu)
 {
@@ -196,6 +203,14 @@ void me_service(void)
 {
     if (g_dma_idx && (int32_t)(SH->tail - g_dma_idx) >= 0) {
         g_dma_idx = 0;
+        uint64_t t1 = now_us();
+        if (g_wait_t0) { g_me_wait_us += t1 - g_wait_t0; g_wait_t0 = 0; }
+        if (g_walk_t0) {
+            uint32_t d = (uint32_t)(t1 - g_walk_t0);
+            g_me_walks++; g_me_walk_us += d;
+            if (d > g_me_walk_max) g_me_walk_max = d;
+            g_walk_t0 = 0;
+        }
         extern void io_dma_done(int ch);
         io_dma_done(2);
     }

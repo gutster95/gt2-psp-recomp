@@ -15,13 +15,18 @@ void gpu_present_core(void);
 
 /* Frame work statistics: time from the return of one waiting VSync call to the next one (recomp.py hooks). */
 static uint32_t g_work_hist[7];
-static uint64_t g_work_max, g_vs_leave;
+static uint64_t g_work_max, g_vs_leave, g_vs_leave_wait;
 static int g_vs_wait;
+/* idle time: time the game spends inside its frame wait (0x8007d23c) or a waiting VSync - the real headroom */
+static uint64_t g_idle_t0, g_idle_us;
+static uint32_t g_idle_n;
 void rt_vsync_enter(int waits)
 {
+    g_idle_t0 = now_us();
     g_vs_wait = waits;
     if (!g_vs_wait || !g_vs_leave) return;
     uint64_t w = now_us() - g_vs_leave;
+    uint64_t mew = g_me_wait_us - g_vs_leave_wait;     /* of that, waiting for the Media Engine (DrawSync) */
     static const uint32_t lim[6] = {20000, 25000, 30000, 33000, 40000, 50000};
     int b = 0;
     while (b < 6 && w >= lim[b]) b++;
@@ -30,20 +35,30 @@ void rt_vsync_enter(int waits)
     {   /* deterministic per-race statistics: the same frames of a replay in every run (frame index since the race
          * overlay was loaded), "race work" every 300 frames: average work and frames over 33 ms */
         extern uint32_t g_overlay_loads;
-        static uint32_t seen = ~0u, idx, n_over;
-        static uint64_t sum;
+        static uint32_t seen = ~0u, idx, n_over, n_over_net;
+        static uint64_t sum, sum_wait, max_net;
         if (g_cur_overlay != 0) return;
-        if (seen != g_overlay_loads) { seen = g_overlay_loads; idx = 0; sum = 0; n_over = 0; }
+        if (seen != g_overlay_loads) { seen = g_overlay_loads; idx = 0; sum = 0; n_over = 0; sum_wait = 0; n_over_net = 0; max_net = 0; }
+        uint64_t net = w - mew;                         /* main CPU work: game code, GTE, I/O emulation */
         sum += w;
+        sum_wait += mew;
         n_over += w > 33366;
+        n_over_net += net > 33366;
+        if (net > max_net) max_net = net;
         if (++idx % 300 == 0) {
-            logf_("race work: frames %u-%u avg %u us, %u over 33.4 ms\n", (unsigned)(idx - 300), (unsigned)(idx - 1),
-                  (unsigned)(sum / 300), (unsigned)n_over);
-            sum = 0; n_over = 0;
+            logf_("race work: frames %u-%u avg %u us, %u over 33.4 ms | net (without ME wait) avg %u us, max %u us, %u over 33.4 ms\n",
+                  (unsigned)(idx - 300), (unsigned)(idx - 1), (unsigned)(sum / 300), (unsigned)n_over,
+                  (unsigned)((sum - sum_wait) / 300), (unsigned)max_net, (unsigned)n_over_net);
+            sum = 0; n_over = 0; sum_wait = 0; n_over_net = 0; max_net = 0;
         }
     }
 }
-void rt_vsync_leave(void) { if (g_vs_wait) g_vs_leave = now_us(); }
+void rt_vsync_leave(void)
+{
+    uint64_t t = now_us();
+    if (g_idle_t0) { g_idle_us += t - g_idle_t0; g_idle_n++; g_idle_t0 = 0; }
+    if (g_vs_wait) { g_vs_leave = t; g_vs_leave_wait = g_me_wait_us; }
+}
 
 /* vblank on the main CPU: presentation (posted to the ME with me_gpu), debug dumps, screenshot combo, autoexit and
  * the statistics written by the main CPU (frame pacing, frame work from the game-side hooks) */
@@ -114,5 +129,16 @@ void gpu_present(void)
               (unsigned)g_work_hist[4], (unsigned)g_work_hist[5], (unsigned)g_work_hist[6], (unsigned)(g_work_max / 1000));
         memset(g_work_hist, 0, sizeof g_work_hist);
         g_work_max = 0;
+        logf_("idle: %u ms of 2 s in the game's frame wait (%u waits, avg %u us)\n", (unsigned)(g_idle_us / 1000),
+              (unsigned)g_idle_n, (unsigned)(g_idle_n ? g_idle_us / g_idle_n : 0));
+        g_idle_us = 0; g_idle_n = 0;
+        if (g_me_active) {
+            static uint64_t last_wait;
+            logf_("me: %u walks avg %u us max %u us (post -> done), game waited %u x, %u ms in 2 s\n",
+                  (unsigned)g_me_walks, (unsigned)(g_me_walks ? g_me_walk_us / g_me_walks : 0), (unsigned)g_me_walk_max,
+                  (unsigned)g_me_waits, (unsigned)((g_me_wait_us - last_wait) / 1000));
+            last_wait = g_me_wait_us;
+            g_me_walks = g_me_walk_us = g_me_walk_max = g_me_waits = 0;
+        }
     }
 }

@@ -276,6 +276,10 @@ static uint32_t io_read(uint32_t a, int size)
     case 0x1820: case 0x1824: v = mdec_read(off & 4); break;
     case 0x1814: v = (g_me_active ? me_gpu_status() : gpu_status()) | ((g_vblank_count & 1) << 31); break;
     case 0x1100: case 0x1110: case 0x1120: v = timer_count((off - 0x1100) >> 4); break;
+    case 0x10A8:                                   /* DMA2 CHCR: busy while the ME works (DrawSync polls it) */
+        v = IO32(0x10A8);
+        if (g_me_active && (v & 0x01000000u)) me_note_wait();
+        break;
     default:
         v = size == 4 ? IO32(off & ~3u) : size == 2 ? IO16(off & ~1u) : g_io[off];
         seen(off, "read", v);
