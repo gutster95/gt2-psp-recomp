@@ -230,7 +230,10 @@ static int measure_mhz(void)
     uint32_t best = 0xFFFFFFFFu;
     for (int k = 0; k < 3; k++) {
         uint32_t t0 = sceKernelGetSystemTimeLow();
-        for (int i = 0; i < 256; i++) __asm__ volatile(".rept 1000\n\tnop\n\t.endr");
+        /* all in asm: with the loop in C, gcc unrolled it into 1 MB of nops that ran from memory (4x too slow) */
+        int n = 256;
+        __asm__ volatile(".set push\n\t.set noreorder\n1:\n\t.rept 997\n\tnop\n\t.endr\n\taddiu %0, %0, -1\n\tbnez %0, 1b\n\tnop\n\t.set pop"
+                         : "+r"(n));
         uint32_t dt = sceKernelGetSystemTimeLow() - t0;
         if (dt < best) best = dt;
     }
