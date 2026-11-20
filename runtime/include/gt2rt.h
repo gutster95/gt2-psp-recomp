@@ -277,7 +277,7 @@ extern uint32_t g_trace_pos;
 
 /* Emitted at every backward branch: lets the runtime deliver interrupts inside busy-wait loops. */
 /* Game patches called from generated code (recomp.py HOOKS/OVERRIDE) */
-extern int g_widescreen, g_fps60;
+extern int g_widescreen, g_fps60, g_fx60, g_lowlod;
 extern int g_ws_menus;        /* 16:9 for the menu screens with 3D views too */
 extern uint32_t g_ws_keepw;   /* 16:9: original width for the view setup 0x80049780 (recomp.py) */
 void wide_clip_track(PsxCpu *c, int kind, uint32_t entry, uint32_t pkt, uint32_t ot);

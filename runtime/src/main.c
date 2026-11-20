@@ -40,10 +40,10 @@ static int load_exe(void)
 /* Optional settings.txt next to the EBOOT, lines "name=0|1": widescreen, hires, pgxp, filter, hud_anchor. */
 static void load_settings(void)
 {
-    extern int g_hud_anchor, g_near_clip, g_pad_analog, g_audio, g_autoexit, g_frames_forced, g_show_fps, g_gebench, g_membench, g_varena_uncached, g_walklog, g_ws_menus, g_gedump, g_gebenchfile, g_varena_edram, g_sharp, g_async_present, g_list_uncached, g_hud_defer, g_me_gpu, g_fps60, g_cd_prefetch;
+    extern int g_hud_anchor, g_near_clip, g_pad_analog, g_audio, g_autoexit, g_frames_forced, g_show_fps, g_gebench, g_membench, g_varena_uncached, g_walklog, g_ws_menus, g_gedump, g_gebenchfile, g_varena_edram, g_sharp, g_async_present, g_list_uncached, g_hud_defer, g_me_gpu, g_fps60, g_cd_prefetch, g_fx60, g_lowlod, g_performance;
     static const struct { const char *name; int *var; } opts[] = {
         {"widescreen", &g_widescreen}, {"hires", &g_hires}, {"pgxp", &g_pgxp}, {"filter", &g_tex_filter},
-        {"hud_anchor", &g_hud_anchor}, {"near_clip", &g_near_clip}, {"analog", &g_pad_analog}, {"audio", &g_audio}, {"autoexit", &g_autoexit}, {"frames1x", &g_frames_forced}, {"ge", &g_use_ge}, {"fps", &g_show_fps}, {"gebench", &g_gebench}, {"membench", &g_membench}, {"varena_uncached", &g_varena_uncached}, {"walklog", &g_walklog}, {"widescreen_menus", &g_ws_menus}, {"gedump", &g_gedump}, {"gebenchfile", &g_gebenchfile}, {"varena_edram", &g_varena_edram}, {"sharp", &g_sharp}, {"async_present", &g_async_present}, {"list_uncached", &g_list_uncached}, {"hud_defer", &g_hud_defer}, {"me_gpu", &g_me_gpu}, {"fps60", &g_fps60}, {"cd_prefetch", &g_cd_prefetch},
+        {"hud_anchor", &g_hud_anchor}, {"near_clip", &g_near_clip}, {"analog", &g_pad_analog}, {"audio", &g_audio}, {"autoexit", &g_autoexit}, {"frames1x", &g_frames_forced}, {"ge", &g_use_ge}, {"fps", &g_show_fps}, {"gebench", &g_gebench}, {"membench", &g_membench}, {"varena_uncached", &g_varena_uncached}, {"walklog", &g_walklog}, {"widescreen_menus", &g_ws_menus}, {"gedump", &g_gedump}, {"gebenchfile", &g_gebenchfile}, {"varena_edram", &g_varena_edram}, {"sharp", &g_sharp}, {"async_present", &g_async_present}, {"list_uncached", &g_list_uncached}, {"hud_defer", &g_hud_defer}, {"me_gpu", &g_me_gpu}, {"fps60", &g_fps60}, {"cd_prefetch", &g_cd_prefetch}, {"fps60_effects", &g_fx60}, {"lowlod", &g_lowlod}, {"performance", &g_performance},
     };
     char path[300], line[64];
     snprintf(path, sizeof path, "%ssettings.txt", g_basedir);
@@ -131,6 +131,12 @@ int main(int argc, char **argv)
     }
     logf_("GT2 PSP runtime, base dir '%s'\n", dir);
     load_settings();
+    {   /* performance mode: 60 fps with the game's own trade-offs (no mirror/tire smoke) and low-detail opponents */
+        extern int g_fps60, g_fx60, g_lowlod, g_performance;
+        if (g_performance) { g_fps60 = 1; g_fx60 = 0; g_lowlod = 1; }
+        logf_("mode: %s (fps60 %d, fps60_effects %d, lowlod %d)\n", g_performance ? "performance" : "quality", g_fps60, g_fx60,
+              g_lowlod);
+    }
     prof_init();
 
     extern void gte_init(void);

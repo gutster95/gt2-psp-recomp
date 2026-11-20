@@ -800,3 +800,18 @@ the Media Engine:
 * Layout: .rodata/.data now start at fixed 16 KB offsets and the generated code follows the hot block at a fixed
   offset (linkfile.prx.in, make_linkfile.py), so runtime edits no longer move game code and tables.
 
+## 2026-11-20 - Quality / performance mode, clock overlay
+
+* Overlay: the fps counter has a second line with the CPU clock, measured against the 1 MHz system timer (ARK's
+  overclock above 333 MHz programs the PLL directly, scePowerGetCpuClockFrequencyInt keeps saying 333). The first
+  version measured ~78 MHz: gcc had unrolled the nop loop into code that did not fit the I-cache; now all asm.
+* User test on the PSP with ARK `cpuclock:403`: the clock is not steady at 403 and the frame rate barely changes -
+  more CPU clock is not the way to 60 fps (the ME/bus do not scale with it, see the ME waits in a real race:
+  walk ~20 ms per frame, the game waited ~0.4 s per 2 s).
+* Performance mode (`performance=1` = `fps60=1`, `fps60_effects=0`, `lowlod=1`; default is the quality mode):
+  * fps60_effects=0 keeps the game's own 60 fps trade-off (no rear view mirror - a second render of the scene -
+    and no tire smoke).
+  * lowlod=1: the other cars always at the lowest LOD. Found through Silent's "Full detail AI cars" cheat
+    (tools/downloads/gt2-lod-cheat): the per-car LOD mode s2 in overlay 0 at 0x8001435C is 1 for the followed car,
+    0 for the others (distance LOD), 3 = lowest; recomp.py OVERRIDE gives the others 3.
+

@@ -43,6 +43,9 @@ static void seen(uint32_t off, const char *rw, uint32_t v)
 void raise_irq(int bit) { g_i_stat |= 1u << bit; }
 
 int g_fps60;   /* settings.txt fps60: frame interval 1 instead of 2 (recomp.py, Silent's 60 FPS cheat); experiment */
+int g_fx60 = 1;   /* fps60_effects: keep mirror and tire smoke at 60 fps (0: the game turns them off) */
+int g_lowlod;     /* lowlod: other cars always at the lowest LOD (recomp.py) */
+int g_performance;   /* performance=1: fps60, fps60_effects=0, lowlod=1 (main.c) */
 
 void io_vblank(void)
 {
