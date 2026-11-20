@@ -26,6 +26,7 @@
 #include <pspge.h>
 #include <pspkernel.h>
 #include <pspdisplay.h>
+#include <psppower.h>
 #include "rt.h"
 #include "gpu.h"
 #include "raster.h"
@@ -1607,17 +1608,16 @@ static uint64_t g_fps_t0;
 static const uint16_t FONT35[10] = {   /* 3x5 digits, 15 bits, row by row from the top */
     075557, 026227, 071747, 071717, 055711, 074717, 074757, 071111, 075757, 075717};
 
-static void draw_fps_v(int buf, int value)
+/* right-aligned number with n digits (leading zeros blank) at the top right, row y0 */
+static void draw_num(uint16_t *fb, int v, int n, int y0)
 {
-    if (!g_show_fps || value < 0) return;
-    uint16_t *fb = (uint16_t *)(0x40000000u | (EDRAM + FB_OFF(buf)));
-    int v = value > 99 ? 99 : value;
-    int digits[2] = {v / 10, v % 10}, x0 = 480 - 2 * 8 - 4, y0 = 4;
+    int x0 = 480 - n * 8 - 4;
     for (int y = -1; y < 11; y++)              /* black box behind the digits */
-        for (int x = -1; x < 16; x++) fb[(y0 + y) * 512 + x0 + x] = 0x8000;
-    for (int d = 0; d < 2; d++) {
-        if (d == 0 && digits[0] == 0) continue;
-        uint16_t g = FONT35[digits[d]];
+        for (int x = -1; x < n * 8; x++) fb[(y0 + y) * 512 + x0 + x] = 0x8000;
+    for (int d = n - 1, p = 1; d >= 0; d--, p *= 10) {
+        int digit = v / p % 10;
+        if (d < n - 1 && v < p) break;
+        uint16_t g = FONT35[digit];
         for (int r = 0; r < 5; r++)
             for (int c = 0; c < 3; c++)
                 if (g & (1 << (14 - (r * 3 + c))))
@@ -1625,6 +1625,17 @@ static void draw_fps_v(int buf, int value)
                         for (int xx = 0; xx < 2; xx++)
                             fb[(y0 + r * 2 + yy) * 512 + x0 + d * 8 + c * 2 + xx] = 0xFFFF;
     }
+}
+
+/* fps (top right) and below it the CPU clock in MHz (overclocking with the CFW shows here) */
+static void draw_fps_v(int buf, int value)
+{
+    if (!g_show_fps || value < 0) return;
+    uint16_t *fb = (uint16_t *)(0x40000000u | (EDRAM + FB_OFF(buf)));
+    draw_num(fb, value > 99 ? 99 : value, 2, 4);
+    static int mhz, age;
+    if (!me_on_me() && age-- <= 0) { mhz = scePowerGetCpuClockFrequencyInt(); age = 60; }   /* no syscalls on the ME */
+    if (mhz > 0) draw_num(fb, mhz > 999 ? 999 : mhz, 3, 18);
 }
 
 /* main CPU service thread (me.c): fps digits with the value the ME computed, display swap */
