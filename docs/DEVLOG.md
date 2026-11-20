@@ -633,3 +633,21 @@ over 200000 random register sets incl. extreme values - 0 mismatches):
   * Every change to a function in the hot block shifts the layout: re-measure with `build/racework.sh` (and redo the
     gap search) after such changes. The overlay renderers are 27-36 KB each, so a contiguous hot block that fits the
     cache is impossible at function granularity - profile-guided block layout would be the robust fix.
+
+## 2026-11-20 - Profile-guided optimization
+
+* `scripts/pgo.sh profile` builds an instrumented EBOOT (`-fprofile-generate=host0:/pgo`, libgcov links fine),
+  runs the attract race on the PSP through PSPLink and lets `autoexit` call `__gcov_dump()` (main.c quit_game,
+  `GT2_PGO_GEN`): 27 .gcda files, copied to `build/pgo-data/` (git-ignored). The instrumented build runs at ~82 ms
+  per race frame, fine for counting. `scripts/pgo.sh build` builds with `-fprofile-use` in the same WSL build dir
+  (`/root/gt2pgo`: the .gcda names contain the object paths) into `build/gt2psp`.
+* With the profile the generated code is built -O2 instead of -Os (cold blocks are optimized for size anyway,
+  hot/cold splitting into .text.unlikely). make_linkfile.py also places `.text.hot.<fn>` sections of listed functions.
+* Race work, frames 300-2999 of the attract replay: non-PGO 34.3-36 ms; PGO -Os 32.6; **PGO -O2 31.2-33.5** (four runs
+  of comparable builds, mean ~32.4); frames over 33.4 ms 1189 -> ~800-950 of 2700.
+* Measurement noise: the same EBOOT gave 33.2 and 31.7 ms in two runs (an earlier pair agreed to 0.1 ms) - one run
+  per variant cannot separate +-1 ms effects. Load addresses are identical between PSPLink launches (logged at
+  startup now), so the spread comes from timing, not from the memory layout. The gap search for the PGO build
+  (0 33.6, 1 KB 31.2, 3 KB 33.9, 4 KB 33.7 ms) picked 1 KB, partly within that noise.
+* Git Bash rewrites `/root/...` in environment variables for wsl.exe into `C:/Program Files/Git/root/...`:
+  `MSYS_NO_PATHCONV=1` and a Windows path for `--cd` (scripts/pgo.sh does both).

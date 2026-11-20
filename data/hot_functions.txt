@@ -104,8 +104,8 @@ gte_read_data_slow
 gte_write_data_slow
 gte_read_ctrl_slow
 gte_write_ctrl_slow
-# I-cache: gap between the runtime block and the game functions, measured best of 0-7 KB (build/racework.sh)
-pad=2048
+# I-cache: gap between the runtime block and the game functions; best for the PGO build of 2026-11-20 (0-4 KB measured, build/racework.sh)
+pad=1024
 f_800616c4
 o0_800234f8
 o0_8001c17c

@@ -34,14 +34,14 @@ tools/             (ignored) local toolchain (pspdev inside a project-local WSL 
 * Each module is partitioned completely into functions (`python -m gt2psp functions`); every function becomes
   one C function. Calls whose target lies in `0x80010000-0x8005d600` are dispatched through the currently loaded
   module (runtime variable set by the HLE replacement of the overlay loader `0x8005dad8`).
-* The overlay loader itself is replaced by a runtime function (no gunzip of code needed — the code is already
+* The overlay loader itself is replaced by a runtime function (no gunzip of code needed â€” the code is already
   compiled in; the RAM image is still filled so data inside the overlay is correct).
 * `setjmp`/`longjmp` (`0x8007ad58`/`0x8007ad90`) are replaced by the runtime (**unwind & resume**):
   `hle_setjmp` writes the PS1 buffer like the original. `hle_longjmp` restores the registers from the PS1
   buffer, sets `v0`, then C-`longjmp`s to the runtime's top-level loop, which "returns" to `r31`: it calls the
   recompiled function starting at `r31`; when that returns (via `jr ra`), it continues at the new `r31`, until
   the sentinel return address of the program entry is reached. This requires that every such return address is a
-  function start — the partitioner adds the return address of every `jal` whose callee can transitively reach
+  function start â€” the partitioner adds the return address of every `jal` whose callee can transitively reach
   `setjmp` (*resume points*). Splitting a function is always safe: control crossing the split becomes a tail call
   (compiled to a jump by GCC's sibling-call optimisation).
 * Switch jump tables are detected statically; `jr reg` compiles to a C `switch` over the table's labels with a
@@ -139,6 +139,18 @@ tools/             (ignored) local toolchain (pspdev inside a project-local WSL 
   inline fast path for RAM above 0x400, out of line for the low KB (redirected to a dummy area - GT2 writes
   there through null pointers), scratchpad and I/O. The BIOS C0 table points libapi's exception handler patch
   into kernel RAM at 0x1028 (main.c). Effect on the PSP: text 6.4 -> 3.5 MB, attract race 22.2 -> 27.0 fps.
+* **Code layout and PGO** (2026-11-20): the race frame time depends on the code layout by +-10% (16 KB 2-way
+  instruction cache; the overlay renderers alone are 27-36 KB each). `data/hot_functions.txt` fixes the order of
+  the hot runtime code (incl. library members such as `libpspgu.a:sceGuDrawArray.o`), a measured `pad=` gap, then
+  the hottest game functions (scripts/make_linkfile.py). The release EBOOT is built profile-guided:
+  `scripts/pgo.sh profile` (instrumented build, attract race on the PSP, counters to `build/pgo-data/`), then
+  `scripts/pgo.sh build` (generated code -O2 with the profile: hot/cold block splitting, branch layout). Judge
+  changes with `build/racework.sh` (deterministic `race work` averages, same EBOOT +-0.1 ms) and re-check the gap
+  after changes to hot code.
+* **Asynchronous presentation**: the presentation list is kicked without waiting; swap when `sceGeListSync(qid, 1)`
+  reports it done (rt_poll); second list buffer and a vertex ring in the unused display buffer 2 (see ge.c).
+* **16:9 race HUD at PSP resolution**: recorded during the walk, drawn after the presentation blit into the display
+  buffer (ge.c hud_record/hud_draw) - squeezed at 320 pixels it lost a quarter of its texel columns.
 * Refreshing the memory profile (after partitioning changes): `recomp --no-memprof`, build with
   `scripts/build-exp.sh "-Os -DGT2_NO_TRACE -DGT2_MEMPROF"`, run (attract race, menus, license tests), copy
   `memprof.txt` from the EBOOT folder to `data/memprof/`.

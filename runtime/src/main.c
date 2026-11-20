@@ -73,6 +73,14 @@ void quit_game(const char *why)
     g_quit = 1;
     for (int i = 0; i < 100 && g_audio_running > 0; i++) sceKernelDelayThread(5000);
     logf_("audio stopped (%d still running)\n", g_audio_running);
+#ifdef GT2_PGO_GEN
+    {   /* profile-guided optimization, instrumented build: write the .gcda files (host0:/pgo, see scripts/pgo.sh) */
+        extern void __gcov_dump(void);
+        logf_("writing profile data\n");
+        __gcov_dump();
+        logf_("profile data written\n");
+    }
+#endif
     log_close();
     sceKernelExitGame();
 }
@@ -106,6 +114,13 @@ int main(int argc, char **argv)
     if (cbt >= 0) sceKernelStartThread(cbt, 0, 0);
     scePowerSetClockFrequency(333, 333, 166);   /* default is 222 MHz */
     logf_("CPU %d MHz, bus %d MHz\n", scePowerGetCpuClockFrequencyInt(), scePowerGetBusClockFrequencyInt());
+    {   /* load addresses (cache set mapping differs between launches if these move relative to each other) */
+        extern uint8_t g_ram[];
+        int local = 0;
+        void *heap = malloc(64);
+        logf_("addresses: text %p ram %p stack %p heap %p\n", (void *)&load_settings, (void *)g_ram, (void *)&local, heap);
+        free(heap);
+    }
     logf_("GT2 PSP runtime, base dir '%s'\n", dir);
     load_settings();
     prof_init();

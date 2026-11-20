@@ -16,9 +16,12 @@ assert anchor in tmpl
 def entry(n: str) -> str:
     if n.startswith("pad="):                         # pad=<bytes>: gap (I-cache set alignment experiments)
         return f"    . += {int(n[4:], 0)};" + chr(10)
+    if n.startswith("section="):                     # section=<input section pattern>, e.g. .text.hot.*
+        return f"    *({n[8:]})" + chr(10)
     if ":" in n:                                     # library member, e.g. libpspgu.a:sceGuDrawArray.o
         return f"    *{n}(.text .text.*)\n"
-    return f"    *(.text.{n} .text.{n}.*)\n"            # .part/.constprop clones too
+    # .part/.constprop clones too; .text.hot.* with profile-guided optimization (cold parts stay out: .text.unlikely)
+    return f"    *(.text.{n} .text.{n}.* .text.hot.{n} .text.hot.{n}.*)\n"
 
 
 hot = "".join(entry(n) for n in names)

@@ -25,7 +25,7 @@ for i in $(seq 1 30); do
 done
 [ "$SECS" = 0 ] && exit 0
 
-cp "$PROJ/build/gt2psp/gt2psp.prx" "$ROOT/"
+cp "$PROJ/${GT2_PRX_DIR:-build/gt2psp}/gt2psp.prx" "$ROOT/"
 rm -f "$ROOT/input.txt"
 [ -n "$INPUT" ] && cp "$INPUT" "$ROOT/input.txt"
 rm -f "$ROOT/gt2log.txt"
