@@ -765,3 +765,17 @@ the Media Engine:
   main CPU is the limit (idle ~0, ME 14 ms). The attract replay also desyncs at 60 fps (the leading car stood at the
   start with 0 mph after 1:27) - replays are recorded per 30 fps frame.
 * build/pace.sh now reports 1-vblank frames too (it ignored them).
+
+## 2026-11-20 - Towards 60 fps: profiling with the ME active
+
+* The profiler's phase word moved to the scratchpad end (0x13FFC): the ME runs the same code and its writes to the
+  global g_phase garbled the main CPU's profile; at that address each CPU has its own word (ME: local eDRAM).
+* `-DGT2_POLL_FN` (generated code + prof.c): the profiler attributes game-code samples to the function whose loop
+  polled last - the TRACE ring only names the last function entered, which put a wait loop after an event callback
+  (0x8007eaac, ~10%) on the callback.
+* Main CPU profile, attract race 16:9 with the ME: GTE ~26% of the time (per frame ~4560 RTPS, ~1000 RTPT, ~360 DPCS
+  on the slow path), interrupts/polling ~9%, waits ~22% (frame wait 0x8007d23c 7%, the loop after 0x8007eaac 10%,
+  BIOS B0 calls 5%), the rest game code.
+* PGO profiling hangs in __gcov_dump once the ME has run (the PSP then needed a power cycle): pgo.sh profiles with
+  me_gpu=0 now (same game code; the GPU code profiled on the main CPU is the code the ME runs). quit_game is guarded
+  against a second request and stops the ME first (me_stop).

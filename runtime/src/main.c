@@ -70,6 +70,13 @@ static void load_settings(void)
 void quit_game(const char *why)
 {
     extern volatile int g_quit, g_audio_running;
+    static volatile int quitting;
+    if (quitting) for (;;) sceKernelDelayThread(100000);   /* second request (another thread): the first one finishes */
+    quitting = 1;
+    {
+        extern void me_stop(void);
+        me_stop();
+    }
     logf_("exit requested (%s)\n", why);
     g_quit = 1;
     for (int i = 0; i < 100 && g_audio_running > 0; i++) sceKernelDelayThread(5000);

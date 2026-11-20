@@ -20,7 +20,7 @@ profile)
     mkdir -p "$ROOT/pgo"
     find "$ROOT/pgo" -maxdepth 1 -name '*.gcda' -delete
     cp "$ROOT/settings.txt" "$PROJ/build/settings.pgo.bak"
-    printf "widescreen=1\nautoexit=170\n" > "$ROOT/settings.txt"
+    printf "widescreen=1\nautoexit=170\nme_gpu=0\n" > "$ROOT/settings.txt"   # __gcov_dump hangs after the ME ran
     GT2_PRX_DIR=build/pgogen bash "$PROJ/scripts/psp-run.sh" 200 > /dev/null 2>&1 || true
     cp "$PROJ/build/settings.pgo.bak" "$ROOT/settings.txt"
     grep -q "profile data written" "$PROJ/build/psp-last-gt2log.txt" || { echo "no profile written (see build/psp-last-gt2log.txt)"; exit 1; }

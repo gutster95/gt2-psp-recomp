@@ -286,4 +286,10 @@ void rt_vsync_leave(void);
 
 extern int32_t g_poll_budget;
 void rt_poll(PsxCpu *c);
+#ifdef GT2_POLL_FN
+/* profiling: the function whose loop polled last (the TRACE ring only names the last function entered) */
+extern volatile uint32_t g_poll_fn;
+#define POLL(c) do { g_poll_fn = fn_; if (--g_poll_budget < 0) rt_poll(c); } while (0)
+#else
 #define POLL(c) do { if (--g_poll_budget < 0) rt_poll(c); } while (0)
+#endif

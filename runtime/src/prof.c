@@ -7,11 +7,12 @@
 #include "rt.h"
 #include "prof.h"
 
-volatile int g_phase_line[16] __attribute__((aligned(64)));
+/* g_phase: scratchpad word, see prof.h */
 
 static const char *const NAMES[PH_COUNT] = {"game code", "GTE", "GPU lists (GE build)", "present/GE wait", "IRQ/poll",
                                            "CD", "other", "GE texture setup", "GE draw emit", "GE prim decode", "GE touch", "GE sync wait"};
 static uint32_t g_ph[PH_COUNT], g_total;
+volatile uint32_t g_poll_fn;
 
 #define FN_SLOTS 4096
 static uint32_t g_fn_addr[FN_SLOTS], g_fn_cnt[FN_SLOTS];
@@ -23,7 +24,11 @@ static void sample(void)
     g_ph[ph]++;
     g_total++;
     if (ph != PH_GAME) return;
+#ifdef GT2_POLL_FN
+    uint32_t fn = g_poll_fn ^ 0x80000000u;    /* loop that polled last (module bits in the top byte) */
+#else
     uint32_t fn = g_trace[(g_trace_pos - 1) & (TRACE_SIZE - 1)];
+#endif
     uint32_t h = (fn * 0x9E3779B1u) >> 20;
     for (int i = 0; i < 16; i++) {
         uint32_t j = (h + i) & (FN_SLOTS - 1);

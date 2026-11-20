@@ -273,6 +273,16 @@ static int vblank_thread(SceSize args, void *argp)
     return 0;
 }
 
+/* quit: let the ME finish its command and halt (it must not run code while the main CPU writes profile data) */
+void me_stop(void)
+{
+    if (!g_me_active) return;
+    SH->exit = 1;
+    uint64_t t0 = now_us();
+    while (SH->exit != 2 && now_us() - t0 < 500000) {}
+    g_me_active = 0;
+}
+
 void me_gpu_start(void)
 {
     if (!g_me_gpu) return;
