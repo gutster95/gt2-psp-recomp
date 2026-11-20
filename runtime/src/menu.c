@@ -9,7 +9,7 @@
 #include <pspkernel.h>
 #include "rt.h"
 
-extern int g_fps60, g_fx60, g_lowlod, g_performance, g_show_fps, g_widescreen;
+extern int g_fps60, g_fx60, g_lowlod, g_performance, g_show_fps, g_widescreen, g_lr_shift;
 extern volatile int g_spu_paused;
 void io_fps60_changed(void);
 
@@ -17,7 +17,7 @@ void io_fps60_changed(void);
 
 static int g_ws_next = -1;   /* 16:9 for the next start */
 
-enum { M_MODE, M_FPS60, M_FX, M_LOD, M_FPS, M_WS, M_CLOSE, M_COUNT };
+enum { M_MODE, M_FPS60, M_FX, M_LOD, M_FPS, M_LR, M_WS, M_CLOSE, M_COUNT };
 
 static int mode_of(void)     /* 0 quality, 1 performance, 2 custom */
 {
@@ -28,7 +28,7 @@ static int mode_of(void)     /* 0 quality, 1 performance, 2 custom */
 
 static void save_settings(void)
 {
-    static const char *const KEYS[] = {"performance", "fps60", "fps60_effects", "lowlod", "fps", "widescreen"};
+    static const char *const KEYS[] = {"performance", "fps60", "fps60_effects", "lowlod", "fps", "widescreen", "lr_shift"};
     char path[300], keep[2048] = "", line[256];
     snprintf(path, sizeof path, "%ssettings.txt", g_basedir);
     FILE *f = fopen(path, "r");
@@ -50,8 +50,8 @@ static void save_settings(void)
     f = fopen(path, "w");
     if (!f) { logf_("menu: cannot write %s\n", path); return; }
     fputs(keep, f);
-    fprintf(f, "widescreen=%d\nperformance=%d\nfps60=%d\nfps60_effects=%d\nlowlod=%d\nfps=%d\n",
-            g_ws_next >= 0 ? g_ws_next : g_widescreen, mode_of() == 1, g_fps60, g_fx60, g_lowlod, g_show_fps);
+    fprintf(f, "widescreen=%d\nperformance=%d\nfps60=%d\nfps60_effects=%d\nlowlod=%d\nfps=%d\nlr_shift=%d\n",
+            g_ws_next >= 0 ? g_ws_next : g_widescreen, mode_of() == 1, g_fps60, g_fx60, g_lowlod, g_show_fps, g_lr_shift);
     fclose(f);
     logf_("menu: settings saved (mode %d, fps60 %d, effects %d, lowlod %d, fps %d)\n", mode_of(), g_fps60, g_fx60,
           g_lowlod, g_show_fps);
@@ -69,6 +69,7 @@ static void toggle(int item, int dir)
     case M_FX: g_fx60 ^= 1; break;
     case M_LOD: g_lowlod ^= 1; break;
     case M_FPS: g_show_fps ^= 1; break;
+    case M_LR: g_lr_shift ^= 1; break;
     case M_WS: g_ws_next = (g_ws_next >= 0 ? g_ws_next : g_widescreen) ^ 1; break;
     }
     (void)dir;
@@ -84,16 +85,17 @@ static void draw(uint32_t *base, int sel)
     snprintf(v[M_FX], 40, "%s", g_fx60 ? "on" : "off");
     snprintf(v[M_LOD], 40, "%s", g_lowlod ? "low" : "normal");
     snprintf(v[M_FPS], 40, "%s", g_show_fps ? "on" : "off");
+    snprintf(v[M_LR], 40, "%s", g_lr_shift ? "shift (L2/R2)" : "views (L1/R1)");
     int ws = g_ws_next >= 0 ? g_ws_next : g_widescreen;
     snprintf(v[M_WS], 40, "%s%s", ws ? "on" : "off", ws != g_widescreen ? "  (after restart)" : "");
     v[M_CLOSE][0] = 0;
     static const char *const NAMES[M_COUNT] = {"Mode", "60 fps", "Mirror + smoke at 60 fps", "Opponent car detail",
-                                               "FPS / CPU counter", "Widescreen 16:9", "Close and save"};
+                                               "FPS / CPU counter", "L / R buttons", "Widescreen 16:9", "Close and save"};
     pspDebugScreenSetBase(base);
     pspDebugScreenSetBackColor(0xFF301000);
     pspDebugScreenSetTextColor(0xFFFFFFFF);
     int x0 = 8, y0 = 8;
-    for (int y = y0 - 1; y <= y0 + M_COUNT + 6; y++) {     /* panel background */
+    for (int y = y0 - 1; y <= y0 + M_COUNT + 7; y++) {     /* panel background */
         pspDebugScreenSetXY(x0 - 1, y);
         pspDebugScreenPrintData("                                              ", 46);
     }
@@ -107,7 +109,9 @@ static void draw(uint32_t *base, int sel)
     pspDebugScreenSetTextColor(0xFFA0A0A0);
     pspDebugScreenSetXY(x0, y0 + M_COUNT + 3);
     pspDebugScreenPrintf("Up/Down select, X/Left/Right change");
-    pspDebugScreenSetXY(x0, y0 + M_COUNT + 4);
+    pspDebugScreenSetXY(x0, y0 + M_COUNT + 5);
+    pspDebugScreenPrintf("SELECT+L/R: the other L/R pair");
+    pspDebugScreenSetXY(x0, y0 + M_COUNT + 6);
     pspDebugScreenPrintf("O / START / L+R+SELECT: back to the game");
 }
 

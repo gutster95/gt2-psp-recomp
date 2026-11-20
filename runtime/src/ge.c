@@ -843,6 +843,13 @@ int ge_wide_now(void)
     return g_widescreen && (g_ws_menus || (g_race_valid && ME_UC(g_vblank_count) - g_race_vblank < 30));
 }
 
+/* in a race (race HUD layer seen in the last half second); main CPU, the values may be a frame old (ME cache) */
+int ge_in_race(void)
+{
+    if (!g_me_active) return g_race_valid && g_vblank_count - g_race_vblank < 30;
+    return ME_UC(g_race_valid) && ME_UC(g_vblank_count) - ME_UC(g_race_vblank) < 30;
+}
+
 /* anchor of an element (group logic below), or HUD_NO_SQUEEZE for elements wider than half the drawing area */
 #define HUD_NO_SQUEEZE (-100000)
 /* kind: 1 = textured sprite (text glyphs, icons), 0 = lines and polygons (minimap, bars): groups only form within one

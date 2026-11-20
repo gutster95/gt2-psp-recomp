@@ -20,6 +20,10 @@ static int g_device;           /* 0 none, 1 pad, 2 memory card (absent) */
 static uint8_t g_btn_lo = 0xFF, g_btn_hi = 0xFF;
 static uint8_t g_lx = 0x80, g_ly = 0x80;          /* left stick */
 int g_pad_analog = 1;          /* analog (DualShock) mode; settings.txt analog */
+/* settings.txt lr_shift (menu): 1 = PSP L/R are PS1 L2/R2 (GT2: down/upshift) and SELECT+L/R are L1/R1 (rear view,
+ * change view); 0 = the other way round */
+int g_lr_shift = 0;
+int g_dpad_shift = 1;          /* settings.txt dpad_shift: d-pad up/down shift gears in races */
 static int g_config;           /* DualShock config mode */
 static uint8_t g_cmd;          /* command byte of the current transfer */
 static uint8_t g_resp[10];     /* response bytes from index 2 on */
@@ -79,8 +83,17 @@ static void sample_buttons(void)
     if (b & PSP_CTRL_LEFT) lo |= 0x80;
     int shift = (b & PSP_CTRL_SELECT) && (b & (PSP_CTRL_LTRIGGER | PSP_CTRL_RTRIGGER));
     if (shift) lo &= ~0x01;                        /* SELECT used as modifier: L2/R2 */
+    if (g_lr_shift) shift = !shift;
     if (b & PSP_CTRL_LTRIGGER) hi |= shift ? 0x01 : 0x04;
     if (b & PSP_CTRL_RTRIGGER) hi |= shift ? 0x02 : 0x08;
+    {   /* settings.txt dpad_shift: in races d-pad up/down also press R2/L2 (GT2: upshift/downshift). The d-pad bits stay,
+         * so the pause menu still navigates; outside races (menus) nothing changes. */
+        extern int ge_in_race(void);
+        if (g_dpad_shift && (b & (PSP_CTRL_UP | PSP_CTRL_DOWN)) && ge_in_race()) {
+            if (b & PSP_CTRL_UP) hi |= 0x02;
+            if (b & PSP_CTRL_DOWN) hi |= 0x01;
+        }
+    }
     if (b & PSP_CTRL_TRIANGLE) hi |= 0x10;
     if (b & PSP_CTRL_CIRCLE) hi |= 0x20;
     if (b & PSP_CTRL_CROSS) hi |= 0x40;
