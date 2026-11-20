@@ -89,6 +89,13 @@ Real PSP-3000, attract race 16:9: pacing ~29.4 fps, `race work` avg ~32.4 ms, ~2
    fps60_auto (locks to a steady 30 when 60 cannot be held). Full 60 fps in heavy races is out of reach: main CPU
    20-30 ms per frame there (GTE emulation in the game's mesh renderers), ME 12-18 ms. ME profiling builds:
    `-DGT2_ME_PROF`, `-DGT2_ME_FPROF` + `RT_EXTRA=-finstrument-functions` (DEVLOG).
+   Evening: hitches every 2 s were the log (now ring buffer + low-priority writer thread - never write files from
+   the game thread); `race_buttons=1` (X gas, square brake, circle handbrake, triangle reverse in races); loads:
+   CD sector spacing 0.75 ms (below hangs the game), Pause/SeekL answer after 2 ms -> GT mode 1.1 s (was 2-3.4 s).
+   `load:` / `card access:` log lines measure load phases; `build/navrun.sh <input> <secs>` = PSP run with pack
+   from ms0 + screenshot sheet. Save backup of the user's PSP save: `build/savebak-20261120`.
+   Next: direct read path (replace the game's CD file read by one pack read, bypassing the drive emulation;
+   ~0.5-0.7 s more per load); measure race load and saving.
 1. **30 fps in races** (historical notes): GTE ~21% of the race time (RTPS ~100k/s, MVMVA ~145k/s, RTPT ~22k/s), GE path ~30%
    (benchmark ~10 ms per heavy frame), game code ~30%. Biggest lever: the GE path on the Media Engine
    (tools/downloads/me-custom-core reviewed, not run - needs the user's OK; multi-day). Smaller: RTPS/RTPT cost
