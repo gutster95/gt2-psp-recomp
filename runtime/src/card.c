@@ -111,7 +111,27 @@ void card_init(void)
     logf_("card: no save yet - new formatted card\n");
 }
 
-void card_tick(void) { savedata_tick(g_img); }
+/* card access phases (operations with gaps below 1 s): wall time, sector reads and writes */
+static uint64_t g_cs_first, g_cs_last;
+static uint32_t g_cs_reads, g_cs_writes;
+static void card_span(int write)
+{
+    uint64_t t = now_us();
+    if (!g_cs_first) g_cs_first = t;
+    g_cs_last = t;
+    if (write) g_cs_writes++; else g_cs_reads++;
+}
+
+void card_tick(void)
+{
+    if (g_cs_first && now_us() - g_cs_last > 1000000) {
+        logf_("card access: %u ms, %u sector reads, %u sector writes (vblank %u)\n",
+              (unsigned)((g_cs_last - g_cs_first) / 1000), (unsigned)g_cs_reads, (unsigned)g_cs_writes,
+              (unsigned)g_vblank_count);
+        g_cs_first = 0; g_cs_reads = g_cs_writes = 0;
+    }
+    savedata_tick(g_img);
+}
 
 static int slot1(uint32_t port) { return (port & 0x30) == 0 && g_present; }
 
@@ -128,6 +148,7 @@ uint32_t card_read(uint32_t port, uint32_t sector, uint32_t dst)
 {
     if (g_log_ops > 0) { g_log_ops--; logf_("card: read(port %02x, sector %u)\n", (unsigned)port, (unsigned)sector); }
     if (!slot1(port) || sector >= SECTORS) { bios_event_later(HW_CARD, EV_TIMEOUT); return 1; }
+    card_span(0);
     for (int i = 0; i < SECTOR; i++) mem_w8(dst + i, g_img[sector * SECTOR + i]);
     bios_event_later(HW_CARD, EV_IOE);
     return 1;
@@ -137,6 +158,7 @@ uint32_t card_write(uint32_t port, uint32_t sector, uint32_t src)
 {
     if (g_log_ops > 0) { g_log_ops--; logf_("card: write(port %02x, sector %u, src %08x)\n", (unsigned)port, (unsigned)sector, (unsigned)src); }
     if (!slot1(port) || sector >= SECTORS) { bios_event_later(HW_CARD, EV_TIMEOUT); return 1; }
+    if (src) card_span(1);
     if (src) {                                     /* src = 0: _new_card() acknowledge, nothing is written */
         for (int i = 0; i < SECTOR; i++) g_img[sector * SECTOR + i] = (uint8_t)mem_r8(src + i);
         savedata_written();

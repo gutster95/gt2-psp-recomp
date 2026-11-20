@@ -883,3 +883,8 @@ the Media Engine:
   handbrake, square reverse; in races the face buttons are turned to X gas, square brake, circle handbrake,
   triangle reverse. Only while a race is drawn (ge_in_race), so menus keep X = confirm; the in-race pause menu
   confirms with circle then.
+* Load phases are logged now (`load: N ms, sectors, memory stick reads`, `load commands: ...`, `card access: ...`).
+  Entering GT mode (701 sectors) took 2.0 s, of which memory stick reads 0.2 s and sector spacing 0.5 s; GT2
+  pauses after every read (29 Pause commands per load) and the emulated drive answered each after 30 ms (SeekL
+  20 ms). Pause/SeekL now answer after 2 ms: GT mode 1.1 s, boot load 0.97 -> 0.69 s. Sector spacing below
+  0.75 ms still hangs the game (0.2 and 0.4 ms tested on the PSP), so 0.75 ms stays (`cd_period_us` for tests).

@@ -51,9 +51,28 @@ static uint8_t g_filter_file, g_filter_chan;
 static uint32_t g_setloc = LEADIN, g_pos = LEADIN;     /* MSF-absolute sector numbers */
 static int g_reading;
 static uint64_t g_next_sector_at;
-static uint32_t g_period_us = 750;         /* data sector spacing (0.75 ms = 1.5 ms halved, tested); 0.1 ms breaks the game's CD code (DEVLOG) */
+int g_period_us = 750;                     /* data sector spacing (0.75 ms = 1.5 ms halved, tested); 0.1 ms breaks the game's CD code (DEVLOG) */
 static uint32_t g_st_sectors;              /* statistics of the current read */
 static uint64_t g_st_start;
+/* load phases: data sectors with gaps below 1.5 s form one phase (wall time from the first to the last sector) */
+static uint64_t g_ld_first, g_ld_last, g_ld_pak_us;
+static uint32_t g_ld_sectors;
+static uint32_t g_ld_cmd[32];              /* commands during the phase */
+static uint64_t g_ld_delay_us;             /* response delays above the ACK (Pause, Seek, ...) */
+static void load_span_end(void)
+{
+    if (g_ld_sectors >= 16) {
+        logf_("load commands:");
+        for (int i = 0; i < 32; i++) if (g_ld_cmd[i]) logf_(" %02x:%u", i, (unsigned)g_ld_cmd[i]);
+        logf_(", response delays %u ms\n", (unsigned)(g_ld_delay_us / 1000));
+    }
+    memset(g_ld_cmd, 0, sizeof g_ld_cmd); g_ld_delay_us = 0;
+    if (g_ld_sectors >= 16)
+        logf_("load: %u ms, %u data sectors, memory stick reads %u ms (vblank %u)\n",
+              (unsigned)((g_ld_last - g_ld_first) / 1000), (unsigned)g_ld_sectors, (unsigned)(g_ld_pak_us / 1000),
+              (unsigned)g_vblank_count);
+    g_ld_sectors = 0; g_ld_pak_us = 0; g_ld_first = 0;
+}
 
 static uint8_t g_sector[SECTOR_RAW];
 static uint8_t g_data[SECTOR_RAW];
@@ -173,12 +192,14 @@ void cdrom_stats(void)
 {
     logf_("cd: %u synchronous pack reads, %u prefetch waits in 2 s\n", (unsigned)g_pf_sync, (unsigned)g_pf_waits);
     g_pf_sync = g_pf_waits = 0;
+    if (g_ld_first && now_us() - g_ld_last > 1500000) load_span_end();
 }
 
 static void push(uint64_t delay_us, uint8_t type, const uint8_t *b, int n)
 {
     if (g_qn >= 8) { logf_("CD response queue overflow\n"); return; }
     Resp *r = &g_q[g_qn++];
+    if (delay_us > 1000) g_ld_delay_us += delay_us;
     uint64_t base = now_us();
     if (g_qn > 1 && g_q[g_qn - 2].at > base) base = g_q[g_qn - 2].at;
     r->at = base + delay_us;
@@ -242,6 +263,7 @@ static void stop_reading(void)
 static void command(uint8_t cmd)
 {
     const uint64_t ACK = 600;      /* us until INT3 */
+    g_ld_cmd[cmd & 31]++;
     switch (cmd) {
     case 0x01: push_stat(ACK, 3); break;                                    /* Getstat */
     case 0x02:                                                              /* Setloc */
@@ -259,7 +281,7 @@ static void command(uint8_t cmd)
         break;
     case 0x07: g_stat |= 0x02; push_stat(ACK, 3); push_stat(50000, 2); break;  /* MotorOn */
     case 0x08: stop_reading(); push_stat(ACK, 3); g_stat &= ~0x02; push_stat(100000, 2); break;  /* Stop */
-    case 0x09: push_stat(ACK, 3); stop_reading(); push_stat(30000, 2); break;   /* Pause */
+    case 0x09: push_stat(ACK, 3); stop_reading(); push_stat(2000, 2); break;    /* Pause (a drive takes ~30 ms; GT2 pauses after every read, 2 ms saves ~1 s per load) */
     case 0x0A:                                                              /* Init */
         g_mode = 0x20;
         stop_reading();
@@ -292,7 +314,7 @@ static void command(uint8_t cmd)
         g_stat |= 0x40;
         push_stat(ACK, 3);
         g_stat &= ~0x40;
-        push_stat(20000, 2);
+        push_stat(2000, 2);                                                 /* seek done (no real drive) */
         break;
     case 0x19:                                                              /* Test */
         if (g_params[0] == 0x20) { uint8_t b[4] = {0x94, 0x09, 0x19, 0xC0}; push(ACK, 3, b, 4); }
@@ -345,7 +367,10 @@ static void deliver_at(uint64_t t)
         } else {
             g_next_sector_at = t + g_period_us;
         }
-        if (!read_sector(g_pos)) {
+        uint64_t tr = now_us();
+        int ok = read_sector(g_pos);
+        tr = now_us() - tr;
+        if (!ok) {
             stop_reading();
             uint8_t b[2] = {(uint8_t)(g_stat | 1), 0x10};
             push(0, 5, b, 2);
@@ -363,6 +388,9 @@ static void deliver_at(uint64_t t)
         }
         /* into the sector buffer; the data FIFO is only (re)loaded by the request register */
         if (!g_st_sectors++) g_st_start = t;
+        if (g_ld_first && t - g_ld_last > 1500000) load_span_end();
+        if (!g_ld_first) g_ld_first = t;
+        g_ld_last = t; g_ld_sectors++; g_ld_pak_us += tr;
         if (g_mode & 0x20) { memcpy(g_buf, g_sector + 12, 0x924); g_buf_len = 0x924; }
         else { memcpy(g_buf, g_sector + 24, 0x800); g_buf_len = 0x800; }
         g_data_ready = 1;
