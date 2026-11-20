@@ -729,6 +729,7 @@ int g_hud_mode;
 #define HUD_GROUPS 32
 static struct { int16_t lo, hi, y0, y1, anchor; } g_hg[HUD_GROUPS];
 static int g_nhg;
+static int g_hud_rec = -1;   /* deferred HUD (hud_record): recording of this frame, -1 = not chosen yet */
 
 static uint32_t g_race_vblank;
 static int g_race_valid;
@@ -740,6 +741,7 @@ void ge_hud_begin(void)
     g_race_valid = 1;
     g_hud_mode = g_hud_anchor;
     g_nhg = 0;
+    g_hud_rec = -1;                                   /* hud_record picks the recording at the first primitive */
 }
 
 /* 16:9 presentation: in races (race HUD layer seen in the last half second) or everywhere with widescreen_menus */
@@ -748,11 +750,13 @@ int ge_wide_now(void)
     return g_widescreen && (g_ws_menus || (g_race_valid && g_vblank_count - g_race_vblank < 30));
 }
 
-static void hud_squeeze(GeVtx *v, int n, int *box)
+/* anchor of an element (group logic below), or HUD_NO_SQUEEZE for elements wider than half the drawing area */
+#define HUD_NO_SQUEEZE (-100000)
+static int hud_anchor(const int *box)
 {
     int x0 = g_rs.clip_x0, w = g_rs.clip_x1 - g_rs.clip_x0 + 1;
     int lo = box[0], hi = box[2], anchor;
-    if (hi - lo > w / 2) return;
+    if (hi - lo > w / 2) return HUD_NO_SQUEEZE;
     int g = -1;
     for (int i = g_nhg - 1; i >= 0; i--)          /* touching or overlapping (glyph gaps up to 12 pixels) */
         if (box[1] <= g_hg[i].y1 + 2 && box[3] >= g_hg[i].y0 - 2 && lo <= g_hg[i].hi + 12 && hi >= g_hg[i].lo - 12) {
@@ -776,12 +780,136 @@ static void hud_squeeze(GeVtx *v, int n, int *box)
             g_hg[g].anchor = (int16_t)anchor;
         }
     }
+    return anchor;
+}
+
+static void hud_squeeze(GeVtx *v, int n, int *box)
+{
+    int lo = box[0], hi = box[2], anchor = hud_anchor(box);
+    if (anchor == HUD_NO_SQUEEZE) return;
     /* x' = anchor + 3/4 (x - anchor), rounded to the nearest pixel */
     for (int i = 0; i < n; i++) v[i].x = (int16_t)(anchor + (((v[i].x - anchor) * 3 + 2) >> 2));
     box[0] = anchor + (((lo - anchor) * 3 + 2) >> 2);
     box[2] = anchor + (((hi - anchor) * 3 + 2) >> 2);
 }
 int ge_is3d_xy(uint32_t xy) { return is_3d_xy(xy); }
+
+/* ---- 16:9 race HUD at PSP resolution ----------------------------------------------------------------------------
+ * Squeezed into the 320-pixel PS1 frame, every fourth texel column of the HUD was lost (thin strokes of "l", "c" and
+ * "y" vanished; filtering only blurred them). With hud_defer (default, 1x presentation) the race HUD layer is not
+ * drawn into PS1 VRAM: its primitives are recorded with float coordinates (squeezed towards their anchor without
+ * rounding) and drawn after the presentation blit straight into the 480x272 display buffer, where a texel becomes
+ * 1.125 x 1.133 pixels - nearest sampling, nothing lost. Two recordings, one per PS1 frame buffer (keyed by the
+ * drawing area); the presentation draws the one inside the displayed rectangle. */
+int g_hud_defer = 1;
+uint32_t g_hud_draws, g_hud_prims, g_hud_us;   /* statistics (gpu.c log) */
+typedef struct {
+    uint8_t prim, n, tex, depth, raw, semi, mode, pad;
+    uint16_t page, clut;
+    int16_t clip[4];
+    float x[4];
+    GeVtx v[4];
+} HudPrim;
+#define HUD_MAX 1024
+static HudPrim (*g_hudp)[HUD_MAX];   /* [2][HUD_MAX], allocated in ge_init (keeps the BSS layout of the hot data) */
+static int g_hud_n[2], g_hud_kx[2] = {-1, -1}, g_hud_ky[2] = {-1, -1}, g_hud_last;
+
+static int hud_defer_on(void) { return g_hud_defer && g_hud_mode && g_async && !g_hires && g_hudp; }
+
+/* returns 1 when the primitive was recorded (or is invisible) */
+static int hud_record(int prim, int n, const GeVtx *v, const int *box0, int tex, int depth, int page, uint32_t clut,
+                      int raw, int semi, int mode)
+{
+    if (!hud_defer_on()) return 0;
+    if (tex && (depth >= 2 || g_rs.tw_mask_x || g_rs.tw_mask_y)) return 0;   /* software path: draw it normally */
+    int box[4] = {box0[0], box0[1], box0[2], box0[3]};
+    if (box[2] - box[0] >= 1024 || box[3] - box[1] >= 512) return 1;
+    if (g_hud_rec < 0) {                              /* first HUD primitive of this frame: pick the recording */
+        int kx = g_rs.clip_x0, ky = g_rs.clip_y0, k;
+        if (kx == g_hud_kx[0] && ky == g_hud_ky[0]) k = 0;
+        else if (kx == g_hud_kx[1] && ky == g_hud_ky[1]) k = 1;
+        else k = g_hud_last ^ 1;
+        g_hud_rec = k;
+        g_hud_last = k;
+        g_hud_kx[k] = kx; g_hud_ky[k] = ky;
+        g_hud_n[k] = 0;
+        g_disp_dirty = 1;                             /* the picture changes although VRAM does not */
+    }
+    int k = g_hud_rec;
+    if (g_hud_n[k] >= HUD_MAX) return 1;
+    int cb[4] = {box[0], box[1], box[2], box[3]};
+    if (cb[0] < g_rs.clip_x0) cb[0] = g_rs.clip_x0;
+    if (cb[1] < g_rs.clip_y0) cb[1] = g_rs.clip_y0;
+    if (cb[2] > g_rs.clip_x1) cb[2] = g_rs.clip_x1;
+    if (cb[3] > g_rs.clip_y1) cb[3] = g_rs.clip_y1;
+    if (cb[0] > cb[2] || cb[1] > cb[3]) return 1;
+    int anchor = hud_anchor(box);
+    HudPrim *h = &g_hudp[k][g_hud_n[k]++];
+    h->prim = (uint8_t)prim; h->n = (uint8_t)n; h->tex = (uint8_t)tex; h->depth = (uint8_t)depth; h->raw = (uint8_t)raw;
+    h->semi = (uint8_t)semi; h->mode = (uint8_t)mode;
+    h->page = (uint16_t)page; h->clut = (uint16_t)clut;
+    h->clip[0] = (int16_t)g_rs.clip_x0; h->clip[1] = (int16_t)g_rs.clip_y0;
+    h->clip[2] = (int16_t)g_rs.clip_x1; h->clip[3] = (int16_t)g_rs.clip_y1;
+    for (int i = 0; i < n; i++) {
+        h->v[i] = v[i];
+        h->x[i] = anchor == HUD_NO_SQUEEZE ? (float)v[i].x : (float)anchor + (float)(v[i].x - anchor) * 0.75f;
+    }
+    return 1;
+}
+
+static void setup_texture(int depth, int page, uint32_t clut);
+static void set_tfx(int raw);
+static void set_tex(int on);
+static void set_filter(int lin);
+static void set_scissor(int x0, int y0, int x1, int y1);
+static void passes(int prim, int fmt, int n, const void *gv, int tex, int semi, int mode);
+static void bind(int target);
+static void arena_full(void);
+static void ge_begin(void);
+static void set_mask(void);
+
+/* presentation (present_scaled): draw the recording that belongs to the displayed rectangle into display buffer tgt;
+ * PS1 pixel (x, y) -> (ox + (x - dx) * kx, oy + (y - dy) * ky) */
+static void hud_draw(int tgt, int dx, int dy, int w, int h, int ox, int oy, int ow, int oh)
+{
+    int k = -1;
+    for (int i = 0; i < 2; i++)
+        if (g_hud_n[i] && g_hud_kx[i] >= dx && g_hud_kx[i] < dx + w && g_hud_ky[i] >= dy && g_hud_ky[i] < dy + h) k = i;
+    if (k < 0) return;
+    uint64_t t0_ = now_us();
+    g_hud_draws++; g_hud_prims += (uint32_t)g_hud_n[k];
+    float kx = (float)ow / (float)w, ky = (float)oh / (float)h;
+    uint16_t save_mc = g_rs.mask_check, save_ms = g_rs.mask_set;   /* the game's drawing state stays untouched */
+    g_rs.mask_check = 0; g_rs.mask_set = 0;
+    set_mask();
+    set_filter(0);
+    for (int j = 0; j < g_hud_n[k]; j++) {
+        const HudPrim *p = &g_hudp[k][j];
+        if (g_vtop > H.vlimit - 1024) arena_full();
+        ge_begin();
+        if (p->tex) { setup_texture(p->depth, p->page, p->clut); set_tfx(p->raw); }   /* may sync and restart */
+        set_tex(p->tex);
+        bind(tgt);
+        set_filter(0);
+        int sx0 = ox + (int)((float)(p->clip[0] - dx) * kx), sy0 = oy + (int)((float)(p->clip[1] - dy) * ky);
+        int sx1 = ox + (int)((float)(p->clip[2] + 1 - dx) * kx + 0.999f) - 1;
+        int sy1 = oy + (int)((float)(p->clip[3] + 1 - dy) * ky + 0.999f) - 1;
+        if (sx0 < 0) sx0 = 0;
+        if (sy0 < 0) sy0 = 0;
+        if (sx1 > 479) sx1 = 479;
+        if (sy1 > 271) sy1 = 271;
+        if (sx0 > sx1 || sy0 > sy1) continue;
+        set_scissor(sx0, sy0, sx1, sy1);
+        FVtx *fv = valloc_v(p->n * (int)sizeof(FVtx));
+        for (int i = 0; i < p->n; i++)
+            fv[i] = (FVtx){(float)p->v[i].u, (float)p->v[i].v, p->v[i].c, (float)ox + (p->x[i] - (float)dx) * kx,
+                           (float)oy + (float)(p->v[i].y - dy) * ky, 0};
+        passes(p->prim, FFMT, p->n, fv, p->tex, p->semi, p->mode);
+    }
+    g_rs.mask_check = save_mc; g_rs.mask_set = save_ms;
+    S.stencil = -1;                                   /* set_mask from the game's state again at the next primitive */
+    g_hud_us += (uint32_t)(now_us() - t0_);
+}
 static inline float map_y(const Frame *f, float y) { return f->oy + y * f->ky; }
 
 /* Display swaps take effect at the next vblank (SETBUF_NEXTFRAME): until then the previously shown buffer is still
@@ -1088,7 +1216,10 @@ void ge_polygon(const uint32_t *w)
     }
     if (tex) g_rs.texpage = (g_rs.texpage & ~0x9FFu) | (page & 0x9FF);
     int depth = (int)(page >> 7) & 3, mode = (g_rs.texpage >> 5) & 3;
-    if (g_hud_mode) hud_squeeze(v, n, box);
+    if (g_hud_mode) {
+        if (hud_record(GU_TRIANGLE_STRIP, n, v, box, tex, depth, (int)page, clut, raw, semi, mode)) { g_phase = ph_; return; }
+        hud_squeeze(v, n, box);
+    }
     if (g_bench_stage != 2)
         submit(GU_TRIANGLE_STRIP, n, v, box, tex, depth, (int)page, clut, raw, semi, mode, raster_polygon, w, n3d >= 2, xyj);
     g_phase = ph_;
@@ -1122,7 +1253,11 @@ void ge_rect(const uint32_t *w)
         {(uint16_t)u0, (uint16_t)v0, 0xFF000000u | col, (int16_t)x0, (int16_t)y0, 0, 0},
         {(uint16_t)(u0 + ww), (uint16_t)(v0 + hh), 0xFF000000u | col, (int16_t)(x0 + ww), (int16_t)(y0 + hh), 0, 0},
     };
-    if (g_hud_mode) hud_squeeze(v, 2, box);
+    if (g_hud_mode) {
+        if (hud_record(GU_SPRITES, 2, v, box, tex, depth, (int)(g_rs.texpage & 0x1F) | (depth << 7), clut, raw, semi,
+                       mode)) { g_phase = ph_; return; }
+        hud_squeeze(v, 2, box);
+    }
     if (g_bench_stage == 2) return;
     submit(GU_SPRITES, 2, v, box, tex, depth, (int)(g_rs.texpage & 0x1F) | (depth << 7), clut, raw, semi, mode,
            raster_rect, w, 0, 0);
@@ -1140,7 +1275,10 @@ void ge_line(int x0, int y0, uint32_t c0, int x1, int y1, uint32_t c1, int semi)
         {0, 0, 0xFF000000u | c1, (int16_t)x1, (int16_t)y1, 0, 0},
     };
     int n3d = is_3d_xy(((uint32_t)y0r << 16) | (x0r & 0xFFFF)) + is_3d_xy(((uint32_t)y1r << 16) | (x1r & 0xFFFF));
-    if (g_hud_mode) hud_squeeze(v, 2, box);
+    if (g_hud_mode) {
+        if (hud_record(GU_LINES, 2, v, box, 0, 0, 0, 0, 0, semi, (g_rs.texpage >> 5) & 3)) return;
+        hud_squeeze(v, 2, box);
+    }
     if (g_bench_stage == 2) return;
     submit(GU_LINES, 2, v, box, 0, 0, 0, 0, 0, semi, (g_rs.texpage >> 5) & 3, 0, 0, n3d >= 2, 0);
 }
@@ -1336,6 +1474,7 @@ static int present_scaled(int tgt, int dx, int dy, int w, int h, int blank)
         }
         sceGuTexFilter(GU_NEAREST, GU_NEAREST); S.filter = 0;
         sceGuTexWrap(GU_REPEAT, GU_REPEAT);
+        if (g_hud_defer && ge_wide_now()) hud_draw(tgt, dx, dy, w, h, ox, oy, ow, oh);
     }
     if (g_async && !on_screen) { ge_kick(tgt); return 1; }
     ge_sync();
@@ -1547,6 +1686,8 @@ void ge_init(void)
     }
     sceKernelDcacheWritebackInvalidateRange(g_clut_arena, sizeof g_clut_arena);
     g_async = g_async_present && g_varena_edram && !g_hires;
+    g_hudp = memalign(64, 2 * sizeof *g_hudp);
+    if (!g_hudp) g_hud_defer = 0;
     if (g_async) {                 /* display buffer 2 is unused at 1x: vertex ring from there to the end of eDRAM */
         g_varena_eoff = FB_OFF(2);
         g_varena_size = 0x200000u - FB_OFF(2);

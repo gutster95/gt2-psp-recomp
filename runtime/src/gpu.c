@@ -511,6 +511,9 @@ stats:
             logf_("vertex arena: max %u bytes per batch, display list max %u bytes\n", (unsigned)g_vtop_max,
                   (unsigned)g_list_max);
             g_vtop_max = g_list_max = 0;
+            extern uint32_t g_hud_draws, g_hud_prims, g_hud_us;
+            logf_("hud: %u draws, %u prims, %u us\n", (unsigned)g_hud_draws, (unsigned)g_hud_prims, (unsigned)g_hud_us);
+            g_hud_draws = g_hud_prims = g_hud_us = 0;
             logf_("waits: scanout %u x %u ms, present %u x %u ms, ge sync %u x %u ms\n",
                   (unsigned)g_wait_n[0], (unsigned)(g_wait_us[0] / 1000), (unsigned)g_wait_n[1], (unsigned)(g_wait_us[1] / 1000),
                   (unsigned)g_wait_n[2], (unsigned)(g_wait_us[2] / 1000));

@@ -13,7 +13,15 @@ names = [l.strip() for l in (proj / "data/hot_functions.txt").read_text().splitl
 tmpl = (proj / "runtime/ld/linkfile.prx.in").read_text()
 anchor = "    _ftext = . ;\n"
 assert anchor in tmpl
-hot = "".join(f"    *(.text.{n} .text.{n}.*)\n" for n in names)    # .part/.constprop clones too
+def entry(n: str) -> str:
+    if n.startswith("pad="):                         # pad=<bytes>: gap (I-cache set alignment experiments)
+        return f"    . += {int(n[4:], 0)};" + chr(10)
+    if ":" in n:                                     # library member, e.g. libpspgu.a:sceGuDrawArray.o
+        return f"    *{n}(.text .text.*)\n"
+    return f"    *(.text.{n} .text.{n}.*)\n"            # .part/.constprop clones too
+
+
+hot = "".join(entry(n) for n in names)
 out = tmpl.replace(anchor, anchor + "    /* hot code first (data/hot_functions.txt, scripts/make_linkfile.py) */\n" + hot, 1)
 (proj / "runtime/ld/linkfile.prx").write_text(out, newline="\n")
 print(f"linkfile.prx: {len(names)} hot functions")

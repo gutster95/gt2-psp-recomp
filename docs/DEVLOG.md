@@ -613,3 +613,23 @@ over 200000 random register sets incl. extreme values - 0 mismatches):
   + decode incl. rects/lines (stage 2 now stops them too) 3066, + clip 3769, + texture setup 6808, + draw state/
   emit 10153, full 10164. `list_uncached=1` (display list through the uncached mirror): no difference. The runtime
   with -Os instead of -O2: 12.6 ms (slower).
+
+## 2026-11-20 - 16:9 race HUD at PSP resolution, code layout is worth 10%
+
+* **Race HUD drawn at 480x272** (ge.c `hud_record`/`hud_draw`, `settings.txt hud_defer`, default on with 16:9 and
+  1x presentation): squeezed into the 320-pixel PS1 frame every fourth texel column of the HUD was lost ("She'by",
+  "Rep'ay", "Re?ord", no digits on the tachometer). The race HUD layer is now recorded per PS1 frame buffer (float
+  x squeezed towards the element's anchor, texture page/CLUT, drawing area) and drawn after the presentation blit
+  straight into the display buffer: 1 texel = 1.125 x 1.133 pixels, nearest sampling, nothing lost. Cost ~170
+  primitives / 0.6 ms per frame, the same as drawing them into VRAM before.
+* **The race frame work depends on the code layout by +-10%**: the same EBOOT gives the same `race work` average to
+  +-0.1 ms in repeated runs, but builds with identical logic measured 33.5 / 35.6 / 38.1 ms. The 16 KB 2-way
+  instruction cache: the hot runtime block (GE path, GTE, rt_poll) and the hot game functions evict each other
+  depending on their relative position. Fixes:
+  * `data/hot_functions.txt` updated (GTE variants `gte_rtps_k_nf`... were outside the hot block; game functions by
+    the current PSP profile) and library members can be listed (`libpspgu.a:sceGuDrawArray.o`, memcpy, memset).
+  * `pad=<bytes>` entries insert a gap; a gap before the game functions, measured: 0 35.6, 1 KB 34.9, **2 KB 33.6**,
+    3 KB 37.1, 4 KB 33.7, 5 KB 33.9, 6 KB 35.0, 7 KB 35.2 ms. 2 KB kept.
+  * Every change to a function in the hot block shifts the layout: re-measure with `build/racework.sh` (and redo the
+    gap search) after such changes. The overlay renderers are 27-36 KB each, so a contiguous hot block that fits the
+    cache is impossible at function granularity - profile-guided block layout would be the robust fix.
