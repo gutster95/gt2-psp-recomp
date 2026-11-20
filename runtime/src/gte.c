@@ -249,6 +249,7 @@ void gte_mvmva_o(PsxCpu *c, uint32_t insn) { GTE_PH(gte_mvmva_fast(c, insn, 1));
 void gte_rtps_nf(PsxCpu *c, uint32_t insn) { GTE_PH(gte_rtp_fast(c, insn, 0, 0)); }
 void gte_rtpt_nf(PsxCpu *c, uint32_t insn) { GTE_PH(gte_rtp_fast(c, insn, 1, 0)); }
 void gte_mvmva_nf(PsxCpu *c, uint32_t insn) { GTE_PH(gte_mvmva_fast(c, insn, 0)); }
+void gte_dpcs_o(PsxCpu *c, uint32_t insn) { GTE_PH(gte_dpcs_fast(c, insn, 1)); }
 #define GTE_DEF_V(k)     void gte_mv_##k(PsxCpu *c) { const uint32_t insn = 0x##k##u; GTE_PH(gte_mvmva_fast(c, insn, 1)); }     void gte_mv_##k##_nf(PsxCpu *c) { const uint32_t insn = 0x##k##u; GTE_PH(gte_mvmva_fast(c, insn, 0)); }
 GTE_MVMVA_VARIANTS(GTE_DEF_V)
 void gte_rtps_k(PsxCpu *c) { const uint32_t insn = 0x4a180001u; GTE_PH(gte_rtp_fast(c, insn, 0, 1)); }
@@ -283,7 +284,8 @@ static void gte_selftest(void)
 {
     static PsxCpu a, b;
     static const uint32_t insns[] = {0x4a180001u, 0x4a280030u, 0x4a180401u, 0x4a280430u, 0x4a498012u, 0x4a4a6012u,
-                                     0x4a486012u, 0x4a4c6012u, 0x4a40e012u, 0x4a4be012u, 0x4a49e412u, 0x4a41a012u};
+                                     0x4a486012u, 0x4a4c6012u, 0x4a40e012u, 0x4a4be012u, 0x4a49e412u, 0x4a41a012u,
+                                     0x4a780010u, 0x4a780410u, 0x4a700010u, 0x4a700410u};
     int bad = 0;
     for (int it = 0; it < 200000 && bad < 8; it++) {
         for (int i = 0; i < 32; i++) { a.gte_data[i] = rnd_val(); a.gte_ctrl[i] = rnd_val(); }
@@ -293,6 +295,7 @@ static void gte_selftest(void)
         b = a;
         uint32_t insn = insns[rnd() % (sizeof insns / sizeof insns[0])];
         if ((insn & 63) == 0x12) { gte_mvmva_fast2(&a, insn, 1, 1); gte_mvmva_fast2(&b, insn, 1, 0); }
+        else if ((insn & 63) == 0x10) { gte_dpcs_fast(&a, insn, 1); gte_cmd_impl(&b, insn); }
         else { gte_rtp_fast(&a, insn, (insn & 63) == 0x30, 1); gte_rtp_ref(&b, insn, (insn & 63) == 0x30, 1); }
         if (memcmp(a.gte_data, b.gte_data, sizeof a.gte_data) || a.gte_ctrl[31] != b.gte_ctrl[31]) {
             bad++;

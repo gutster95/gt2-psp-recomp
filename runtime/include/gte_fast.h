@@ -330,6 +330,43 @@ GT2_INLINE void gte_rtp_fast(PsxCpu *c, uint32_t insn, int three, int fl)
     c->gte_ctrl[31] = flag;
 }
 
+/* DPCS (depth cue single): same semantics as gte.c depth_cue_from + push_color (selftest in gte.c). GT2 issues it
+ * ~360 times per race frame; the slow path went through the full command switch with a global flag word. */
+GT2_INLINE void gte_dpcs_fast(PsxCpu *c, uint32_t insn, int fl)
+{
+    uint32_t *D = c->gte_data, *C = c->gte_ctrl;
+    int sf = (insn >> 19) & 1, lm = (insn >> 10) & 1;
+    int32_t i0 = (int16_t)D[8];
+    uint32_t rgbc = D[6], flag = 0, rgb = 0;
+    for (int i = 0; i < 3; i++) {
+        int64_t m = (int64_t)((rgbc >> (8 * i)) & 0xFF) << 16;
+        int64_t v = ((int64_t)(int32_t)C[21 + i] << 12) - m;            /* FC << 12 - colour */
+        if (v > 0x7FFFFFFFFFFLL) flag |= 1u << (30 - i);
+        else if (v < -0x80000000000LL) flag |= 1u << (27 - i);
+        int32_t m1 = (int32_t)(sf ? (v >> 12) : v);
+        int32_t ir = gtef_clamp(m1, -0x8000, 0x7FFF);                    /* IR with lm = 0 */
+        flag |= (uint32_t)(ir != m1) << (24 - i);
+        int64_t v2 = (int64_t)ir * i0 + m;                               /* colour + (FC - colour) * IR0 */
+        if (v2 > 0x7FFFFFFFFFFLL) flag |= 1u << (30 - i);
+        else if (v2 < -0x80000000000LL) flag |= 1u << (27 - i);
+        int32_t m2 = (int32_t)(sf ? (v2 >> 12) : v2);
+        int32_t ir2 = gtef_clamp(m2, lm ? 0 : -0x8000, 0x7FFF);
+        flag |= (uint32_t)(ir2 != m2) << (24 - i);
+        D[25 + i] = (uint32_t)m2;
+        D[9 + i] = (uint32_t)ir2;
+        int32_t col = gtef_clamp(m2 >> 4, 0, 255);
+        flag |= (uint32_t)(col != (m2 >> 4)) << (21 - i);
+        rgb |= (uint32_t)col << (8 * i);
+    }
+    D[20] = D[21];
+    D[21] = D[22];
+    D[22] = rgb | (rgbc & 0xFF000000u);
+    if (!fl) return;
+    if (flag & GTE_FLAG_ERR) flag |= 0x80000000u;
+    C[31] = flag;
+}
+void gte_dpcs_o(PsxCpu *c, uint32_t insn);
+
 /* Out-of-line copies of the bigger fast paths (gte.c). GT2_GTE_OUTLINE (generated code): calls instead of inline
  * expansion - an inline RTPT is ~300 instructions, and the renderer functions grew to 66 KB with them (the PSP's
  * instruction cache is 16 KB). */
@@ -374,7 +411,9 @@ GT2_INLINE void gte_cmd(PsxCpu *c, uint32_t insn)
     case 0x01: gte_rtps_o(c, insn); return;
     case 0x30: gte_rtpt_o(c, insn); return;
     case 0x12: gte_mvmva_o(c, insn); return;
+    case 0x10: gte_dpcs_o(c, insn); return;
 #else
+    case 0x10: gte_dpcs_fast(c, insn, 1); return;
     case 0x01: gte_rtp_fast(c, insn, 0, 1); return;
     case 0x30: gte_rtp_fast(c, insn, 1, 1); return;
     case 0x12: gte_mvmva_fast(c, insn, 1); return;

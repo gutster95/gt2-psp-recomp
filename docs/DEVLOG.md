@@ -779,3 +779,6 @@ the Media Engine:
 * PGO profiling hangs in __gcov_dump once the ME has run (the PSP then needed a power cycle): pgo.sh profiles with
   me_gpu=0 now (same game code; the GPU code profiled on the main CPU is the code the ME runs). quit_game is guarded
   against a second request and stops the ME first (me_stop).
+* DPCS fast path (gte_fast.h gte_dpcs_fast, outlined gte_dpcs_o): ~360 per race frame went through the slow command
+  switch. Bit-exact against gte_cmd_impl in the startup selftest (membench=2; sf/lm variants added), checked in
+  PPSSPP while the PSP was unreachable: 0 mismatches in 200000 random register sets. Speed still to be measured.
