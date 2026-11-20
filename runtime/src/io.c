@@ -45,6 +45,7 @@ void raise_irq(int bit) { g_i_stat |= 1u << bit; }
 int g_fps60;   /* settings.txt fps60: frame interval 1 instead of 2 (recomp.py, Silent's 60 FPS cheat); experiment */
 int g_fx60 = 1;   /* fps60_effects: keep mirror and tire smoke at 60 fps (0: the game turns them off) */
 int g_lowlod;     /* lowlod: other cars always at the lowest LOD (recomp.py) */
+int g_track_lod;  /* track_lod: distance classes with the full scenery model (0 = game: 3, replays all) */
 int g_performance;   /* performance=1: fps60, fps60_effects=0, lowlod=1 (main.c) */
 
 static int g_fps60_patched;   /* the frame interval currently 1 is ours (was 2) */

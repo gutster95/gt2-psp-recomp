@@ -849,4 +849,8 @@ the Media Engine:
 * In the attract demo at 60 fps the main CPU is the limit again (frame work 20-25 ms, partly the extra simulation
   ticks of fps60_dynamic: 72% one-vblank frames with the fixed step, 59% with the dynamic one); in the user's own
   race it was the ME. ME run-to-run noise is +-1.5 ms per frame.
+* Track LOD (`track_lod`, performance mode 2): the scenery renderer uses a segment's full model below distance class 3
+  and the simple one above, replays always the full one (Silent's draw distance cheat). The limit is a setting now,
+  in replays too. Attract replay at 30 fps: primitives -3.5%, ME ~-0.9 ms (within the noise); track_lod=1 gives no
+  more. Visually unchanged.
 

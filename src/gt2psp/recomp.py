@@ -131,6 +131,13 @@ for _a in (0x800168C8, 0x80019644, 0x80029550):
 # s2 = 1; "set to 3 to force the lowest LOD").
 OVERRIDE[("ovl0", 0x8001435C)] = "c->r[18] = c->r[2] == 0u ? 1u : (g_lowlod ? 3u : 0u);"
 
+# Track LOD (settings.txt track_lod=N, performance mode 2): the scenery renderer (0x800203xx) draws a track segment
+# with its full model when the segment's distance class s1 (lhu 12(s6)) is below 3 and with the simple one above;
+# replays (flag 0x800A951C) always use the full model (Silent's "Higher draw distance" cheat jumps over the test).
+# track_lod sets the limit, in replays too.
+OVERRIDE[("ovl0", 0x80020418)] = "c->r[2] = g_track_lod ? 0u : (uint32_t)ram_r8o(c->r[21], 24);"
+OVERRIDE[("ovl0", 0x80020428)] = "c->r[2] = c->r[17] < (g_track_lod ? (uint32_t)g_track_lod : 3u);"
+
 
 # Runtime functions that take the CPU but never touch c->r[] (GTE, coprocessor 0, division, interrupt polling,
 # the widescreen clipper): calls to them need no register write-back (see registers_to_locals).
