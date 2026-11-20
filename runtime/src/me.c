@@ -21,6 +21,8 @@
 #include "rt.h"
 #include "me.h"
 #include "gpu.h"
+#include "prof.h"
+#include <stdio.h>
 
 int g_me_gpu = 1;          /* settings.txt me_gpu=0: GPU path on the main CPU */
 int g_me_active;
@@ -37,6 +39,7 @@ typedef struct {
     uint32_t req_seq, req_start, req_end, req_show, req_fps, req_wait, done_seq;
     uint32_t log_head, log_tail;
     uint32_t alive, exit, ready, started, vshadow;
+    uint32_t mprof[16];                  /* ME cycles per profiler phase (GT2_ME_PROF builds) */
     uint32_t spad[1024];                 /* main CPU scratchpad state at the ME start (ge.c / raster.h) */
     uint32_t ring[RING][4];
     uint32_t log[LOGN][16];              /* format pointer, argument count, 14 arguments */
@@ -96,6 +99,23 @@ uint32_t me_ge_submit(const void *start, const void *end, int show, int fps, int
 }
 int me_ge_done(uint32_t seq) { return (int32_t)(SH->done_seq - seq) >= 0; }
 
+/* main CPU: ME profile of the last 2 s (GT2_ME_PROF) */
+void me_prof_log(void)
+{
+#ifdef GT2_ME_PROF
+    static const char *const N[13] = {"game", "gte", "gpu-walk", "present", "irq", "cd", "other", "tex", "draw", "prim",
+                                      "touch", "ge-sync", "idle"};
+    char buf[256];
+    int k = 0;
+    for (int i = 0; i < 13; i++) {
+        uint32_t ms = SH->mprof[i] / 333000u;
+        SH->mprof[i] = 0;
+        k += snprintf(buf + k, sizeof buf - k, " %s %u", N[i], (unsigned)ms);
+    }
+    logf_("me profile (ms in 2 s):%s\n", buf);
+#endif
+}
+
 extern void gpu_walk(uint32_t madr);
 extern void gpu_present_core(void);
 
@@ -140,7 +160,14 @@ __attribute__((noinline, aligned(4))) void meLibOnProcess(void)
             if (SH->exit) break;
             continue;
         }
+#ifdef GT2_ME_PROF
+        me_phase_set(PH_OTHER);
         me_exec(SH->ring[t % RING]);
+        me_phase_set(12);                      /* waiting for the next command */
+        for (int i = 0; i < 16; i++) { SH->mprof[i] = SH->mprof[i] + ME_PROF_ACC[i]; ME_PROF_ACC[i] = 0; }
+#else
+        me_exec(SH->ring[t % RING]);
+#endif
         t++;
         sync_();
         SH->tail = t;

@@ -283,6 +283,7 @@ extern uint32_t g_ws_keepw;   /* 16:9: original width for the view setup 0x80049
 void wide_clip_track(PsxCpu *c, int kind, uint32_t entry, uint32_t pkt, uint32_t ot);
 void rt_vsync_enter(int waits);   /* libetc VSync hooks (recomp.py): frame work statistics, gpu.c */
 void rt_vsync_leave(void);
+void rt_frame_step(uint32_t disp, int after_wait);   /* frame flip hooks (recomp.py, io.c) */
 
 extern int32_t g_poll_budget;
 void rt_poll(PsxCpu *c);

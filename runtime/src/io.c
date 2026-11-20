@@ -48,6 +48,56 @@ int g_lowlod;     /* lowlod: other cars always at the lowest LOD (recomp.py) */
 int g_performance;   /* performance=1: fps60, fps60_effects=0, lowlod=1 (main.c) */
 
 static int g_fps60_patched;   /* the frame interval currently 1 is ours (was 2) */
+int g_fps60_dyn = 1;          /* settings.txt fps60_dynamic: game time step = vblanks that really passed */
+uint32_t g_step_hist[4];      /* statistics: time steps given (1, 2, 3+) and frames with debt */
+
+/* Frame flip hooks (recomp.py, 0x800809b0, disp = the game's display struct, struct+24 = interval). At 60 fps the game
+ * simulates one vblank of time per frame; a frame that took two vblanks ran the game in slow motion. fps60_dynamic:
+ * before the wait the interval is 1 (no frame is stretched to two vblanks), after it the vblanks the frame really
+ * took (1 or 2, more is carried over, at most 4) - the next frame simulates that much time, like the game's own
+ * 30 fps mode with interval 2. The frame rate floats between 30 and 60, game time follows real time. */
+static int g_dyn_owned;       /* the interval byte is managed here (io_vblank leaves it alone) */
+void rt_frame_step(uint32_t disp, int after_wait)
+{
+    static uint32_t last;
+    static int debt;
+    uint32_t a = (disp & 0x1FFFFF) + 24;
+    {
+        static uint32_t seen[8];
+        int k;
+        for (k = 0; k < 8 && seen[k] && seen[k] != disp; k++) {}
+        if (k < 8 && !seen[k]) {
+            seen[k] = disp;
+            logf_("frame flip: display struct %08x, interval %u, step byte %u (vblank %u)\n", (unsigned)disp,
+                  (unsigned)g_ram[a & 0x1FFFFF], (unsigned)g_ram[(a + 8) & 0x1FFFFF], (unsigned)g_vblank_count);
+        }
+    }
+    /* the wait uses a copy of the interval in the display struct (a stack variable); the simulation reads the
+     * global interval at 0x801D5864 */
+    const uint32_t G = 0x1D5864u;
+    if (!g_fps60 || !g_fps60_dyn) {
+        if (g_dyn_owned) { g_ram[G] = (uint8_t)(g_fps60 ? 1 : 2); g_dyn_owned = 0; }
+        return;
+    }
+    if (!after_wait) {
+        if (g_ram[G] == 1 || g_dyn_owned) {
+            g_dyn_owned = 1;
+            if (a < PSX_RAM_SIZE && g_ram[a] == g_ram[G]) g_ram[a] = 1;   /* never wait for more than one vblank */
+        }
+        return;
+    }
+    uint32_t now = g_vblank_count, el = last ? now - last : 1;
+    last = now;
+    if (!g_dyn_owned) return;
+    int step = (int)el + debt;
+    if (step < 1) step = 1;
+    int give = step > 2 ? 2 : step;
+    debt = step - give;
+    if (debt > 4) debt = 4;
+    g_ram[G] = (uint8_t)give;
+    g_step_hist[give]++;
+    if (debt) g_step_hist[3]++;
+}
 
 /* settings menu (menu.c) switched fps60: back to the game's interval 2 if we had made it 1 */
 void io_fps60_changed(void)
@@ -59,7 +109,7 @@ void io_fps60_changed(void)
 void io_vblank(void)
 {
     g_vblank_count++;
-    if (g_fps60 && g_ram[0x1D5864] == 2) { g_ram[0x1D5864] = 1; g_fps60_patched = 1; }
+    if (g_fps60 && !g_dyn_owned && g_ram[0x1D5864] == 2) { g_ram[0x1D5864] = 1; g_fps60_patched = 1; }
     card_tick();
     raise_irq(0);
     gpu_present();

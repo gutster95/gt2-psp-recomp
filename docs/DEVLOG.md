@@ -815,3 +815,21 @@ the Media Engine:
     (tools/downloads/gt2-lod-cheat): the per-car LOD mode s2 in overlay 0 at 0x8001435C is 1 for the followed car,
     0 for the others (distance LOD), 3 = lowest; recomp.py OVERRIDE gives the others 3.
 
+## 2026-11-20 - Dynamic 60 fps (no slow motion), real race analysis, settings menu, controls
+
+* Settings menu (menu.c): L+R+SELECT pauses the game and opens it (pspdebug font drawn into the picture on screen,
+  SPU muted); mode, 60 fps, mirror/smoke, opponent LOD, fps counter, L/R pair, 16:9 (after restart). Closing writes
+  settings.txt.
+* Controls: in races d-pad up/down also press R2/L2 (upshift/downshift, `dpad_shift`); `lr_shift` swaps the L/R pairs.
+* 16:9 HUD: the tachometer needle (a line) moved to the screen edge when it pointed right - lines and textured
+  elements now join a group when one lies inside the other.
+* User race in performance mode (PSPLink log): main CPU fine (every frame < 20 ms, ~37% idle), the **Media Engine is
+  the limit**: ~18 ms per frame (of that ~3 ms waiting for the GE), the game waits ~1 s per 2 s for it. With 3+ cars
+  in view the frame rate fell to ~40 fps. ARK overclocking (measured ~389 MHz) only speeds up the main CPU.
+* **fps60_dynamic** (default with fps60): the game simulates `interval` vblanks of time per frame (global byte
+  0x801D5864); its flip (0x800809b0) waits on a copy in a stack struct. Hooks before/after the wait: the copy becomes 1
+  (no frame is stretched), the global byte the vblanks the frame really took (1/2, more carried over). Checked with
+  the lap clock in the attract race: fixed step 24.30 s game time in 30.15 s (80.6%, slow motion), dynamic 30.11 s in
+  30.15 s (99.9%). A first try that patched struct+32 (copied from the interval) had no effect. The three
+  "interval < 2" effect switches are pinned (mirror/smoke stay off or on as chosen), so they do not flicker.
+

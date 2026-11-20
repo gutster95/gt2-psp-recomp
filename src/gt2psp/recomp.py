@@ -65,6 +65,12 @@ HOOKS[("resident", 0x8008C338)] = "rt_vsync_enter((int32_t)c->r[4] >= 0 && c->r[
 HOOKS[("resident", 0x8008C4A8)] = "rt_vsync_leave();"
 HOOKS[("resident", 0x8007D23C)] = "rt_vsync_enter((int32_t)c->r[4] > 0);"
 HOOKS[("resident", 0x8007D288)] = "rt_vsync_leave();"
+# Frame flip (0x800809b0, s0 = display struct): waits for "interval" vblanks (struct+24, 0x801D5864 in races). The
+# game advances its simulation by the interval per frame (measured with the lap clock: struct+32 is not the step).
+# fps60_dynamic (io.c rt_frame_step): before the wait the interval is 1 (a fast frame is not stretched), after it the
+# vblanks that really passed, so the next frame simulates that much time: no slow motion below 60 fps.
+HOOKS[("resident", 0x80080B88)] = "rt_frame_step(c->r[16], 0);"
+HOOKS[("resident", 0x80080B94)] = "rt_frame_step(c->r[16], 1);"
 for _k, _b, _f, _e, _p, _m in _TRACK_LOOPS:
     HOOKS[("ovl0", _b)] = (f"if ((int32_t)c->r[{_f}] < 0 && g_widescreen) "
                            f"wide_clip_track(c, {_k}, c->r[{_e}], c->r[{_p}], c->r[14]);")
@@ -117,7 +123,7 @@ for _pc, _v in ((0x8001CDF4, 179), (0x8001CDFC, -50), (0x8001CE04, 800)):
 # unless fps60_effects=0 (performance mode: the game's own 60 fps trade-off, the mirror renders the scene twice).
 # The simulation advances a fixed step per frame: below a steady 60 fps the game runs in slow motion.
 for _a in (0x800168C8, 0x80019644, 0x80029550):
-    OVERRIDE[("ovl0", _a)] = "c->r[2] = g_fps60 && g_fx60 ? 0u : (uint32_t)((int32_t)c->r[2] < 2);"
+    OVERRIDE[("ovl0", _a)] = "c->r[2] = g_fps60 ? (g_fx60 ? 0u : 1u) : (uint32_t)((int32_t)c->r[2] < 2);"
 
 # Car LOD (settings.txt lowlod=1, performance mode): the per-car LOD mode s2 is 1 for the car the camera follows
 # (always the highest LOD), 0 for the others (LOD by distance) and 3 in special cases (lowest LOD). lowlod=1 gives

@@ -120,6 +120,11 @@ void gpu_present(void)
     if (++frame % 120 == 0) {
         {
             extern uint32_t g_pace_hist[5];
+            extern uint32_t g_step_hist[4];
+            if (g_step_hist[1] + g_step_hist[2])
+                logf_("fps60 steps: %u x 1, %u x 2, %u frames with debt\n", (unsigned)g_step_hist[1],
+                      (unsigned)g_step_hist[2], (unsigned)g_step_hist[3]);
+            memset(g_step_hist, 0, sizeof(uint32_t) * 4);
             logf_("pacing: lists after 1/2/3/4+ vblanks: %u %u %u %u\n", (unsigned)g_pace_hist[1],
                   (unsigned)g_pace_hist[2], (unsigned)g_pace_hist[3], (unsigned)g_pace_hist[4]);
             memset(g_pace_hist, 0, sizeof(uint32_t) * 5);
@@ -139,6 +144,8 @@ void gpu_present(void)
                   (unsigned)g_me_waits, (unsigned)((g_me_wait_us - last_wait) / 1000));
             last_wait = g_me_wait_us;
             g_me_walks = g_me_walk_us = g_me_walk_max = g_me_waits = 0;
+            extern void me_prof_log(void);
+            me_prof_log();
         }
     }
 }
