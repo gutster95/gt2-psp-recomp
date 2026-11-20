@@ -192,3 +192,10 @@ tools/             (ignored) local toolchain (pspdev inside a project-local WSL 
 `runtime/src/mdec.c` decodes the run-length/DCT macroblock format in software behind the MDEC registers and DMA
 channels 0/1 (input buffered per command, output decoded lazily one macroblock at a time; a DMA1 started before the
 input is complete is finished when it is). The Simulation disc has no movies; see DEVLOG 2026-11-18.
+* **60 fps modes** (2026-11-20, io.c rt_frame_step, recomp.py hooks on the game's flip 0x800809b0): the game simulates
+  `interval` vblanks of time per frame (byte 0x801D5864); its flip waits on a copy of it in a stack struct. With fps60
+  the runtime owns both: the wait copy is 1 (or 2 while locked to 30 fps), the global byte becomes the vblanks the
+  previous frame really took (fps60_dynamic), so game speed is right at any frame rate; fps60_auto locks to 30 fps
+  when 60 cannot be held (stable pacing instead of 30/60 judder). Performance mode = fps60 + game's own 60 fps
+  trade-offs (no mirror/tire smoke) + low-LOD opponents + track_lod 2.
+

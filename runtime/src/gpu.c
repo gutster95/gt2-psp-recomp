@@ -11,6 +11,8 @@
 #include "rt.h"
 #include "gpu.h"
 #include "prof.h"
+
+uint32_t g_submit_wait_us;   /* me.c: ME time waiting for the service thread to take a list */
 #include "raster.h"
 #include "ge.h"
 #include "me.h"
@@ -441,6 +443,9 @@ stats:
                   "ME wait ms by reason 0-15:", (unsigned)d[11], (unsigned)d[12], (unsigned)d[13], (unsigned)d[14],
                   (unsigned)d[15]);
             for (int i = 0; i < 16; i++) { logf_(" %u", (unsigned)(g_sync_us[i] / 1000)); g_sync_us[i] = 0; }
+            extern uint32_t g_submit_wait_us;   /* written by the ME, defined here: ME data block */
+            logf_("; submit wait %u ms", (unsigned)(g_submit_wait_us / 1000));
+            g_submit_wait_us = 0;
             logf_("\n");
             logf_("ge syncs by reason (other fill upload readback copy list clut-drawn clut-full sw vtx present): "
                   "%u %u %u %u %u %u %u %u %u %u %u\n", (unsigned)d[0], (unsigned)d[1], (unsigned)d[2], (unsigned)d[3],

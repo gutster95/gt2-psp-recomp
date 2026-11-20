@@ -854,3 +854,18 @@ the Media Engine:
   in replays too. Attract replay at 30 fps: primitives -3.5%, ME ~-0.9 ms (within the noise); track_lod=1 gives no
   more. Visually unchanged.
 
+## 2026-11-20 - Stable frame rates: automatic 30/60 lock
+
+* User race in performance mode with the release build: here the **main CPU** was the limit (frame work 20-30 ms,
+  ~3900 polygons per frame vs ~2400 in the attract demo). Race profile (GT2_POLL_FN): almost all of it is the game's
+  3D renderers (car meshes 0x800234f8 ~19%, other mesh/scenery renderers 5-7% each), i.e. GTE emulation per vertex;
+  physics is not significant.
+* GTE micro-benchmark (membench=2, ~389 MHz): RTPS ~760-980 ns, RTPT ~2-2.5 us, MVMVA 350-600 ns, the UNR divide
+  ~230 ns. Tried the projection divide on the FPU (float): slower (311 vs 253 ns in the benchmark) - reverted.
+* **fps60_auto** (default on): instead of alternating 1 and 2 vblanks (judder) the game is locked to 30 fps when it
+  misses 60 in 3 of the last 32 frames, and goes back to 60 once every frame of a 2 s window was ready within 15.5 ms
+  (work measured from the end of one flip wait to the start of the next, incl. the wait for the ME). The game time
+  step follows real time in both (lap clock 30.108 s in 30.14 s). Attract demo (heavy): locks to a steady 30.
+  Settings menu: "60 fps lock: auto / always 60".
+* Media Engine: submit wait measured (time the ME waits for the service thread to take the next list).
+

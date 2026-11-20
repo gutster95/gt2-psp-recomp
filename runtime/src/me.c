@@ -81,9 +81,14 @@ uint32_t me_vcount(void) { return SH->vcount; }
 uint32_t me_swap_vcount(void) { return SH->swap_vcount; }
 
 static uint32_t g_req;      /* ME-side request counter (ME region: gpu state lives in ME-only files... kept here, only the ME writes it) */
+extern uint32_t g_submit_wait_us;       /* gpu.c (ME data block): ME time waiting for the service thread to take a list */
 uint32_t me_ge_submit(const void *start, const void *end, int show, int fps, int wait)
 {
-    while (SH->done_seq != SH->req_seq) {}            /* one request at a time */
+    if (SH->done_seq != SH->req_seq) {                /* one request at a time */
+        uint64_t t0 = me_now_us();
+        while (SH->done_seq != SH->req_seq) {}
+        g_submit_wait_us += (uint32_t)(me_now_us() - t0);
+    }
     uint32_t s = SH->req_seq + 1;
     SH->req_start = (uint32_t)start;
     SH->req_end = (uint32_t)end;

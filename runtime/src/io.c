@@ -58,6 +58,13 @@ uint32_t g_step_hist[4];      /* statistics: time steps given (1, 2, 3+) and fra
  * took (1 or 2, more is carried over, at most 4) - the next frame simulates that much time, like the game's own
  * 30 fps mode with interval 2. The frame rate floats between 30 and 60, game time follows real time. */
 static int g_dyn_owned;       /* the interval byte is managed here (io_vblank leaves it alone) */
+/* fps60_auto (default on): stable frame rates. Frames that miss 60 fps alternate 1 and 2 vblanks (judder). When a
+ * scene keeps missing (3 of the last 32 frames), the game is locked to 30 fps (every frame waits 2 vblanks); it goes
+ * back to 60 once every frame of two seconds was ready in 15.5 ms (work = end of the previous wait to the start of
+ * this one, including the wait for the Media Engine). The time step follows real time in both. */
+int g_fps60_auto = 1;
+int g_lock30;                 /* currently locked to 30 fps (fps counter, statistics) */
+uint32_t g_lock_switches;
 void rt_frame_step(uint32_t disp, int after_wait)
 {
     static uint32_t last;
@@ -80,16 +87,38 @@ void rt_frame_step(uint32_t disp, int after_wait)
         if (g_dyn_owned) { g_ram[G] = (uint8_t)(g_fps60 ? 1 : 2); g_dyn_owned = 0; }
         return;
     }
+    static uint64_t t_aw;                             /* end of the previous wait */
+    static uint32_t win_n, win_slow, ok_windows, miss_hist;
     if (!after_wait) {
         if (g_ram[G] == 1 || g_dyn_owned) {
             g_dyn_owned = 1;
-            if (a < PSX_RAM_SIZE && g_ram[a] == g_ram[G]) g_ram[a] = 1;   /* never wait for more than one vblank */
+            if (g_fps60_auto && t_aw) {
+                uint64_t work = now_us() - t_aw;
+                win_n++;
+                win_slow += work > 15500;
+                if (g_lock30 && win_n >= 60) {        /* ~2 s at 30 fps: all frames fast enough for 60? */
+                    ok_windows = win_slow ? 0 : ok_windows + 1;
+                    if (ok_windows >= 1) { g_lock30 = 0; g_lock_switches++; miss_hist = 0; ok_windows = 0; }
+                    win_n = win_slow = 0;
+                } else if (!g_lock30 && win_n >= 120) {
+                    win_n = win_slow = 0;
+                }
+            }
+            /* the wait: one vblank, or two when locked to 30 fps */
+            if (a < PSX_RAM_SIZE && g_ram[a] == g_ram[G]) g_ram[a] = (uint8_t)(g_fps60_auto && g_lock30 ? 2 : 1);
         }
         return;
     }
     uint32_t now = g_vblank_count, el = last ? now - last : 1;
     last = now;
+    t_aw = now_us();
     if (!g_dyn_owned) return;
+    if (g_fps60_auto && !g_lock30) {                  /* misses of the last 32 frames (bit history) */
+        miss_hist = (miss_hist << 1) | (el >= 2);
+        if (__builtin_popcount(miss_hist) >= 3) {
+            g_lock30 = 1; g_lock_switches++; win_n = win_slow = 0; ok_windows = 0;
+        }
+    }
     int step = (int)el + debt;
     if (step < 1) step = 1;
     int give = step > 2 ? 2 : step;

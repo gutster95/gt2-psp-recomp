@@ -121,9 +121,12 @@ void gpu_present(void)
         {
             extern uint32_t g_pace_hist[5];
             extern uint32_t g_step_hist[4];
+            extern int g_lock30;
+            extern uint32_t g_lock_switches;
             if (g_step_hist[1] + g_step_hist[2])
-                logf_("fps60 steps: %u x 1, %u x 2, %u frames with debt\n", (unsigned)g_step_hist[1],
-                      (unsigned)g_step_hist[2], (unsigned)g_step_hist[3]);
+                logf_("fps60 steps: %u x 1, %u x 2, %u frames with debt; locked to 30: %d, %u switches\n",
+                      (unsigned)g_step_hist[1], (unsigned)g_step_hist[2], (unsigned)g_step_hist[3], g_lock30,
+                      (unsigned)g_lock_switches);
             memset(g_step_hist, 0, sizeof(uint32_t) * 4);
             logf_("pacing: lists after 1/2/3/4+ vblanks: %u %u %u %u\n", (unsigned)g_pace_hist[1],
                   (unsigned)g_pace_hist[2], (unsigned)g_pace_hist[3], (unsigned)g_pace_hist[4]);
