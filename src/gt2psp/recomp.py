@@ -111,6 +111,14 @@ for _pc, _v in ((0x8001CDF4, 179), (0x8001CDFC, -50), (0x8001CE04, 800)):
     OVERRIDE[("ovl4", _pc)] = f"c->r[2] = g_ws_menus ? (uint32_t)({int(_v * 3 / 4)}) : (uint32_t)({_v});"
 
 
+# 60 fps experiment (settings.txt fps60=1, Silent's GT2 "60 FPS" cheat, NTSC-U 1.2): the runtime sets the frame interval
+# at 0x801D5864 from 2 to 1; the game then disables tire smoke, the sky in the rear view mirror and the mirror itself
+# ("interval < 2" tests, slti v0, v0, 2). With g_fps60 the comparison constant becomes 0 so the effects stay on.
+# The simulation advances a fixed step per frame: below a steady 60 fps the game runs in slow motion.
+for _a in (0x800168C8, 0x80019644, 0x80029550):
+    OVERRIDE[("ovl0", _a)] = "c->r[2] = g_fps60 ? 0u : (uint32_t)((int32_t)c->r[2] < 2);"
+
+
 # Runtime functions that take the CPU but never touch c->r[] (GTE, coprocessor 0, division, interrupt polling,
 # the widescreen clipper): calls to them need no register write-back (see registers_to_locals).
 _NO_FLUSH = {"POLL", "gte_cmd", "gte_cmd_nf", "gte_read_data", "gte_write_data", "gte_read_ctrl", "gte_write_ctrl",

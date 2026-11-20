@@ -752,3 +752,16 @@ Attract race 16:9, PSP-3000 (pacing 100% at 2 vblanks, 30.0 fps):
   the tighter side in heavy stretches; its path is slower than on the main CPU (~10 ms) because lists, vertices,
   CLUTs and the VRAM shadow are written uncached to main RAM;
 * the game waited for the ME 0-2 times per 2 s, for < 1 ms.
+
+## 2026-11-20 - 60 fps experiment again (settings.txt fps60=1, off by default)
+
+Silent's 60 FPS cheat restored as an option (frame interval 0x801D5864 2 -> 1 at every vblank, the three
+"interval < 2" effect switches in overlay 0 overridden so tire smoke and the mirror stay on). With the GPU path on
+the Media Engine:
+* **Machine test (one car): a steady 60 fps** - 100% of the display lists one vblank apart after the start, game
+  speed 100%. Both CPUs are at their limit: the main CPU idles ~0 ms per 2 s, the ME needs ~16.5 ms per frame and the
+  game waits ~3 ms per frame for it (DrawSync).
+* Attract race (6 cars): 80% one vblank, 20% two -> 50 fps, i.e. the simulation runs at 84% speed (slow motion); the
+  main CPU is the limit (idle ~0, ME 14 ms). The attract replay also desyncs at 60 fps (the leading car stood at the
+  start with 0 mph after 1:27) - replays are recorded per 30 fps frame.
+* build/pace.sh now reports 1-vblank frames too (it ignored them).
