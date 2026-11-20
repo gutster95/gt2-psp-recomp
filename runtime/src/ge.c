@@ -152,7 +152,7 @@ static int g_cur_fb = -1;             /* GE draw target: -1 PS1 VRAM, 0/1 hi-res
 static int g_scissor_is_width = 1;    /* sceGuScissor(x, y, w, h) semantics, checked at startup */
 uint32_t g_ge_prims, g_ge_sw_prims, g_ge_tex_uploads, g_ge_syncs, g_ge_pgxp;
 int g_sync_why;                       /* reason of the next ge_sync (statistics, see SYNC_* in ge.h) */
-uint32_t g_sync_stats[16];
+uint32_t g_sync_stats[16], g_sync_us[16];   /* syncs and ME wait time by reason (g_sync_why) */
 
 static inline int sx11(uint32_t v) { return ((int32_t)(v << 21)) >> 21; }
 
@@ -198,6 +198,7 @@ static uint16_t *g_vshadow;             /* shadow base (uncached), 0 = not in ME
 
 static void touch(int x0, int y0, int x1, int y1, int by_ge)   /* inclusive */
 {
+    PHASE_SCOPE(PH_GE_TOUCH);
     if (x0 <= g_disp_rect[2] && x1 >= g_disp_rect[0] && y0 <= g_disp_rect[3] && y1 >= g_disp_rect[1]) g_disp_dirty = 1;
     if (x0 < 0) x0 = 0;
     if (y0 < 0) y0 = 0;
@@ -274,6 +275,7 @@ void ge_poll_async(void);
 
 void ge_sync(void)
 {
+    PHASE_SCOPE(PH_GE_SYNC);
     if (!g_open && !g_inflight) return;
     int ph = g_phase;
     g_phase = PH_GE_SYNC;
@@ -281,7 +283,9 @@ void ge_sync(void)
         uint64_t t = now_us();
         if (g_open) { me_list_end(); g_kicks++; g_me_req = me_ge_submit(g_me_list.start, g_me_list.current, -1, 0, 1); }
         else while (!me_ge_done(g_me_req)) {}
-        g_wait_us[2] += now_us() - t; g_wait_n[2]++;
+        uint64_t dt = now_us() - t;
+        g_wait_us[2] += dt; g_wait_n[2]++;
+        g_sync_us[g_sync_why & 15] += (uint32_t)dt;
     } else {
         if (g_open) { sceGuFinish(); g_kicks++; }
         { uint64_t t = now_us(); sceGuSync(0, 0); g_wait_us[2] += now_us() - t; g_wait_n[2]++; }
@@ -389,7 +393,7 @@ static void arena_full(void)
 /* End the current list without waiting for the GE (presentation) and show `show` once it is done. */
 static void ge_kick(int show)
 {
-    if (g_inflight && !inflight_done()) { ge_sync(); }   /* never two lists in flight */
+    if (g_inflight && !inflight_done()) { g_sync_why = 11; ge_sync(); }   /* never two lists in flight */
     g_inflight = 0;
     if (me_on_me()) {
         if (!g_open) ge_begin();                         /* the swap travels with a list */
@@ -456,6 +460,7 @@ void ge_pull(int x, int y, int w, int h)
     ge_begin();
     sceGuCopyImage(GU_PSM_5551, x, y, w, h, 1024, (void *)EDRAM, x, y, 1024, (void *)g_vshadow);
     sceGuTexSync();
+    g_sync_why = 12;
     ge_sync();
 }
 static void pull_drawn(int x0, int y0, int x1, int y1)   /* inclusive; pulls the stale 64x32 blocks it touches */
@@ -672,6 +677,7 @@ static void setup_texture_full(int depth, int page, uint32_t clut);
 
 static void setup_texture(int depth, int page, uint32_t clut)
 {
+    PHASE_SCOPE(PH_GE_TEX);
     /* Same texture and CLUT as the previous primitive, nothing written into their pages and no GE sync since then
      * (a sync recycles the CLUT arena): the GE state is already right. Most consecutive primitives share them. */
     typedef struct { int depth, page; uint32_t clut, sync, v[4]; const void *cl; uintptr_t tex; Slot *slot; } Memo;
@@ -1168,6 +1174,7 @@ static void passes(int prim, int fmt, int n, const void *gv, int tex, int semi, 
 static void draw(int prim, int n, const GeVtx *v, int tex, int semi, int mode, int vis1, int fk, int is3d,
                  const int *xyj)
 {
+    PHASE_SCOPE(PH_GE_DRAW);
     set_mask();
     set_dither();
     if (g_bench_stage == 10) { check_list(); return; }
@@ -1317,6 +1324,7 @@ static void submit(int prim, int n, const GeVtx *v, int *box, int tex, int depth
 
 void ge_polygon(const uint32_t *w)
 {
+    PHASE_SCOPE(PH_GE_PRIM);
     int ph_ = g_phase;
     g_phase = PH_GE_PRIM;
     uint32_t op = w[0] >> 24;
@@ -1359,6 +1367,7 @@ void ge_polygon(const uint32_t *w)
 
 void ge_rect(const uint32_t *w)
 {
+    PHASE_SCOPE(PH_GE_PRIM);
     int ph_ = g_phase;
     g_phase = PH_GE_PRIM;
     uint32_t op = w[0] >> 24;
@@ -1398,6 +1407,7 @@ void ge_rect(const uint32_t *w)
 
 void ge_line(int x0, int y0, uint32_t c0, int x1, int y1, uint32_t c1, int semi)
 {
+    PHASE_SCOPE(PH_GE_PRIM);
     uint32_t x0r = (uint32_t)x0, y0r = (uint32_t)y0, x1r = (uint32_t)x1, y1r = (uint32_t)y1;
     x0 = sx11(x0) + g_rs.off_x; y0 = sx11(y0) + g_rs.off_y;
     x1 = sx11(x1) + g_rs.off_x; y1 = sx11(y1) + g_rs.off_y;
@@ -1568,6 +1578,7 @@ static int present_scaled(int tgt, int dx, int dy, int w, int h, int blank)
     int on_screen = g_shown == tgt && !me_on_me();
     if (on_screen) {                /* redrawing the shown buffer: the game's queued drawing first, then the clear and
                                      * blit right at the start of the vblank (no double buffer left for 1x screens) */
+        g_sync_why = 13;
         ge_sync();
         if (!sceDisplayIsVblank()) {
             uint64_t t = now_us();
@@ -1610,6 +1621,7 @@ static int present_scaled(int tgt, int dx, int dy, int w, int h, int blank)
         if (g_hud_defer && ge_wide_now()) hud_draw(tgt, dx, dy, w, h, ox, oy, ow, oh);
     }
     if (g_async && !on_screen) { ge_kick(tgt); return 1; }
+    g_sync_why = 14;
     ge_sync();
     return 0;
 }
@@ -1719,7 +1731,7 @@ void ge_present(int dx, int dy, int w, int h, int blank)
         memcpy(g_disp_rect, r, sizeof r);
         g_disp_dirty = blank;
         int tgt = g_hires ? 2 : (g_shown == 0 ? 1 : 0);
-        if (g_pending_show >= 0) ge_sync();             /* the previous picture is still waiting for the GE */
+        if (g_pending_show >= 0) { g_sync_why = 15; ge_sync(); }   /* the previous picture still waits for the GE */
         int async = present_scaled(tgt, dx, dy, w, h, blank);
         {
             static int n;

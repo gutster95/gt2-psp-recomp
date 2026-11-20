@@ -833,3 +833,20 @@ the Media Engine:
   30.15 s (99.9%). A first try that patched struct+32 (copied from the interval) had no effect. The three
   "interval < 2" effect switches are pinned (mirror/smoke stay off or on as chosen), so they do not flicker.
 
+## 2026-11-20 - Media Engine profiling
+
+* The ME has no running timer and its COP0 Count does not advance either. ME profiles: `-DGT2_ME_PROF` (the ME
+  writes its phase to an uncached word, the main CPU's profiler thread samples it) and `-DGT2_ME_FPROF` with
+  `RT_EXTRA=-finstrument-functions` (function level: enter/exit hooks keep a call stack in the ME's local memory;
+  `build/mesyms.sh` symbolizes). New PHASE_SCOPE markers on the GPU path (only active in these builds).
+* Attract race, performance mode: ME busy ~58% (per frame ~12.7 ms): walk/packets 13%, primitive decode 13%,
+  draw emit 15%, touch 6%, texture setup 5%; the function profile is flat (ge_polygon, submit, draw, touch, passes,
+  clip_box, ...). The GE itself needs only ~6 ms per frame (service thread: enqueue -> sync).
+* Tried: batching consecutive primitives with the same state into one draw call (37% of the draws merged): no GE
+  gain (GE not the limit), the ME got no faster (quads as triangle lists = more vertex data). Removed.
+* CPU->VRAM transfers: per word through gpu_gp0 and a division per pixel (vram_put) -> whole packets with column/row
+  counters (xfer_put), also for the ME's block DMA. ~6% of the ME time in the function profile.
+* In the attract demo at 60 fps the main CPU is the limit again (frame work 20-25 ms, partly the extra simulation
+  ticks of fps60_dynamic: 72% one-vblank frames with the fixed step, 59% with the dynamic one); in the user's own
+  race it was the ME. ME run-to-run noise is +-1.5 ms per frame.
+

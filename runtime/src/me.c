@@ -99,22 +99,9 @@ uint32_t me_ge_submit(const void *start, const void *end, int show, int fps, int
 }
 int me_ge_done(uint32_t seq) { return (int32_t)(SH->done_seq - seq) >= 0; }
 
-/* main CPU: ME profile of the last 2 s (GT2_ME_PROF) */
-void me_prof_log(void)
-{
-#ifdef GT2_ME_PROF
-    static const char *const N[13] = {"game", "gte", "gpu-walk", "present", "irq", "cd", "other", "tex", "draw", "prim",
-                                      "touch", "ge-sync", "idle"};
-    char buf[256];
-    int k = 0;
-    for (int i = 0; i < 13; i++) {
-        uint32_t ms = SH->mprof[i] / 333000u;
-        SH->mprof[i] = 0;
-        k += snprintf(buf + k, sizeof buf - k, " %s %u", N[i], (unsigned)ms);
-    }
-    logf_("me profile (ms in 2 s):%s\n", buf);
-#endif
-}
+/* GT2_ME_PROF: the ME's current profiler phase, written uncached by the ME (prof.h), sampled by prof.c */
+uint32_t g_me_phase_word[16] __attribute__((aligned(64)));
+void me_prof_log(void) {}
 
 extern void gpu_walk(uint32_t madr);
 extern void gpu_present_core(void);
@@ -128,7 +115,8 @@ static void me_exec(volatile uint32_t *e)
     case CMD_WALK: me_dcache_wbinv_all(); gpu_walk(a); break;
     case CMD_BLOCK_IN:
         me_dcache_wbinv_all();
-        for (uint32_t i = 0; i < n; i++) gpu_gp0(*(uint32_t *)(g_ram + ((a + 4 * i) & 0x1FFFFC)));
+        if ((a & 0x1FFFFC) + 4 * n <= PSX_RAM_SIZE) gpu_packet((const uint32_t *)(g_ram + (a & 0x1FFFFC)), n);   /* uploads */
+        else for (uint32_t i = 0; i < n; i++) gpu_gp0(*(uint32_t *)(g_ram + ((a + 4 * i) & 0x1FFFFC)));
         break;
     case CMD_BLOCK_OUT:
         for (uint32_t i = 0; i < n; i++)
@@ -150,6 +138,9 @@ __attribute__((noinline, aligned(4))) void meLibOnProcess(void)
         g_vram = (uint16_t *)(SH->vshadow | 0x40000000u);   /* PS1 VRAM shadow in RAM (the ME cannot reach eDRAM) */
         ge_me_attach(g_vram);
     }
+#ifdef GT2_ME_FPROF
+    *(volatile uint32_t *)0x00013E00u = 0;
+#endif
     me_dcache_wbinv_all();
     sync_();
     SH->ready = 1;
@@ -164,7 +155,6 @@ __attribute__((noinline, aligned(4))) void meLibOnProcess(void)
         me_phase_set(PH_OTHER);
         me_exec(SH->ring[t % RING]);
         me_phase_set(12);                      /* waiting for the next command */
-        for (int i = 0; i < 16; i++) { SH->mprof[i] = SH->mprof[i] + ME_PROF_ACC[i]; ME_PROF_ACC[i] = 0; }
 #else
         me_exec(SH->ring[t % RING]);
 #endif
@@ -256,6 +246,8 @@ void me_service(void)
 /* service thread: GE lists finished by the ME -> GE queue, display swaps */
 extern void ge_draw_fps_digits(int buf, int value);
 extern void ge_display_buffer_set(int buf);
+uint64_t g_ge_busy_us;                /* statistics: GE time per list (service thread) */
+uint32_t g_ge_lists;
 static int svc_thread(SceSize args, void *argp)
 {
     (void)args; (void)argp;
@@ -263,8 +255,11 @@ static int svc_thread(SceSize args, void *argp)
     for (;;) {
         uint32_t r = SH->req_seq;
         if (r != seen) {
+            uint64_t t0 = now_us();
             int qid = sceGeListEnQueue((const void *)SH->req_start, 0, -1, 0);
             int sr = qid >= 0 ? sceGeListSync(qid, 0) : -1;
+            g_ge_busy_us += now_us() - t0;          /* the GE is idle when a list is queued: its drawing time */
+            g_ge_lists++;
             static int logged;
             if (logged < 8 || qid < 0) {
                 logged++;
@@ -337,3 +332,32 @@ void me_gpu_start(void)
     g_me_active = 1;
     logf_("me: GPU emulation runs on the Media Engine\n");
 }
+
+#ifdef GT2_ME_FPROF
+/* Function-level ME profile (-finstrument-functions on the GPU path, see scripts): every function entry/exit on the
+ * ME keeps a small call stack in the ME's local memory and publishes the innermost function in g_me_phase_word[1];
+ * the main CPU's profiler samples it (prof.c). On the main CPU (stack below 0x80000000) the hooks do nothing. */
+#define FSTACK ((volatile uint32_t *)0x00013E00u)
+__attribute__((no_instrument_function)) void __cyg_profile_func_enter(void *fn, void *site)
+{
+    (void)site;
+    int sp_;
+    __asm__ volatile("move %0, $sp" : "=r"(sp_));
+    if ((uint32_t)sp_ < 0x80000000u) return;
+    uint32_t d = FSTACK[0];
+    if (d < 100) FSTACK[1 + d] = (uint32_t)fn;
+    FSTACK[0] = d + 1;
+    g_me_phase_uc[1] = (uint32_t)fn;
+}
+__attribute__((no_instrument_function)) void __cyg_profile_func_exit(void *fn, void *site)
+{
+    (void)fn; (void)site;
+    int sp_;
+    __asm__ volatile("move %0, $sp" : "=r"(sp_));
+    if ((uint32_t)sp_ < 0x80000000u) return;
+    uint32_t d = FSTACK[0];
+    if (d) d--;
+    FSTACK[0] = d;
+    g_me_phase_uc[1] = d && d <= 100 ? FSTACK[d] : 0;
+}
+#endif

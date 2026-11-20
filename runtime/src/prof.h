@@ -9,27 +9,26 @@ enum { PH_GAME, PH_GTE, PH_GPU, PH_PRESENT, PH_IRQ, PH_CD, PH_OTHER, PH_GE_TEX, 
 void prof_init(void);
 
 #ifdef GT2_ME_PROF
-/* Media Engine profile (profiling builds): on the ME every phase switch adds the cycles since the last switch (COP0
- * Count, the ME runs in kernel mode) to the old phase in its local memory (ME_PROF_ACC, 16 words, index 12 = waiting
- * for commands); me.c sums them into the shared block after every command, gpuvbl.c logs them. */
-#define ME_PROF_ACC ((volatile uint32_t *)0x00013F80u)
-#define ME_PROF_LAST (*(volatile uint32_t *)0x00013FF8u)
+/* Media Engine profile (profiling builds): the ME has no running timer or cycle counter, so on the ME every phase
+ * switch also writes the phase to a word in the shared block (uncached); the main CPU's profiler thread samples it
+ * (prof.c). Phase 12 = the ME waits for a command. */
+extern uint32_t g_me_phase_word[16];   /* me.c, own cache lines; accessed uncached only */
+#define g_me_phase_uc ((volatile uint32_t *)((uintptr_t)g_me_phase_word | 0x40000000u))
 static inline int me_phase_set(int p)
 {
     int sp_;
     __asm__ volatile("move %0, $sp" : "=r"(sp_));
-    if ((uint32_t)sp_ >= 0x80000000u) {
-        uint32_t now;
-        __asm__ volatile("mfc0 %0, $9" : "=r"(now));
-        ME_PROF_ACC[g_phase & 15] += now - ME_PROF_LAST;
-        ME_PROF_LAST = now;
-    }
+    if ((uint32_t)sp_ >= 0x80000000u) *g_me_phase_uc = (uint32_t)p;
     g_phase = p;
     return p;
 }
 #define PHASE_BEGIN(p) int prev_phase_ = g_phase; me_phase_set(p)
 #define PHASE_END() me_phase_set(prev_phase_)
+static inline void phase_restore_(int *p) { me_phase_set(*p); }
+/* phase for the rest of the enclosing block (every return restores the previous one) */
+#define PHASE_SCOPE(p) int scope_phase_ __attribute__((cleanup(phase_restore_))) = g_phase; me_phase_set(p)
 #else
 #define PHASE_BEGIN(p) int prev_phase_ = g_phase; g_phase = (p)
 #define PHASE_END() g_phase = prev_phase_
+#define PHASE_SCOPE(p) ((void)0)   /* only in ME profiling builds: the extra writes cost in the hot GPU path */
 #endif

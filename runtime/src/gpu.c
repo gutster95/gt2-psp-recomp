@@ -10,6 +10,7 @@
 #include <pspge.h>
 #include "rt.h"
 #include "gpu.h"
+#include "prof.h"
 #include "raster.h"
 #include "ge.h"
 #include "me.h"
@@ -69,11 +70,23 @@ static int cmd_len(uint32_t cmd)
     return 1;
 }
 
-static void vram_put(uint16_t px)
+/* CPU -> VRAM transfer: n words of pixel pairs; returns the words taken (the transfer may end inside the packet).
+ * Column/row counters instead of a division per pixel, and whole packets instead of one gpu_gp0 call per word:
+ * on the Media Engine (uncached VRAM shadow) the per-word path was ~6% of its time in races. */
+static uint32_t xfer_put(const uint32_t *w, uint32_t n)
 {
-    int x = (g_xx + g_xi % g_xw) & 1023, y = (g_xy + g_xi / g_xw) & 511;
-    g_vram[y * 1024 + x] = px;
-    g_xi++;
+    int total = g_xw * g_xh, col = g_xi % g_xw, row = g_xi / g_xw;
+    uint32_t i = 0;
+    while (i < n && g_xi < total) {
+        uint32_t v = w[i++];
+        for (int h = 0; h < 2 && g_xi < total; h++, v >>= 16) {
+            g_vram[((g_xy + row) & 511) * 1024 + ((g_xx + col) & 1023)] = (uint16_t)v;
+            g_xi++;
+            if (++col == g_xw) { col = 0; row++; }
+        }
+    }
+    if (g_xi >= total) { g_xfer_dir = 0; ge_upload_done(g_xx, g_xy, g_xw, g_xh); }
+    return i;
 }
 
 /* Screenshot on L+R+SELECT: snapN.bmp (the PSP screen) next to the EBOOT, N = the first free number. With
@@ -284,12 +297,7 @@ static void polyline_word(uint32_t v)
 
 void gpu_gp0(uint32_t v)
 {
-    if (g_xfer_dir == 1) {
-        vram_put((uint16_t)v);
-        if (g_xi < g_xw * g_xh) vram_put((uint16_t)(v >> 16));
-        if (g_xi >= g_xw * g_xh) { g_xfer_dir = 0; ge_upload_done(g_xx, g_xy, g_xw, g_xh); }
-        return;
-    }
+    if (g_xfer_dir == 1) { xfer_put(&v, 1); return; }
     if (g_polyline) {
         polyline_word(v);
         return;
@@ -321,7 +329,8 @@ void gpu_packet(const uint32_t *w, uint32_t n)
 {
     uint32_t i = 0;
     while (i < n) {
-        if (g_xfer_dir == 1 || g_polyline || g_fifo_n) { gpu_gp0(w[i++]); continue; }
+        if (g_xfer_dir == 1) { i += xfer_put(w + i, n - i); continue; }
+        if (g_polyline || g_fifo_n) { gpu_gp0(w[i++]); continue; }
         int len = cmd_len(w[i]);
         if (len < 0 || i + (uint32_t)len > n) { gpu_gp0(w[i++]); continue; }
         exec(&w[i]);
@@ -424,10 +433,15 @@ stats:
               (unsigned)g_ge_prims, (unsigned)g_ge_pgxp, (unsigned)g_ge_sw_prims, (unsigned)g_ge_tex_uploads,
               (unsigned)g_ge_syncs);
         {
-            extern uint32_t g_sync_stats[16];
+            extern uint32_t g_sync_stats[16], g_sync_us[16];
             static uint32_t last[16];
-            uint32_t d[11];
-            for (int i = 0; i < 11; i++) { d[i] = g_sync_stats[i] - last[i]; last[i] = g_sync_stats[i]; }
+            uint32_t d[16];
+            for (int i = 0; i < 16; i++) { d[i] = g_sync_stats[i] - last[i]; last[i] = g_sync_stats[i]; }
+            logf_("ge syncs 11-15 (kick-inflight pull present-onscreen present-sync pending-show): %u %u %u %u %u; "
+                  "ME wait ms by reason 0-15:", (unsigned)d[11], (unsigned)d[12], (unsigned)d[13], (unsigned)d[14],
+                  (unsigned)d[15]);
+            for (int i = 0; i < 16; i++) { logf_(" %u", (unsigned)(g_sync_us[i] / 1000)); g_sync_us[i] = 0; }
+            logf_("\n");
             logf_("ge syncs by reason (other fill upload readback copy list clut-drawn clut-full sw vtx present): "
                   "%u %u %u %u %u %u %u %u %u %u %u\n", (unsigned)d[0], (unsigned)d[1], (unsigned)d[2], (unsigned)d[3],
                   (unsigned)d[4], (unsigned)d[5], (unsigned)d[6], (unsigned)d[7], (unsigned)d[8], (unsigned)d[9],
@@ -471,6 +485,7 @@ int g_walklog;                 /* settings.txt walklog=<vblank>: log every packe
 
 void gpu_walk(uint32_t madr)
 {
+    PHASE_SCOPE(PH_GPU);
     uint32_t a = madr, guard = 0, prev = 0;
     uint32_t hud_ot = (g_widescreen && ME_UC(g_cur_overlay) == 0) ? madr - RACE_HUD_OT : 1;
     int wl = g_walklog && ME_UC(g_vblank_count) >= (uint32_t)g_walklog;

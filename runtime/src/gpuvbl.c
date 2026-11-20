@@ -146,6 +146,11 @@ void gpu_present(void)
             g_me_walks = g_me_walk_us = g_me_walk_max = g_me_waits = 0;
             extern void me_prof_log(void);
             me_prof_log();
+            extern uint64_t g_ge_busy_us;
+            extern uint32_t g_ge_lists;
+            logf_("ge: %u lists, GE busy avg %u us per list, %u ms in 2 s\n", (unsigned)g_ge_lists,
+                  (unsigned)(g_ge_lists ? g_ge_busy_us / g_ge_lists : 0), (unsigned)(g_ge_busy_us / 1000));
+            g_ge_busy_us = 0; g_ge_lists = 0;
         }
     }
 }

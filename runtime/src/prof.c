@@ -17,8 +17,30 @@ volatile uint32_t g_poll_fn;
 #define FN_SLOTS 4096
 static uint32_t g_fn_addr[FN_SLOTS], g_fn_cnt[FN_SLOTS];
 
+#ifdef GT2_ME_PROF
+static uint32_t g_meph[16], g_metotal;
+#endif
+#ifdef GT2_ME_FPROF
+static uint32_t g_mf_addr[512], g_mf_cnt[512];
+#endif
+
 static void sample(void)
 {
+#ifdef GT2_ME_PROF
+    { extern int g_me_active; if (g_me_active) { g_meph[*g_me_phase_uc & 15]++; g_metotal++; } }
+#ifdef GT2_ME_FPROF
+    {   /* ME function samples (innermost instrumented function, me.c) */
+        extern int g_me_active;
+        uint32_t fn = g_me_active ? g_me_phase_uc[1] : 0;
+        if (*g_me_phase_uc == 12) fn = 1;       /* idle */
+        uint32_t h = (fn * 0x9E3779B1u) >> 23;
+        for (int i = 0; i < 16; i++) {
+            uint32_t j = (h + i) & 511;
+            if (g_mf_addr[j] == fn || !g_mf_cnt[j]) { g_mf_addr[j] = fn; g_mf_cnt[j]++; break; }
+        }
+    }
+#endif
+#endif
     int ph = g_phase;
     if (ph < 0 || ph >= PH_COUNT) ph = PH_OTHER;
     g_ph[ph]++;
@@ -43,6 +65,27 @@ static void report(void)
     logf_("profile (%u samples):", (unsigned)g_total);
     for (int i = 0; i < PH_COUNT; i++) logf_(" %s %u%%", NAMES[i], (unsigned)(g_ph[i] * 100 / g_total));
     logf_("\n");
+#ifdef GT2_ME_PROF
+    if (g_metotal) {
+        static const char *const MN[13] = {"game", "GTE", "GPU walk/lists", "present", "IRQ", "CD", "other", "tex setup",
+                                           "draw emit", "prim decode", "touch", "GE sync wait", "idle (no command)"};
+        logf_("ME profile (%u samples):", (unsigned)g_metotal);
+        for (int i = 0; i < 13; i++) if (g_meph[i]) logf_(" %s %u%%", MN[i], (unsigned)(g_meph[i] * 100 / g_metotal));
+        logf_("\n");
+        memset(g_meph, 0, sizeof g_meph);
+        g_metotal = 0;
+    }
+#endif
+#ifdef GT2_ME_FPROF
+    for (int k = 0; k < 40; k++) {
+        int best = -1;
+        for (int j = 0; j < 512; j++) if (g_mf_cnt[j] && (best < 0 || g_mf_cnt[j] > g_mf_cnt[best])) best = j;
+        if (best < 0) break;
+        logf_("  mefn %08x %u\n", (unsigned)g_mf_addr[best], (unsigned)g_mf_cnt[best]);
+        g_mf_cnt[best] = 0;
+    }
+    memset(g_mf_addr, 0, sizeof g_mf_addr);
+#endif
     for (int k = 0; k < 100; k++) {                      /* top functions by samples */
         int best = -1;
         for (int j = 0; j < FN_SLOTS; j++)
