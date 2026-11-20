@@ -147,6 +147,12 @@ tools/             (ignored) local toolchain (pspdev inside a project-local WSL 
   `scripts/pgo.sh build` (generated code -O2 with the profile: hot/cold block splitting, branch layout). Judge
   changes with `build/racework.sh` (deterministic `race work` averages, same EBOOT +-0.1 ms) and re-check the gap
   after changes to hot code.
+* **GPU emulation on the Media Engine** (2026-11-20, runtime/src/me.c): the second 333 MHz core runs gpu.c/ge.c/raster.c
+  in parallel with the game; the main CPU posts commands into an uncached ring and does the system calls (GE enqueue,
+  display swap) in a service thread. The ME cannot address the GE's eDRAM: vertices in RAM, PS1 VRAM shadow in RAM
+  with GE copies in both directions (ge_push/ge_pull). Data written by the ME lives in isolated 64-byte aligned blocks
+  (linkfile.prx.in), the main CPU never writes it while the ME runs. Boot code: mcidclan's psp-media-engine-custom-core
+  (MIT, tools/downloads/me-custom-core, built by scripts/me/build-sample.sh).
 * **Asynchronous presentation**: the presentation list is kicked without waiting; swap when `sceGeListSync(qid, 1)`
   reports it done (rt_poll); second list buffer and a vertex ring in the unused display buffer 2 (see ge.c).
 * **16:9 race HUD at PSP resolution**: recorded during the walk, drawn after the presentation blit into the display

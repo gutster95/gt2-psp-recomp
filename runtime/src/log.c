@@ -6,6 +6,7 @@
 #include <pspdisplay.h>
 #include <pspkernel.h>
 #include "rt.h"
+#include "me.h"
 
 char g_basedir[256];
 static FILE *g_log;
@@ -34,6 +35,15 @@ void log_close(void)
 
 void logf_(const char *fmt, ...)
 {
+    if (me_on_me()) {                      /* on the Media Engine: no system calls, the main CPU prints it (me.c) */
+        uint32_t a[14];
+        va_list ap;
+        va_start(ap, fmt);
+        for (int i = 0; i < 14; i++) a[i] = va_arg(ap, uint32_t);
+        va_end(ap);
+        me_log(fmt, a, 14);
+        return;
+    }
     if (!g_log || g_lines > 20000) return;
     if (g_log_sema >= 0) sceKernelWaitSema(g_log_sema, 1, 0);
     if (!g_log) { if (g_log_sema >= 0) sceKernelSignalSema(g_log_sema, 1); return; }

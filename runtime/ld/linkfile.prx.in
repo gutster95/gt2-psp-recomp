@@ -164,6 +164,12 @@ SECTIONS
   .data           :
   {
     _fdata = . ;
+    /* Media Engine data block (runtime/src/me.c): the data of the GPU path, written by the ME, in whole cache lines */
+    . = ALIGN(64);
+    _me_data_start = .;
+    *ge.c.obj(.data .data.*) *gpu.c.obj(.data .data.*) *raster.c.obj(.data .data.*) *libpspgu.a:*(.data .data.*)
+    . = ALIGN(64);
+    _me_data_end = .;
     *(.data .data.* .gnu.linkonce.d.*)
     KEEP (*(.gnu.linkonce.d.*personality*))
     SORT(CONSTRUCTORS)
@@ -177,6 +183,9 @@ SECTIONS
      we can shorten the on-disk segment size.  */
   .sdata          :
   {
+    . = ALIGN(64);
+    *libpspgu.a:*(.sdata .sdata.*)
+    . = ALIGN(64);
     *(.sdata .sdata.* .gnu.linkonce.s.*)
   }
   .lit8           : { *(.lit8) }
@@ -189,6 +198,10 @@ SECTIONS
   {
     PROVIDE (__sbss_start = .);
     PROVIDE (___sbss_start = .);
+    /* pspgu's small variables are written by the Media Engine (me.c): whole cache lines of their own */
+    . = ALIGN(64);
+    *libpspgu.a:*(.sbss .sbss.* .scommon)
+    . = ALIGN(64);
     *(.dynsbss)
     *(.sbss .sbss.* .gnu.linkonce.sb.*)
     *(.scommon)
@@ -198,6 +211,11 @@ SECTIONS
   .bss            :
   {
    *(.dynbss)
+   . = ALIGN(64);
+   _me_bss_start = .;
+   *ge.c.obj(.bss .bss.* COMMON) *gpu.c.obj(.bss .bss.* COMMON) *raster.c.obj(.bss .bss.* COMMON) *libpspgu.a:*(.bss .bss.* COMMON)
+   . = ALIGN(64);
+   _me_bss_end = .;
    *(.bss .bss.* .gnu.linkonce.b.*)
    *(COMMON)
    /* Align here to ensure that the .bss section occupies space up to

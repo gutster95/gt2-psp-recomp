@@ -13,6 +13,7 @@
 #include "ge.h"
 #include "raster.h"
 #include <pspkernel.h>
+#include "me.h"
 
 uint32_t g_i_stat, g_i_mask;
 /* indexed by address - 0x1F800000, so offsets below read like the hardware addresses */
@@ -64,65 +65,10 @@ static void dma_irq(int ch)
     }
 }
 
-uint32_t g_ot_entries, g_ot_empty;
 int g_bench_stage;              /* benchmark: stop the primitive path after stage n (0 = full) */
 int g_gebench;                /* settings.txt gebench=<vblank>: benchmark the GPU list path once (see below) */
 
-int g_walklog;                 /* settings.txt walklog=<vblank>: log every packet of one race frame (debug) */
-
-/* Race HUD (16:9, see ge.c hud_squeeze): the race's ordering table (ClearOTagR, walked from its top entry madr
- * downwards) has 8515 entries in four layers, each starting with a drawing-area packet; the last layer, linked from
- * OT[3] = madr - 0x850C, is the HUD. Found with settings.txt walklog=<vblank> (one summary line per list). */
-#define RACE_HUD_OT 0x850Cu
-
-static void gpu_walk(uint32_t madr)
-{
-    uint32_t a = madr, guard = 0, prev = 0;
-    uint32_t hud_ot = (g_widescreen && g_cur_overlay == 0) ? madr - RACE_HUD_OT : 1;
-    int wl = g_walklog && g_vblank_count >= (uint32_t)g_walklog;
-    char buf[400];
-    int bl = 0, pk = 0;
-    for (;;) {
-        uint32_t hdr = *(uint32_t *)(g_ram + a);
-        if (!wl) {
-            /* Runs of empty ordering table entries (most of the race's 2 x 8515): a tight loop, ~4x faster than the
-             * general path. Stops at a packet, the list end, the HUD layer's entry and after 0x40000 links. */
-            uint32_t skipped = 0;
-            while (!(hdr >> 24) && !(hdr & 0x800000) && a != hud_ot && skipped < 0x40000) {
-                a = hdr & 0x1FFFFC;
-                hdr = *(uint32_t *)(g_ram + a);
-                skipped++;
-            }
-            g_ot_entries += skipped;
-            g_ot_empty += skipped;
-            guard += skipped;
-        }
-        uint32_t n = hdr >> 24;
-        g_ot_entries++;
-        if (wl && n) {
-            const uint32_t *p = (const uint32_t *)(g_ram + a + 4);
-            if ((p[0] >> 24) == 0xE3 && bl < 360)
-                bl += snprintf(buf + bl, sizeof buf - bl, " %d@%06x:%08x", pk, (unsigned)prev, (unsigned)p[1]);
-            pk++;
-        }
-        if (!n) {
-            g_ot_empty++;
-            if (a == hud_ot) ge_hud_begin();
-        }
-        else if (g_bench_stage == 1) { volatile uint32_t x = *(uint32_t *)(g_ram + a + 4); (void)x; }
-        else if (a + 4 + 4 * n <= PSX_RAM_SIZE) gpu_packet((const uint32_t *)(g_ram + a + 4), n);
-        else for (uint32_t i = 0; i < n; i++) gpu_gp0(*(uint32_t *)(g_ram + ((a + 4 + 4 * i) & 0x1FFFFC)));
-        if ((hdr & 0x800000) || ++guard > 0x40000) break;
-        prev = a;
-        a = hdr & 0x1FFFFC;
-    }
-    g_hud_mode = 0;
-    if (wl) {
-        buf[bl] = 0;
-        logf_("wls %u %06x %d:%s\n", (unsigned)g_vblank_count, (unsigned)madr, pk, buf);
-        if (g_vblank_count > (uint32_t)g_walklog + 900) g_walklog = 0;
-    }
-}
+void gpu_walk(uint32_t madr);   /* gpu.c */
 
 /* Deterministic benchmark of the GPU -> GE path: the first big display list after vblank <gebench> is executed 100
  * more times (same RAM contents, so the same primitives); logs the time per pass without and with the GE's work. */
@@ -132,6 +78,7 @@ static void gpu_walk(uint32_t madr)
 int g_gedump, g_gebenchfile;
 typedef struct { uint32_t magic, madr, draw_mode; int overlay; RasterState rs; } GeFrameHdr;
 #define GEFRAME_MAGIC 0x47454631u
+
 
 static void gpu_dump(uint32_t madr)
 {
@@ -232,6 +179,11 @@ static void dma_run(int ch)
                 last_vb = g_vblank_count;
                 g_pace_hist[d >= 4 ? 4 : d]++;
             }
+            if (g_me_active) {                  /* the ME walks it; DMA2 stays busy until then (me_service) */
+                me_post_walk(madr);
+                PHASE_END();
+                return;
+            }
             uint64_t t0 = now_us();
             if ((g_gebench && g_vblank_count >= (uint32_t)g_gebench) || (g_gedump && g_vblank_count >= (uint32_t)g_gedump))
                 gpu_bench(madr);
@@ -240,6 +192,7 @@ static void dma_run(int ch)
             PHASE_END();
         } else {                                /* block / sync mode */
             uint32_t words = (bcr & 0xFFFF) * ((bcr >> 16) ? (bcr >> 16) : 1);
+            if (g_me_active) { me_post_block(madr, words, chcr & 1); return; }
             if (chcr & 1) {
                 for (uint32_t i = 0; i < words; i++) gpu_gp0(*(uint32_t *)(g_ram + ((madr + 4 * i) & 0x1FFFFC)));
             } else {
@@ -319,9 +272,9 @@ static uint32_t io_read(uint32_t a, int size)
     switch (off & ~3u) {
     case 0x1070: v = g_i_stat; break;
     case 0x1074: v = g_i_mask; break;
-    case 0x1810: v = gpu_read(); break;
+    case 0x1810: v = g_me_active ? me_gpu_read() : gpu_read(); break;
     case 0x1820: case 0x1824: v = mdec_read(off & 4); break;
-    case 0x1814: v = gpu_status() | ((g_vblank_count & 1) << 31); break;
+    case 0x1814: v = (g_me_active ? me_gpu_status() : gpu_status()) | ((g_vblank_count & 1) << 31); break;
     case 0x1100: case 0x1110: case 0x1120: v = timer_count((off - 0x1100) >> 4); break;
     default:
         v = size == 4 ? IO32(off & ~3u) : size == 2 ? IO16(off & ~1u) : g_io[off];
@@ -352,9 +305,9 @@ static void io_write(uint32_t a, uint32_t v, int size)
     switch (off & ~3u) {
     case 0x1070: g_i_stat &= v; return;           /* acknowledge */
     case 0x1074: g_i_mask = v & 0x7FF; return;
-    case 0x1810: gpu_gp0(v); return;
+    case 0x1810: if (g_me_active) me_post_gp0(v); else gpu_gp0(v); return;
     case 0x1820: case 0x1824: mdec_write(off & 4, v); return;
-    case 0x1814: gpu_gp1(v); return;
+    case 0x1814: if (g_me_active) me_post_gp1(v); else gpu_gp1(v); return;
     case 0x10F4: {                                 /* DICR: writing 1 to flag bits clears them */
         uint32_t d = IO32(0x10F4);
         d = (d & 0x7F000000u & ~(v & 0x7F000000u)) | (v & 0x00FFFFFFu);

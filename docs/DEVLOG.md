@@ -712,3 +712,29 @@ Same kernels on the ME (command loop polling uncached shared words) and on the m
   the ME and enqueued/stalled by the main CPU), DrawSync / GPUSTAT and every CPU VRAM access (LoadImage,
   StoreImage, readback) must wait for the ME, and the ordering-table buffer must not be reused by the game before
   the ME has walked it.
+
+## 2026-11-20 - GPU emulation on the Media Engine: races at a locked 30 fps
+
+* The whole PS1 GPU path (gpu.c, ge.c, raster.c: DMA list walk, GP0/GP1, GE list building, texture/CLUT caches,
+  presentation) runs on the Media Engine (runtime/src/me.c, `settings.txt me_gpu`, default on, falls back to the main
+  CPU if the ME cannot be started). The main CPU posts GP0/GP1 writes, DMA2 transfers and vblanks into an uncached
+  command ring; DMA2 stays busy until the ME has finished, so the game's DrawSync waits like on the PS1. A service
+  thread enqueues the GE lists the ME finished (sceGeListEnQueue/Sync) and swaps the display, a vblank thread
+  publishes the vcount; logf_/now_us are ME-aware (log ring, published time).
+* Found on the way (probes in scripts/me/probe):
+  * the ME's address 0x10000 is its own local eDRAM: ge.c's "scratchpad" state works unchanged, copied at start;
+  * the hardware timer 0xBC600000 reads 0 on the ME;
+  * **the ME cannot reach the GE's eDRAM** (0x04/0x44/0x84/0xA4000000 all read 0, writes are lost; mcidclan's
+    samples also draw only into main RAM): vertex ring in main RAM (uncached), and the CPU side of the GPU works on a
+    shadow of the PS1 VRAM in RAM - CPU writes are copied into VRAM by GE copies in the list (ge_push), regions the
+    GE drew are copied back before the CPU reads them (ge_pull: CLUTs, VRAM->CPU transfers, software primitives);
+  * the ME's data cache is not coherent: lists, vertices and CLUTs are written uncached (cached CLUTs stayed in the
+    ME's cache - all textured HUD elements were transparent).
+* Data isolation: ge.c/gpu.c/raster.c/libpspgu data and bss (incl. pspgu's .sbss/.sdata) in their own 64-byte aligned
+  blocks (linkfile.prx.in); main-CPU-written statistics and vblank code moved to gpuvbl.c, gpu_walk into gpu.c,
+  g_phase in its own cache line, g_vblank_sync_us into core.c.
+* PSP-3000, attract race 16:9: display lists 2 vblanks apart **100%** (was 71.6% at the start of the night), 30.0 fps,
+  ~100-140k primitives per 2 s; menus, GT mode and machine test work; HUD correct.
+* 16:9 HUD: lines starting in the left 10% (or ending in the right 10%) of the drawing area are anchored to that edge
+  ("Replay" and the car name sit at the left edge as in the 4:3 original), and HUD groups form only within one kind
+  (textured sprites / lines and polygons). The minimap now keeps its 4:3 distance to the "Replay" text (user's choice).

@@ -7,7 +7,7 @@
 #include "rt.h"
 #include "prof.h"
 
-volatile int g_phase;
+volatile int g_phase_line[16] __attribute__((aligned(64)));
 
 static const char *const NAMES[PH_COUNT] = {"game code", "GTE", "GPU lists (GE build)", "present/GE wait", "IRQ/poll",
                                            "CD", "other", "GE texture setup", "GE draw emit", "GE prim decode", "GE touch", "GE sync wait"};

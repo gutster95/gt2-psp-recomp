@@ -29,6 +29,7 @@
 #include "rt.h"
 #include "gpu.h"
 #include "raster.h"
+#include "me.h"
 #include "ge.h"
 #include "prof.h"
 
@@ -64,8 +65,29 @@ static int g_infl_start;                   /* vertex ring: start of the in-fligh
 /* peek at the in-flight list: 0 = completed; an error means the id is no longer queued (also completed). Checked
  * before every sceGuStart too (ge_begin), so the id cannot have been reused by a newer list. The FINISH callback
  * (sceGuSetCallback) never fired on the PSP-3000, so the queue is asked directly. */
+typedef struct { unsigned int *start, *current; int parent_context; } GuListPriv;
+extern GuListPriv *gu_list;
+extern int gu_curr_context;
+/* Media Engine (me.c): lists are built without pspgu's sceGuStart/sceGuFinish/sceGuSync (system calls) in a
+ * non-direct context (no stall updates) and handed to the main CPU's service thread, which enqueues them. */
+static GuListPriv g_me_list;
+static int g_fps_value = -1;
+static uint32_t g_me_req;                  /* last request handed to the main CPU */
+static void me_list_start(void *buf)
+{
+    g_me_list.start = g_me_list.current = (unsigned int *)((uintptr_t)buf | 0x40000000u);
+    g_me_list.parent_context = 0;
+    gu_list = &g_me_list;
+    gu_curr_context = 2;                   /* GU_SEND: sceGuDrawArray/GetMemory make no stall-update calls */
+}
+static void me_list_end(void)
+{
+    *gu_list->current++ = 0x0F000000u;     /* FINISH */
+    *gu_list->current++ = 0x0C000000u;     /* END */
+}
 static inline int inflight_done(void)
 {
+    if (me_on_me()) return me_ge_done(g_me_req);
     int r = sceGeListSync(g_infl_qid, 1);
     return r <= 0;
 }
@@ -73,8 +95,6 @@ static int g_last_vtype = -1, g_draws;    /* draw_array state */
 
 /* Hot-path GE commands are written straight into pspgu's current display list (same as sceGuSendCommandi, without
  * the call). gu_list is pspgu's internal list descriptor {start, current, parent_context}. */
-typedef struct { unsigned int *start, *current; int parent_context; } GuListPriv;
-extern GuListPriv *gu_list;
 static inline void cmd(uint32_t c, uint32_t a) { *gu_list->current++ = (c << 24) | (a & 0xFFFFFF); }
 
 /* Vertex arena; valid until the next ge_sync. Written through the data cache: uncached stores cost tens of cycles
@@ -166,6 +186,15 @@ static inline uint32_t blk_ver(int b)
 #define g_disp_rect H.disp_rect
 #define g_disp_dirty H.disp_dirty
 
+/* Media Engine (me.c): the ME cannot reach the GE's eDRAM, so the CPU side of the GPU path works on a shadow of the
+ * PS1 VRAM in main RAM (g_vram points there, uncached). CPU writes (uploads, software primitives, CPU fills/copies)
+ * are copied into the real VRAM by the GE (ge_push); before the CPU reads what the GE drew (CLUTs, VRAM -> CPU
+ * transfers, software primitives), the GE copies it back (ge_pull). g_ge_drawn: 64x32 blocks the GE wrote since
+ * their last pull. */
+static uint16_t g_ge_drawn[16];
+static int g_ge_drawn_any;
+static uint16_t *g_vshadow;             /* shadow base (uncached), 0 = not in ME mode */
+
 static void touch(int x0, int y0, int x1, int y1, int by_ge)   /* inclusive */
 {
     if (x0 <= g_disp_rect[2] && x1 >= g_disp_rect[0] && y0 <= g_disp_rect[3] && y1 >= g_disp_rect[1]) g_disp_dirty = 1;
@@ -178,6 +207,8 @@ static void touch(int x0, int y0, int x1, int y1, int by_ge)   /* inclusive */
     for (int py = y0 >> 8; py <= y1 >> 8; py++) g_page_dirty |= cols << (py * 16);
     for (int by = y0 >> 5; by <= y1 >> 5; by++) g_blk_dirty[by] |= (uint16_t)cols;
     if (!by_ge) return;
+    for (int by = y0 >> 5; by <= y1 >> 5; by++) g_ge_drawn[by] |= (uint16_t)cols;   /* VRAM shadow stale (ME) */
+    g_ge_drawn_any = 1;
     for (int py = y0 >> 8; py <= y1 >> 8; py++)
         for (int px = x0 >> 6; px <= x1 >> 6; px++) {
             int pg = py * 16 + px;
@@ -245,8 +276,15 @@ void ge_sync(void)
     if (!g_open && !g_inflight) return;
     int ph = g_phase;
     g_phase = PH_GE_SYNC;
-    if (g_open) { sceGuFinish(); g_kicks++; }
-    { uint64_t t = now_us(); sceGuSync(0, 0); g_wait_us[2] += now_us() - t; g_wait_n[2]++; }
+    if (me_on_me()) {
+        uint64_t t = now_us();
+        if (g_open) { me_list_end(); g_kicks++; g_me_req = me_ge_submit(g_me_list.start, g_me_list.current, -1, 0, 1); }
+        else while (!me_ge_done(g_me_req)) {}
+        g_wait_us[2] += now_us() - t; g_wait_n[2]++;
+    } else {
+        if (g_open) { sceGuFinish(); g_kicks++; }
+        { uint64_t t = now_us(); sceGuSync(0, 0); g_wait_us[2] += now_us() - t; g_wait_n[2]++; }
+    }
     g_phase = ph;
     g_open = 0;
     g_inflight = 0;
@@ -286,7 +324,8 @@ static void ge_begin(void)
 {
     if (g_open) return;
     if (g_inflight) ge_poll_async();             /* before a new queue id can reuse the in-flight list's */
-    sceGuStart(GU_DIRECT, g_list_uncached ? (void *)((uintptr_t)g_list[g_list_idx] | 0x40000000u) : (void *)g_list[g_list_idx]);
+    if (me_on_me()) me_list_start(g_list[g_list_idx]);
+    else sceGuStart(GU_DIRECT, g_list_uncached ? (void *)((uintptr_t)g_list[g_list_idx] | 0x40000000u) : (void *)g_list[g_list_idx]);
     sceGuDrawBufferList(GU_PSM_5551, (void *)0, 1024);
     sceGuSendCommandi(0x15, 0);                          /* drawing region: the whole PS1 VRAM */
     sceGuSendCommandi(0x16, (511 << 10) | 1023);
@@ -351,10 +390,18 @@ static void ge_kick(int show)
 {
     if (g_inflight && !inflight_done()) { ge_sync(); }   /* never two lists in flight */
     g_inflight = 0;
+    if (me_on_me()) {
+        if (!g_open) ge_begin();                         /* the swap travels with a list */
+        uint32_t lb = (uint32_t)((uintptr_t)g_me_list.current - (uintptr_t)g_me_list.start);
+        if (lb > g_list_max) g_list_max = lb;
+        me_list_end();
+        g_me_req = me_ge_submit(g_me_list.start, g_me_list.current, show, g_fps_value, 0);
+    } else {
     if (!g_open) { g_pending_show = show; apply_swap(); return; }
     g_infl_qid = (int)ge_list_executed[0];
     { uint32_t lb = (uint32_t)sceGuCheckList(); if (lb > g_list_max) g_list_max = lb; }
     sceGuFinish();
+    }
     g_kicks++;
     g_inflight = 1;
     g_open = 0;
@@ -384,6 +431,48 @@ static void check_list(void)
 }
 
 static inline uint32_t c5to8(uint32_t v) { return (v << 3) | (v >> 2); }
+
+static void ge_begin(void);
+static void check_list(void);
+void ge_sync(void);
+/* shadow -> VRAM (GE copy in the current list) */
+void ge_push(int x, int y, int w, int h)
+{
+    if (!g_vshadow || w <= 0 || h <= 0) return;
+    if (y + h > 512) { ge_push(x, 0, w, y + h - 512); h = 512 - y; }
+    if (x + w > 1024) { ge_push(0, y, x + w - 1024, h); w = 1024 - x; }
+    ge_begin();
+    sceGuCopyImage(GU_PSM_5551, x, y, w, h, 1024, (void *)g_vshadow, x, y, 1024, (void *)EDRAM);
+    sceGuTexSync();
+    check_list();
+}
+/* VRAM -> shadow, waits for the GE */
+void ge_pull(int x, int y, int w, int h)
+{
+    if (!g_vshadow || w <= 0 || h <= 0) return;
+    if (y + h > 512) { ge_pull(x, 0, w, y + h - 512); h = 512 - y; }
+    if (x + w > 1024) { ge_pull(0, y, x + w - 1024, h); w = 1024 - x; }
+    ge_begin();
+    sceGuCopyImage(GU_PSM_5551, x, y, w, h, 1024, (void *)EDRAM, x, y, 1024, (void *)g_vshadow);
+    sceGuTexSync();
+    ge_sync();
+}
+static void pull_drawn(int x0, int y0, int x1, int y1)   /* inclusive; pulls the stale 64x32 blocks it touches */
+{
+    if (!g_vshadow || !g_ge_drawn_any) return;
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
+    if (x1 > 1023) x1 = 1023;
+    if (y1 > 511) y1 = 511;
+    uint16_t cols = (uint16_t)((2u << (x1 >> 6)) - (1u << (x0 >> 6)));
+    for (int by = y0 >> 5; by <= y1 >> 5; by++)
+        if (g_ge_drawn[by] & cols) {
+            for (int bx = x0 >> 6; bx <= x1 >> 6; bx++)
+                if (g_ge_drawn[by] & (1u << bx)) ge_pull(bx * 64, by * 32, 64, 32);
+            g_ge_drawn[by] &= (uint16_t)~cols;
+        }
+}
+void ge_me_attach(uint16_t *shadow) { g_vshadow = shadow; }
 
 static const uint32_t *clut_get(int clx, int cly, int n)
 {
@@ -425,7 +514,10 @@ static const uint32_t *clut_get(int clx, int cly, int n)
         for (int i = 1; i < CLUT_WAYS; i++) if (e[i].use < victim->use) victim = &e[i];
     }
     uint32_t *dst = g_clut_arena + (victim - g_cluts) * 256;
+    uint32_t *const ret = dst;
     g_clut_conv++;
+    if (g_vshadow) { pull_drawn(clx, cly, clx + n - 1, cly); ge_begin(); }   /* a pull ends the list */
+    if (me_on_me()) dst = (uint32_t *)((uintptr_t)dst | 0x40000000u);   /* ME: uncached, the GE reads it from RAM */
     const uint16_t *src = g_vram + cly * 1024;
     int transparent = 0;
     for (int i = 0; i < n; i++) {
@@ -434,14 +526,14 @@ static const uint32_t *clut_get(int clx, int cly, int n)
         uint32_t a = t == 0 ? 0 : (t & 0x8000) ? 0x70 : 0xFF;
         dst[i] = (a << 24) | (c5to8((t >> 10) & 31) << 16) | (c5to8((t >> 5) & 31) << 8) | c5to8(t & 31);
     }
-    sceKernelDcacheWritebackRange(dst, (unsigned)n * 4);   /* the GE reads it from memory */
+    if (!me_on_me()) sceKernelDcacheWritebackRange(dst, (unsigned)n * 4);   /* the GE reads it from memory */
     victim->key = key;
     victim->ver = ver;
     victim->batch = g_ge_syncs;
     victim->use = ++g_clut_clock;
     victim->transparent = transparent;
     g_clut_transparent = transparent;
-    return dst;
+    return ret;
 }
 
 /* ---- texture page cache -------------------------------------------------------------------------------------- */
@@ -675,7 +767,7 @@ static inline float map_x3(const Frame *f, float x) { return f->ox3 + x * f->kx3
 /* one 32-byte entry (a cache line on the PSP) per vertex: key, stamp and the precise position together */
 typedef struct { uint32_t key; uint16_t stamp, pad; float px, py, pz; uint32_t pad2[3]; } XyEnt;
 static XyEnt g_xy[XYSET] __attribute__((aligned(64)));
-static inline uint16_t xy_now(void) { return (uint16_t)(g_vblank_count >> 1); }
+static inline uint16_t xy_now(void) { return (uint16_t)(ME_UC(g_vblank_count) >> 1); }
 static inline uint32_t xy_hash(uint32_t k) { return (k * 0x9E3779B1u) >> 19; }
 
 /* Precise data per projected vertex (PGXP-style): sub-pixel screen position and view depth, used to draw 3D
@@ -727,7 +819,7 @@ static int is_3d_xy(uint32_t xy) { return xy_find(xy) >= 0; }
  * crosses the 30% limit. */
 int g_hud_mode;
 #define HUD_GROUPS 32
-static struct { int16_t lo, hi, y0, y1, anchor; } g_hg[HUD_GROUPS];
+static struct { int16_t lo, hi, y0, y1, anchor, kind; } g_hg[HUD_GROUPS];
 static int g_nhg;
 static int g_hud_rec = -1;   /* deferred HUD (hud_record): recording of this frame, -1 = not chosen yet */
 
@@ -737,7 +829,7 @@ int g_ws_menus;   /* settings.txt widescreen_menus=1: all screens 16:9 (Silent's
 
 void ge_hud_begin(void)
 {
-    g_race_vblank = g_vblank_count;
+    g_race_vblank = ME_UC(g_vblank_count);
     g_race_valid = 1;
     g_hud_mode = g_hud_anchor;
     g_nhg = 0;
@@ -747,19 +839,22 @@ void ge_hud_begin(void)
 /* 16:9 presentation: in races (race HUD layer seen in the last half second) or everywhere with widescreen_menus */
 int ge_wide_now(void)
 {
-    return g_widescreen && (g_ws_menus || (g_race_valid && g_vblank_count - g_race_vblank < 30));
+    return g_widescreen && (g_ws_menus || (g_race_valid && ME_UC(g_vblank_count) - g_race_vblank < 30));
 }
 
 /* anchor of an element (group logic below), or HUD_NO_SQUEEZE for elements wider than half the drawing area */
 #define HUD_NO_SQUEEZE (-100000)
-static int hud_anchor(const int *box)
+/* kind: 1 = textured sprite (text glyphs, icons), 0 = lines and polygons (minimap, bars): groups only form within one
+ * kind, so the "Replay" line keeps its left-edge anchor and the minimap above it its own */
+static int hud_anchor(const int *box, int kind)
 {
     int x0 = g_rs.clip_x0, w = g_rs.clip_x1 - g_rs.clip_x0 + 1;
     int lo = box[0], hi = box[2], anchor;
     if (hi - lo > w / 2) return HUD_NO_SQUEEZE;
     int g = -1;
     for (int i = g_nhg - 1; i >= 0; i--)          /* touching or overlapping (glyph gaps up to 12 pixels) */
-        if (box[1] <= g_hg[i].y1 + 2 && box[3] >= g_hg[i].y0 - 2 && lo <= g_hg[i].hi + 12 && hi >= g_hg[i].lo - 12) {
+        if (g_hg[i].kind == kind && box[1] <= g_hg[i].y1 + 2 && box[3] >= g_hg[i].y0 - 2 && lo <= g_hg[i].hi + 12 &&
+            hi >= g_hg[i].lo - 12) {
             g = i;
             break;
         }
@@ -774,18 +869,25 @@ static int hud_anchor(const int *box)
          * is squeezed towards the centre, so centred texts and menus keep their layout (by the element's centre with
          * 40/60% limits, "BRONZE PRIZE!" fell apart and the pause menu moved right) */
         anchor = (hi - x0) * 10 <= w * 3 ? x0 : (lo - x0) * 10 >= w * 7 ? x0 + w : x0 + w / 2;
+        /* lines that start at the left edge / end at the right edge belong to it even when they run past 30%
+         * ("Replay" and the car name in the bottom left were squeezed towards the centre, under the minimap) */
+        if (anchor == x0 + w / 2) {
+            if ((lo - x0) * 10 < w) anchor = x0;
+            else if ((hi - x0) * 10 > w * 9) anchor = x0 + w;
+        }
         if (g_nhg < HUD_GROUPS) {
             g = g_nhg++;
             g_hg[g].lo = (int16_t)lo; g_hg[g].hi = (int16_t)hi; g_hg[g].y0 = (int16_t)box[1]; g_hg[g].y1 = (int16_t)box[3];
             g_hg[g].anchor = (int16_t)anchor;
+            g_hg[g].kind = (int16_t)kind;
         }
     }
     return anchor;
 }
 
-static void hud_squeeze(GeVtx *v, int n, int *box)
+static void hud_squeeze(GeVtx *v, int n, int *box, int kind)
 {
-    int lo = box[0], hi = box[2], anchor = hud_anchor(box);
+    int lo = box[0], hi = box[2], anchor = hud_anchor(box, kind);
     if (anchor == HUD_NO_SQUEEZE) return;
     /* x' = anchor + 3/4 (x - anchor), rounded to the nearest pixel */
     for (int i = 0; i < n; i++) v[i].x = (int16_t)(anchor + (((v[i].x - anchor) * 3 + 2) >> 2));
@@ -843,7 +945,7 @@ static int hud_record(int prim, int n, const GeVtx *v, const int *box0, int tex,
     if (cb[2] > g_rs.clip_x1) cb[2] = g_rs.clip_x1;
     if (cb[3] > g_rs.clip_y1) cb[3] = g_rs.clip_y1;
     if (cb[0] > cb[2] || cb[1] > cb[3]) return 1;
-    int anchor = hud_anchor(box);
+    int anchor = hud_anchor(box, prim == GU_SPRITES && tex);
     HudPrim *h = &g_hudp[k][g_hud_n[k]++];
     h->prim = (uint8_t)prim; h->n = (uint8_t)n; h->tex = (uint8_t)tex; h->depth = (uint8_t)depth; h->raw = (uint8_t)raw;
     h->semi = (uint8_t)semi; h->mode = (uint8_t)mode;
@@ -919,7 +1021,15 @@ static int g_swap_vcount;
 
 static void wait_scanout_done(int target)
 {
-    if (target == g_prev_shown) {
+    if (target == g_prev_shown && me_on_me()) {
+        uint32_t v = me_vcount();
+        if (v == (uint32_t)g_swap_vcount) {
+            uint64_t t = now_us();
+            while (me_vcount() == v) {}
+            g_wait_us[0] += now_us() - t; g_wait_n[0]++;
+        }
+        g_prev_shown = -1;
+    } else if (target == g_prev_shown) {
         if (sceDisplayGetVcount() == (unsigned)g_swap_vcount) {
             uint64_t t = now_us();
             sceDisplayWaitVblankStart();
@@ -1158,8 +1268,14 @@ static void submit(int prim, int n, const GeVtx *v, int *box, int tex, int depth
     if (needs_sw(tex, depth) && sw) {
         g_sync_why = 8;
         ge_sync();
+        if (g_vshadow && g_ge_drawn_any) {           /* the software rasterizer reads textures and the frame */
+            ge_pull(0, 0, 1024, 512);
+            memset(g_ge_drawn, 0, sizeof g_ge_drawn);
+            g_ge_drawn_any = 0;
+        }
         sw(w);
         touch(box[0], box[1], box[2], box[3], 0);
+        ge_push(box[0], box[1], box[2] - box[0] + 1, box[3] - box[1] + 1);
         g_ge_sw_prims++;
         if (fk >= 0) mirror(box[0], box[1], box[2] - box[0] + 1, box[3] - box[1] + 1);
         return;
@@ -1218,7 +1334,7 @@ void ge_polygon(const uint32_t *w)
     int depth = (int)(page >> 7) & 3, mode = (g_rs.texpage >> 5) & 3;
     if (g_hud_mode) {
         if (hud_record(GU_TRIANGLE_STRIP, n, v, box, tex, depth, (int)page, clut, raw, semi, mode)) { g_phase = ph_; return; }
-        hud_squeeze(v, n, box);
+        hud_squeeze(v, n, box, 0);
     }
     if (g_bench_stage != 2)
         submit(GU_TRIANGLE_STRIP, n, v, box, tex, depth, (int)page, clut, raw, semi, mode, raster_polygon, w, n3d >= 2, xyj);
@@ -1256,7 +1372,7 @@ void ge_rect(const uint32_t *w)
     if (g_hud_mode) {
         if (hud_record(GU_SPRITES, 2, v, box, tex, depth, (int)(g_rs.texpage & 0x1F) | (depth << 7), clut, raw, semi,
                        mode)) { g_phase = ph_; return; }
-        hud_squeeze(v, 2, box);
+        hud_squeeze(v, 2, box, tex);
     }
     if (g_bench_stage == 2) return;
     submit(GU_SPRITES, 2, v, box, tex, depth, (int)(g_rs.texpage & 0x1F) | (depth << 7), clut, raw, semi, mode,
@@ -1277,7 +1393,7 @@ void ge_line(int x0, int y0, uint32_t c0, int x1, int y1, uint32_t c1, int semi)
     int n3d = is_3d_xy(((uint32_t)y0r << 16) | (x0r & 0xFFFF)) + is_3d_xy(((uint32_t)y1r << 16) | (x1r & 0xFFFF));
     if (g_hud_mode) {
         if (hud_record(GU_LINES, 2, v, box, 0, 0, 0, 0, 0, semi, (g_rs.texpage >> 5) & 3)) return;
-        hud_squeeze(v, 2, box);
+        hud_squeeze(v, 2, box, 0);
     }
     if (g_bench_stage == 2) return;
     submit(GU_LINES, 2, v, box, 0, 0, 0, 0, 0, semi, (g_rs.texpage >> 5) & 3, 0, 0, n3d >= 2, 0);
@@ -1368,6 +1484,7 @@ static void mirror(int x, int y, int w, int h)
 
 void ge_upload_done(int x, int y, int w, int h)
 {
+    ge_push(x, y, w, h);
     if (x + w <= 1024 && y + h <= 512) mirror(x, y, w, h);
 }
 
@@ -1416,7 +1533,7 @@ static int frame_for_display(int dx, int dy, int w, int h)
 /* Time of the real vblank a 1x present just waited for: the emulated vblank (core.c) re-phases itself to come shortly
  * before the next real one. Both run at ~59.94 Hz, so without this an unlucky phase stays locked for minutes and every
  * emulated vblank blocks the game for almost a whole frame (loading screens took 15-20 s on the PSP). */
-uint64_t g_vblank_sync_us;
+extern uint64_t g_vblank_sync_us;   /* core.c */
 
 /* settings.txt sharp=0: 4:3 screens scaled to the full height (363x272) like before. Default: 240 lines on screen
  * (16-pixel bands above and below), 4:3 wide (320 pixels: 1:1 in the 320 modes, the 368 mode narrowed horizontally).
@@ -1432,7 +1549,7 @@ static int present_scaled(int tgt, int dx, int dy, int w, int h, int blank)
     if (g_sharp && !ge_wide_now() && h <= 512) { ow = 320; oh = h > 256 ? h / 2 : h; oy = (272 - oh) / 2; }
     ox = (480 - ow) / 2;
     int linear = ow != w || oh != h;
-    int on_screen = g_shown == tgt;
+    int on_screen = g_shown == tgt && !me_on_me();
     if (on_screen) {                /* redrawing the shown buffer: the game's queued drawing first, then the clear and
                                      * blit right at the start of the vblank (no double buffer left for 1x screens) */
         ge_sync();
@@ -1485,16 +1602,16 @@ static int present_scaled(int tgt, int dx, int dy, int w, int h, int blank)
  * Counts the pictures the game actually presents (new frames), drawn by the CPU into the finished display buffer
  * with a 3x5 pixel font at 2x scale. */
 int g_show_fps = 1;
-static int g_fps_value = -1, g_fps_count;
+static int g_fps_count;
 static uint64_t g_fps_t0;
 static const uint16_t FONT35[10] = {   /* 3x5 digits, 15 bits, row by row from the top */
     075557, 026227, 071747, 071717, 055711, 074717, 074757, 071111, 075757, 075717};
 
-static void draw_fps(int buf)
+static void draw_fps_v(int buf, int value)
 {
-    if (!g_show_fps || g_fps_value < 0) return;
+    if (!g_show_fps || value < 0) return;
     uint16_t *fb = (uint16_t *)(0x40000000u | (EDRAM + FB_OFF(buf)));
-    int v = g_fps_value > 99 ? 99 : g_fps_value;
+    int v = value > 99 ? 99 : value;
     int digits[2] = {v / 10, v % 10}, x0 = 480 - 2 * 8 - 4, y0 = 4;
     for (int y = -1; y < 11; y++)              /* black box behind the digits */
         for (int x = -1; x < 16; x++) fb[(y0 + y) * 512 + x0 + x] = 0x8000;
@@ -1508,6 +1625,14 @@ static void draw_fps(int buf)
                         for (int xx = 0; xx < 2; xx++)
                             fb[(y0 + r * 2 + yy) * 512 + x0 + d * 8 + c * 2 + xx] = 0xFFFF;
     }
+}
+
+/* main CPU service thread (me.c): fps digits with the value the ME computed, display swap */
+static void draw_fps(int buf) { draw_fps_v(buf, g_fps_value); }
+void ge_draw_fps_digits(int buf, int value) { draw_fps_v(buf, value); }   /* writes no ME data */
+void ge_display_buffer_set(int show)
+{
+    sceDisplaySetFrameBuf((void *)(EDRAM + FB_OFF(show)), 512, PSP_DISPLAY_PIXEL_FORMAT_5551, PSP_DISPLAY_SETBUF_NEXTFRAME);
 }
 
 static void fps_frame(void)
@@ -1538,6 +1663,10 @@ static void apply_swap(void)
     int show = g_pending_show;
     g_pending_show = -1;
     if (show < 0) return;
+    if (me_on_me()) {                      /* the main CPU's service thread drew the digits and swapped */
+        if (show != g_disp_buf) { g_prev_shown = g_disp_buf; g_swap_vcount = (int)me_swap_vcount(); g_disp_buf = show; }
+        return;
+    }
     draw_fps(show);
     set_display(show);
 }
@@ -1566,6 +1695,13 @@ void ge_present(int dx, int dy, int w, int h, int blank)
         int tgt = g_hires ? 2 : (g_shown == 0 ? 1 : 0);
         if (g_pending_show >= 0) ge_sync();             /* the previous picture is still waiting for the GE */
         int async = present_scaled(tgt, dx, dy, w, h, blank);
+        {
+            static int n;
+            if (n < 6 || (n % 600) == 0)
+                logf_("present: tgt %d rect %d,%d %dx%d blank %d async %d async_on %d edram arena %d\n", tgt, dx, dy, w, h,
+                      blank, async, g_async, g_varena_edram);
+            n++;
+        }
         show = tgt;
         fps_frame();
         if (async) { g_shown = show; PHASE_END(); return; }   /* fps digits and swap in apply_swap */
@@ -1685,12 +1821,13 @@ void ge_init(void)
         sceKernelDcacheWritebackInvalidateRange(g_slots[i].buf, 65536);
     }
     sceKernelDcacheWritebackInvalidateRange(g_clut_arena, sizeof g_clut_arena);
-    g_async = g_async_present && g_varena_edram && !g_hires;
+    extern int g_me_gpu;
+    if (g_me_gpu) { g_varena_edram = 0; g_varena_uncached = 1; g_varena_size = VARENA; }   /* the ME cannot reach eDRAM */
+    g_async = g_async_present && (g_varena_edram || g_me_gpu) && !g_hires;
     g_hudp = memalign(64, 2 * sizeof *g_hudp);
     if (!g_hudp) g_hud_defer = 0;
     if (g_async) {                 /* display buffer 2 is unused at 1x: vertex ring from there to the end of eDRAM */
-        g_varena_eoff = FB_OFF(2);
-        g_varena_size = 0x200000u - FB_OFF(2);
+        if (g_varena_edram) { g_varena_eoff = FB_OFF(2); g_varena_size = 0x200000u - FB_OFF(2); }
         memset((void *)(0x40000000u | (EDRAM + FB_OFF(0))), 0, 0x44000);
         g_shown = 0;
     } else g_shown = 2;

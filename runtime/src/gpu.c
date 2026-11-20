@@ -12,6 +12,9 @@
 #include "gpu.h"
 #include "raster.h"
 #include "ge.h"
+#include "me.h"
+void ge_push(int x, int y, int w, int h);
+void ge_pull(int x, int y, int w, int h);
 
 uint16_t *g_vram;
 
@@ -103,7 +106,7 @@ static int file_exists(const char *path)
     return sceIoGetstat(path, &st) >= 0;
 }
 
-static void snapshot(void)
+void gpu_snapshot(void)
 {
     static int n;
     static uint16_t r[1024];
@@ -177,6 +180,7 @@ static void exec(const uint32_t *f)
         ge_vram_written(x, y, w, h);
         for (int j = 0; j < h; j++)
             for (int i = 0; i < w; i++) g_vram[((y + j) & 511) * 1024 + ((x + i) & 1023)] = col;
+        ge_push(x, y, w, h);
         return;
     }
     if ((op >> 5) == 5 || (op >> 5) == 6) {    /* start VRAM transfer */
@@ -189,6 +193,7 @@ static void exec(const uint32_t *f)
         if (g_xfer_dir == 2) ge_note_read(g_xx, g_xy, g_xw, g_xh);
         g_sync_why = g_xfer_dir == 1 ? 2 : 3;
         ge_sync();                              /* the CPU accesses VRAM directly */
+        if (g_xfer_dir == 2) ge_pull(g_xx, g_xy, g_xw, g_xh);   /* Media Engine: VRAM shadow (ge.c) */
         if (g_xfer_dir == 1) ge_vram_written(g_xx, g_xy, g_xw, g_xh);
         return;
     }
@@ -202,6 +207,7 @@ static void exec(const uint32_t *f)
         if (ge_copy(sx, sy, dx, dy, w, h)) return;
         g_sync_why = 4;
         ge_sync();
+        ge_pull(sx, sy, w, h);
         ge_vram_written(dx, dy, w, h);
         for (int j = 0; j < h; j++)
             for (int i = 0; i < w; i++)
@@ -361,39 +367,9 @@ uint32_t gpu_status(void)
     return (g_status & ~0x1E000000u) | 0x1C000000u | (g_xfer_dir == 2 ? 0x08000000u : 0);
 }
 
-/* Frame work statistics: time from the return of one waiting VSync call to the next one (recomp.py hooks). */
-static uint32_t g_work_hist[7];
-static uint64_t g_work_max, g_vs_leave;
-static int g_vs_wait;
-void rt_vsync_enter(int waits)
-{
-    g_vs_wait = waits;
-    if (!g_vs_wait || !g_vs_leave) return;
-    uint64_t w = now_us() - g_vs_leave;
-    static const uint32_t lim[6] = {20000, 25000, 30000, 33000, 40000, 50000};
-    int b = 0;
-    while (b < 6 && w >= lim[b]) b++;
-    g_work_hist[b]++;
-    if (w > g_work_max) g_work_max = w;
-    {   /* deterministic per-race statistics: the same frames of a replay in every run (frame index since the race
-         * overlay was loaded), "race work" every 300 frames: average work and frames over 33 ms */
-        extern uint32_t g_overlay_loads;
-        static uint32_t seen = ~0u, idx, n_over;
-        static uint64_t sum;
-        if (g_cur_overlay != 0) return;
-        if (seen != g_overlay_loads) { seen = g_overlay_loads; idx = 0; sum = 0; n_over = 0; }
-        sum += w;
-        n_over += w > 33366;
-        if (++idx % 300 == 0) {
-            logf_("race work: frames %u-%u avg %u us, %u over 33.4 ms\n", (unsigned)(idx - 300), (unsigned)(idx - 1),
-                  (unsigned)(sum / 300), (unsigned)n_over);
-            sum = 0; n_over = 0;
-        }
-    }
-}
-void rt_vsync_leave(void) { if (g_vs_wait) g_vs_leave = now_us(); }
 
-void gpu_present(void)
+/* Presentation of the PS1 display area and the GPU statistics (on the Media Engine with me_gpu, see me.c) */
+void gpu_present_core(void)
 {
     static const int hres[4] = {256, 320, 512, 640};
     int w = (g_disp_mode & 0x40) ? 368 : hres[g_disp_mode & 3];
@@ -429,68 +405,20 @@ void gpu_present(void)
     }
     sceDisplaySetFrameBuf((void *)0x04188000, 512, PSP_DISPLAY_PIXEL_FORMAT_5551, PSP_DISPLAY_SETBUF_NEXTFRAME);
 stats:
-    static int dumps = -1, dumps_from;                       /* debug snapshots only if dumps.txt exists next to the EBOOT */
-    if (dumps < 0) {
-        char path[300];
-        snprintf(path, sizeof path, "%sdumps.txt", g_basedir);
-        FILE *f = fopen(path, "r");
-        dumps = f != 0;
-        if (f) {                                 /* optional content: first frame; then screens only (USB is slow) */
-            if (fscanf(f, "%d", &dumps_from) != 1) dumps_from = 0;
-            fclose(f);
-        }
-    }
-    if (dumps && (frame >= (dumps_from ? (dumps_from < 0 ? -dumps_from : dumps_from) : 600) && frame % (dumps_from < 0 ? 30 : 150) == 0 && frame <= 9000)) {
-        char path[300];
-        snprintf(path, sizeof path, "%svram%d.bin", g_basedir, frame);
-        ge_sync();
-        FILE *f = dumps_from > 0 ? 0 : fopen(path, "wb");   /* negative start frame: VRAM dumps too */
-        if (f) { vram_fwrite(f); fclose(f); }
-        if (g_use_ge) {                          /* the PSP screen, as a 512x512 "VRAM" image for vram2png */
-            snprintf(path, sizeof path, "%sscreen%d.bin", g_basedir, frame);
-            f = fopen(path, "wb");
-            if (f) {
-                static uint16_t row[1024];
-                const uint16_t *fb = ge_display_buffer();
-                for (int y = 0; y < 512; y++) {
-                    memset(row, 0, sizeof row);
-                    if (y < 272) memcpy(row, fb + y * 512, 480 * 2);
-                    fwrite(row, 2, 1024, f);
-                }
-                fclose(f);
-            }
-        }
-    }
-    {
-        static int combo_down;
-        SceCtrlData pad;
-        sceCtrlPeekBufferPositive(&pad, 1);
-        unsigned want = PSP_CTRL_LTRIGGER | PSP_CTRL_RTRIGGER | PSP_CTRL_SELECT;
-        int down = (pad.Buttons & want) == want;
-        if (down && !combo_down) snapshot();
-        combo_down = down;
-    }
     if (frame == 100 || frame == 1000 || frame == 2000) g_log_prims = 24;
-    {   /* settings.txt autoexit=N: quit after N seconds (PSPLink profiling runs) */
-        extern int g_autoexit;
-        static uint64_t start;
-        if (!start) start = now_us();
-        if (g_autoexit > 0 && now_us() - start > (uint64_t)g_autoexit * 1000000u) {
-            extern void quit_game(const char *why);
-            quit_game("autoexit");
-        }
-    }
     if (++frame % 120 == 0) {
         extern uint32_t g_gpu_lists;
         extern uint64_t g_gpu_us;
+        uint32_t gpu_lists = ME_UC(g_gpu_lists);
+        uint64_t gpu_us = ME_UC(g_gpu_us);
         static uint32_t last_lists, last_prims;
         static uint64_t last_t, last_gpu;
         uint64_t t = now_us();
         uint32_t dt_ms = last_t ? (uint32_t)((t - last_t) / 1000) : 0;
         logf_("gpu: vblank %d | last 120 vblanks took %u ms (display lists %u ms), %u display lists, %u prims | "
-              "disp %u,%u mode %02x\n", frame, (unsigned)dt_ms, (unsigned)((g_gpu_us - last_gpu) / 1000),
-              (unsigned)(g_gpu_lists - last_lists), (unsigned)(g_prims - last_prims),
-              (unsigned)g_disp_x, (unsigned)g_disp_y, (unsigned)g_disp_mode);
+              "disp %u,%u mode %02x status %08x\n", frame, (unsigned)dt_ms, (unsigned)((gpu_us - last_gpu) / 1000),
+              (unsigned)(gpu_lists - last_lists), (unsigned)(g_prims - last_prims),
+              (unsigned)g_disp_x, (unsigned)g_disp_y, (unsigned)g_disp_mode, (unsigned)g_status);
         extern uint32_t g_ge_prims, g_ge_sw_prims, g_ge_tex_uploads, g_ge_syncs, g_ge_pgxp;
         logf_("ge: %u prims (%u perspective-correct), %u software, %u texture page copies, %u syncs (totals)\n",
               (unsigned)g_ge_prims, (unsigned)g_ge_pgxp, (unsigned)g_ge_sw_prims, (unsigned)g_ge_tex_uploads,
@@ -498,13 +426,12 @@ stats:
         {
             extern uint32_t g_sync_stats[16];
             static uint32_t last[16];
-            char buf[160];
-            int n = 0;
-            for (int i = 0; i < 11; i++) {
-                n += snprintf(buf + n, sizeof buf - n, " %u", (unsigned)(g_sync_stats[i] - last[i]));
-                last[i] = g_sync_stats[i];
-            }
-            logf_("ge syncs by reason (other fill upload readback copy list clut-drawn clut-full sw vtx present):%s\n", buf);
+            uint32_t d[11];
+            for (int i = 0; i < 11; i++) { d[i] = g_sync_stats[i] - last[i]; last[i] = g_sync_stats[i]; }
+            logf_("ge syncs by reason (other fill upload readback copy list clut-drawn clut-full sw vtx present): "
+                  "%u %u %u %u %u %u %u %u %u %u %u\n", (unsigned)d[0], (unsigned)d[1], (unsigned)d[2], (unsigned)d[3],
+                  (unsigned)d[4], (unsigned)d[5], (unsigned)d[6], (unsigned)d[7], (unsigned)d[8], (unsigned)d[9],
+                  (unsigned)d[10]);
         }
         {
             extern uint64_t g_wait_us[3]; extern uint32_t g_wait_n[3]; extern uint32_t g_vtop_max, g_list_max;
@@ -519,24 +446,74 @@ stats:
                   (unsigned)g_wait_n[2], (unsigned)(g_wait_us[2] / 1000));
             memset(g_wait_us, 0, sizeof g_wait_us); memset(g_wait_n, 0, sizeof g_wait_n);
         }
-        {
-            extern uint32_t g_pace_hist[5];
-            logf_("pacing: lists after 1/2/3/4+ vblanks: %u %u %u %u\n", (unsigned)g_pace_hist[1],
-                  (unsigned)g_pace_hist[2], (unsigned)g_pace_hist[3], (unsigned)g_pace_hist[4]);
-            memset(g_pace_hist, 0, sizeof(uint32_t) * 5);
-        }
-        logf_("frame work (ms, VSync wait excluded) <20/<25/<30/<33/<40/<50/50+: %u %u %u %u %u %u %u, max %u\n",
-              (unsigned)g_work_hist[0], (unsigned)g_work_hist[1], (unsigned)g_work_hist[2], (unsigned)g_work_hist[3],
-              (unsigned)g_work_hist[4], (unsigned)g_work_hist[5], (unsigned)g_work_hist[6], (unsigned)(g_work_max / 1000));
-        memset(g_work_hist, 0, sizeof g_work_hist);
-        g_work_max = 0;
         extern uint32_t g_wide_clipped, g_wide_tris;
-        logf_("widescreen clipper: %u polygons, %u triangles (totals)\n", (unsigned)g_wide_clipped,
-              (unsigned)g_wide_tris);
-        last_lists = g_gpu_lists;
+        logf_("widescreen clipper: %u polygons, %u triangles (totals)\n", (unsigned)ME_UC(g_wide_clipped),
+              (unsigned)ME_UC(g_wide_tris));
+        last_lists = gpu_lists;
         last_prims = g_prims;
-        last_gpu = g_gpu_us;
+        last_gpu = gpu_us;
         last_t = t;
     }
     g_prims_frame = g_prims;
+}
+
+/* ---- DMA2 linked list (ordering table) walk, moved from io.c: runs on the ME with me_gpu ---- */
+uint32_t g_ot_entries, g_ot_empty;
+extern int g_bench_stage;
+extern int g_hud_mode;
+void ge_hud_begin(void);
+int g_walklog;                 /* settings.txt walklog=<vblank>: log every packet of one race frame (debug) */
+
+/* Race HUD (16:9, see ge.c hud_squeeze): the race's ordering table (ClearOTagR, walked from its top entry madr
+ * downwards) has 8515 entries in four layers, each starting with a drawing-area packet; the last layer, linked from
+ * OT[3] = madr - 0x850C, is the HUD. Found with settings.txt walklog=<vblank> (one summary line per list). */
+#define RACE_HUD_OT 0x850Cu
+
+void gpu_walk(uint32_t madr)
+{
+    uint32_t a = madr, guard = 0, prev = 0;
+    uint32_t hud_ot = (g_widescreen && ME_UC(g_cur_overlay) == 0) ? madr - RACE_HUD_OT : 1;
+    int wl = g_walklog && ME_UC(g_vblank_count) >= (uint32_t)g_walklog;
+    char buf[400];
+    int bl = 0, pk = 0;
+    for (;;) {
+        uint32_t hdr = *(uint32_t *)(g_ram + a);
+        if (!wl) {
+            /* Runs of empty ordering table entries (most of the race's 2 x 8515): a tight loop, ~4x faster than the
+             * general path. Stops at a packet, the list end, the HUD layer's entry and after 0x40000 links. */
+            uint32_t skipped = 0;
+            while (!(hdr >> 24) && !(hdr & 0x800000) && a != hud_ot && skipped < 0x40000) {
+                a = hdr & 0x1FFFFC;
+                hdr = *(uint32_t *)(g_ram + a);
+                skipped++;
+            }
+            g_ot_entries += skipped;
+            g_ot_empty += skipped;
+            guard += skipped;
+        }
+        uint32_t n = hdr >> 24;
+        g_ot_entries++;
+        if (wl && n) {
+            const uint32_t *p = (const uint32_t *)(g_ram + a + 4);
+            if ((p[0] >> 24) == 0xE3 && bl < 360)
+                bl += snprintf(buf + bl, sizeof buf - bl, " %d@%06x:%08x", pk, (unsigned)prev, (unsigned)p[1]);
+            pk++;
+        }
+        if (!n) {
+            g_ot_empty++;
+            if (a == hud_ot) ge_hud_begin();
+        }
+        else if (g_bench_stage == 1) { volatile uint32_t x = *(uint32_t *)(g_ram + a + 4); (void)x; }
+        else if (a + 4 + 4 * n <= PSX_RAM_SIZE) gpu_packet((const uint32_t *)(g_ram + a + 4), n);
+        else for (uint32_t i = 0; i < n; i++) gpu_gp0(*(uint32_t *)(g_ram + ((a + 4 + 4 * i) & 0x1FFFFC)));
+        if ((hdr & 0x800000) || ++guard > 0x40000) break;
+        prev = a;
+        a = hdr & 0x1FFFFC;
+    }
+    g_hud_mode = 0;
+    if (wl) {
+        buf[bl] = 0;
+        logf_("wls %u %06x %d:%s\n", (unsigned)g_vblank_count, (unsigned)madr, pk, buf);
+        if (ME_UC(g_vblank_count) > (uint32_t)g_walklog + 900) g_walklog = 0;
+    }
 }

@@ -8,6 +8,7 @@
 #include "funcs.h"
 #include "cdrom.h"
 #include "prof.h"
+#include "me.h"
 
 /* fixed address: no pointer load per access; guard areas around it for base + offset accesses (gt2rt.h) */
 uint8_t g_ram_mem[RAM_GUARD_LO + PSX_RAM_SIZE + RAM_GUARD_HI] __attribute__((aligned(65536)));
@@ -140,8 +141,11 @@ void f_8005dad8(PsxCpu *c)
 
 /* ---- time & interrupts ---------------------------------------------------------------------------------- */
 
+uint64_t g_vblank_sync_us;   /* set by the presentation when it waited for the display's vblank (ge.c) */
+
 uint64_t now_us(void)
 {
+    if (me_on_me()) return me_now_us();    /* Media Engine: no system calls (time published by the main CPU) */
     u64 t;
     sceRtcGetCurrentTick(&t);
     return t;
@@ -254,11 +258,11 @@ void rt_poll(PsxCpu *c)
     cdrom_tick();
     {
         extern void ge_poll_async(void);
-        ge_poll_async();
+        if (g_me_active) me_service();
+        else ge_poll_async();
     }
     if (t >= g_next_vblank) {
         g_next_vblank = (g_next_vblank && t - g_next_vblank < 100000) ? g_next_vblank + 16683 : t + 16683;
-        extern uint64_t g_vblank_sync_us;
         g_vblank_sync_us = 0;
         io_vblank();
         if (g_vblank_sync_us) g_next_vblank = g_vblank_sync_us + 16683 - 1200;   /* see ge.c present_scaled */

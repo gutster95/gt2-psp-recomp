@@ -4,6 +4,8 @@
 set -euo pipefail
 . /etc/profile.d/pspdev.sh
 PROJ="$(cd "$(dirname "$0")/.." && pwd)"
+# Media Engine library (once per WSL setup): tools/downloads/me-custom-core -> /root/mepoc/build/mecorelib
+[ -f /root/mepoc/build/mecorelib/libme-core-lib.a ] || bash "$PROJ/scripts/me/build-sample.sh" poc > /dev/null
 B=${GT2_BUILD_DIR:-/root/gt2build}    # Linux FS: much faster than /mnt/c
 mkdir -p "$B"
 cd "$B"

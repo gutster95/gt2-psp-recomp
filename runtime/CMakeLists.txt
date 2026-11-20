@@ -7,6 +7,10 @@ file(GLOB GEN_SRC "${GEN_DIR}/*.c")
 
 add_executable(gt2psp ${RT_SRC} ${GEN_SRC})
 target_include_directories(gt2psp PRIVATE include src "${GEN_DIR}")
+# Media Engine library (mcidclan/psp-media-engine-custom-core, MIT), built by scripts/me/build-sample.sh
+set(ME_LIB_DIR "/root/mepoc/build/mecorelib" CACHE PATH "built me-core libraries")
+set(ME_INC_DIR "/root/meinc" CACHE PATH "include dir with me-core-mapper/")
+target_include_directories(gt2psp PRIVATE "${ME_INC_DIR}")
 target_compile_options(gt2psp PRIVATE -O2 -G0 -ffunction-sections -fno-strict-aliasing -Wall -Wno-unused-label -Wno-unused-variable)
 set(ALL_EXTRA "" CACHE STRING "extra compile and link options for everything (profile-guided optimization)")
 separate_arguments(ALL_EXTRA_L UNIX_COMMAND "${ALL_EXTRA}")
@@ -18,7 +22,7 @@ set_source_files_properties(${GEN_SRC} PROPERTIES COMPILE_OPTIONS "-w;${GEN_EXTR
 set(RT_EXTRA "" CACHE STRING "extra compile options for ge.c, gpu.c, io.c, gte.c, core.c (experiments)")
 separate_arguments(RT_EXTRA_L UNIX_COMMAND "${RT_EXTRA}")
 set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/src/ge.c" "${CMAKE_CURRENT_SOURCE_DIR}/src/gpu.c" "${CMAKE_CURRENT_SOURCE_DIR}/src/io.c" "${CMAKE_CURRENT_SOURCE_DIR}/src/gte.c" "${CMAKE_CURRENT_SOURCE_DIR}/src/core.c" PROPERTIES COMPILE_OPTIONS "${RT_EXTRA_L}")
-target_link_libraries(gt2psp PRIVATE pspgu psputility pspaudio pspdebug pspdisplay pspge psprtc pspctrl psppower)
+target_link_libraries(gt2psp PRIVATE "${ME_LIB_DIR}/libme-core.a" "${ME_LIB_DIR}/libme-core-lib.a" pspsdk pspgu psputility pspaudio pspdebug pspdisplay pspge psprtc pspctrl psppower)
 create_pbp_file(TARGET gt2psp TITLE "GT2 recomp" BUILD_PRX)
 
 # Own copy of the SDK's PRX linker script with the hot functions first (scripts/make_linkfile.py)
