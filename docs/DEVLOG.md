@@ -782,3 +782,21 @@ the Media Engine:
 * DPCS fast path (gte_fast.h gte_dpcs_fast, outlined gte_dpcs_o): ~360 per race frame went through the slow command
   switch. Bit-exact against gte_cmd_impl in the startup selftest (membench=2; sf/lm variants added), checked in
   PPSSPP while the PSP was unreachable: 0 mismatches in 200000 random register sets. Speed still to be measured.
+
+## 2026-11-20 - 60 fps: where the main CPU goes, CD read-ahead, fixed data/code placement
+
+* fps60 attract race with the ME (`-DGT2_POLL_FN` build): ~52 fps, 87% of the frames one vblank apart. The ME never
+  makes the game wait (walk avg 12.2 ms) - the main CPU is the limit. The wait loop after 0x8007eaac seen at 30 fps
+  is gone at 60 fps (no headroom left to wait in). Game code 90% (the heaviest: the overlay 0 mesh renderers
+  0x800234f8 19%, 0x8002106c 10%, 0x80018d1c 6% - RTPS/MVMVA/NCLIP/DPCS per vertex and polygon), poll/IRQ 8%.
+* rt_poll timing (GT2_POLL_FN): per 2 s cd 40-50 ms, IRQ handlers ~95 ms, ME service ~5 ms, vblank ~5 ms. The CD
+  part was XA music streaming: one synchronous 128 KB pack read every ~0.4 s (~15 ms each). Now a prefetch thread
+  reads ahead into a second buffer (cdrom.c): cd time from the memory stick 67 -> 32 ms per 2 s, no stalls left
+  (`cd: 0 synchronous pack reads`). `pakpath.txt` lets PSPLink runs read the pack from ms0: (USB is not
+  representative).
+* Pitfall found on the way: fps60 pacing of the attract demo is not a benchmark - the demo desyncs at 60 fps, and
+  every build drove a different race (52 vs 47 fps for builds that are equally fast at 30 fps, where the demo is
+  deterministic: idle 661 vs 672 ms per 2 s).
+* Layout: .rodata/.data now start at fixed 16 KB offsets and the generated code follows the hot block at a fixed
+  offset (linkfile.prx.in, make_linkfile.py), so runtime edits no longer move game code and tables.
+

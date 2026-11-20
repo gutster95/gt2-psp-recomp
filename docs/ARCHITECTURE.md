@@ -147,6 +147,15 @@ tools/             (ignored) local toolchain (pspdev inside a project-local WSL 
   `scripts/pgo.sh build` (generated code -O2 with the profile: hot/cold block splitting, branch layout). Judge
   changes with `build/racework.sh` (deterministic `race work` averages, same EBOOT +-0.1 ms) and re-check the gap
   after changes to hot code.
+  Since 2026-11-20 the rest of the recompiled code (`generated/*.c`) follows the hot block at a fixed offset within
+  a 16 KB block, and `.rodata`/`.data` start at fixed 16 KB offsets (linkfile.prx.in): runtime edits no longer move
+  the game code or the tables relative to each other and to the 64 KB aligned PS1 RAM. Do not judge performance by
+  fps60 pacing in the attract demo: at 60 fps the demo desyncs, and tiny timing differences give a different race
+  (and load). Use the 30 fps idle/work statistics, which are deterministic.
+* **CD read-ahead** (cdrom.c, 2026-11-20): two 128 KB buffers over GT2.PAK; past the middle of one, a prefetch thread
+  (own file handle, priority 0x14) loads the next 128 KB. Before, XA music streaming did a synchronous 128 KB read
+  every ~0.4 s on the game thread (~15 ms, a dropped frame at 60 fps). `cd_prefetch=0` turns it off;
+  `pakpath.txt` (tests via PSPLink) names another pack, e.g. `ms0:/PSP/GAME/GT2PSP/GT2.PAK` instead of USB host0.
 * **GPU emulation on the Media Engine** (2026-11-20, runtime/src/me.c): the second 333 MHz core runs gpu.c/ge.c/raster.c
   in parallel with the game; the main CPU posts commands into an uncached ring and does the system calls (GE enqueue,
   display swap) in a service thread. The ME cannot address the GE's eDRAM: vertices in RAM, PS1 VRAM shadow in RAM

@@ -23,10 +23,11 @@ static void sample(void)
     if (ph < 0 || ph >= PH_COUNT) ph = PH_OTHER;
     g_ph[ph]++;
     g_total++;
-    if (ph != PH_GAME) return;
 #ifdef GT2_POLL_FN
-    uint32_t fn = g_poll_fn ^ 0x80000000u;    /* loop that polled last (module bits in the top byte) */
+    if (ph != PH_GAME && ph != PH_IRQ) return;
+    uint32_t fn = g_poll_fn ^ (ph == PH_IRQ ? 0x40000000u : 0x80000000u);   /* loop that polled last; 0x4x: in an IRQ */
 #else
+    if (ph != PH_GAME) return;
     uint32_t fn = g_trace[(g_trace_pos - 1) & (TRACE_SIZE - 1)];
 #endif
     uint32_t h = (fn * 0x9E3779B1u) >> 20;

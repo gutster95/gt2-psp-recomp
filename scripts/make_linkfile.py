@@ -25,6 +25,10 @@ def entry(n: str) -> str:
 
 
 hot = "".join(entry(n) for n in names)
+# Then the rest of the recompiled code, at a fixed offset within a 16 KB block: runtime edits (which used to come
+# first) no longer shift the game's not-listed functions against the hot ones (~10% at 60 fps for a 1 KB edit in
+# cdrom.c, DEVLOG 2026-11-20). The offset reproduces a fast build; change it only by measuring.
+hot += "    . = ALIGN(0x4000) + 0x254;\n    *generated/*.c.obj(.text .text.*)\n"
 out = tmpl.replace(anchor, anchor + "    /* hot code first (data/hot_functions.txt, scripts/make_linkfile.py) */\n" + hot, 1)
 (proj / "runtime/ld/linkfile.prx").write_text(out, newline="\n")
 print(f"linkfile.prx: {len(names)} hot functions")

@@ -102,6 +102,11 @@ SECTIONS
   .rodata.sceResident      : { *(.rodata.sceResident) }
   .rodata.sceNid           : { KEEP (*(.rodata.sceNid)) }
   .rodata.sceVstub         : { *(.rodata.sceVstub) *(SORT(.rodata.sceVstub.*)) }
+  /* Fixed D-cache placement (16 KB, 2-way): .rodata and .data start at a fixed offset within a 16 KB block, so a
+     change in code size no longer moves the jump tables, function tables and runtime variables relative to the PS1
+     RAM (g_ram_mem, 64 KB aligned) and the .bss arrays. Without this, a 1 KB code change cost ~10% frame rate at 60 fps
+     (DEVLOG 2026-11-20). The offsets are those of a fast build; change them only by measuring. */
+  . = ALIGN(0x4000) + 0x3440;
   .rodata         : { *(.rodata .rodata.* .gnu.linkonce.r.*) }
   .rodata1        : { *(.rodata1) }
   .sdata2         : { *(.sdata2 .sdata2.* .gnu.linkonce.s2.*) }
@@ -161,6 +166,7 @@ SECTIONS
   }
   .jcr            : { KEEP (*(.jcr)) }
   .data.rel.ro : { *(.data.rel.ro.local) *(.data.rel.ro*) }
+  . = ALIGN(0x4000) + 0x1b80;
   .data           :
   {
     _fdata = . ;

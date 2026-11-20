@@ -250,25 +250,49 @@ void rt_poll(PsxCpu *c)
         extern uint32_t g_ot_entries, g_ot_empty;
         logf_("ot: %u entries (%u empty) in 2 s\n", (unsigned)g_ot_entries, (unsigned)g_ot_empty);
         g_ot_entries = g_ot_empty = 0;
+        extern void cdrom_stats(void);
+        cdrom_stats();
         logf_("alive: tpos %u polls %u irqs %u dicr %08x in_irq %d ovl %d i_stat %03x i_mask %03x irq %d sr %08x last fns %08x %08x %08x %08x\n", (unsigned)g_trace_pos, (unsigned)g_n_polls, (unsigned)g_n_irqs, (unsigned)io_r32(0x1F8010F4u), g_in_irq, g_cur_overlay,
               (unsigned)g_i_stat, (unsigned)g_i_mask, g_irq_enabled, (unsigned)c->cop0[12],
               (unsigned)g_trace[(g_trace_pos - 4) & (TRACE_SIZE - 1)], (unsigned)g_trace[(g_trace_pos - 3) & (TRACE_SIZE - 1)],
               (unsigned)g_trace[(g_trace_pos - 2) & (TRACE_SIZE - 1)], (unsigned)g_trace[(g_trace_pos - 1) & (TRACE_SIZE - 1)]);
     }
+#ifdef GT2_POLL_FN
+    /* profiling: where the time inside rt_poll goes (cd, ME service, vblank device work, IRQ handlers, events) */
+    static uint64_t pt[5], pnext;
+    uint64_t t0 = t, t1;
+#define PT_(i) (t1 = now_us(), pt[i] += t1 - t0, t0 = t1)
+#else
+#define PT_(i) ((void)0)
+#endif
     cdrom_tick();
+    PT_(0);
     {
         extern void ge_poll_async(void);
         if (g_me_active) me_service();
         else ge_poll_async();
     }
+    PT_(1);
     if (t >= g_next_vblank) {
         g_next_vblank = (g_next_vblank && t - g_next_vblank < 100000) ? g_next_vblank + 16683 : t + 16683;
         g_vblank_sync_us = 0;
         io_vblank();
         if (g_vblank_sync_us) g_next_vblank = g_vblank_sync_us + 16683 - 1200;   /* see ge.c present_scaled */
     }
+    PT_(2);
     if (!g_in_irq && g_irq_enabled && (c->cop0[12] & 0x401) == 0x401 && (g_i_stat & g_i_mask))
         call_irq_handlers(c);
+    PT_(3);
     if (!g_in_irq && g_irq_enabled) bios_poll_events(c);
+    PT_(4);
+#undef PT_
+#ifdef GT2_POLL_FN
+    if (t >= pnext) {
+        pnext = t + 2000000;
+        logf_("poll time (ms in 2 s): cd %u me %u vblank %u irq %u events %u\n", (unsigned)(pt[0] / 1000),
+              (unsigned)(pt[1] / 1000), (unsigned)(pt[2] / 1000), (unsigned)(pt[3] / 1000), (unsigned)(pt[4] / 1000));
+        memset(pt, 0, sizeof pt);
+    }
+#endif
     PHASE_END();
 }

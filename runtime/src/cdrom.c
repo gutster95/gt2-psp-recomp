@@ -7,7 +7,9 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <malloc.h>
 #include <pspiofilemgr.h>
+#include <pspthreadman.h>
 #include "rt.h"
 #include "cdrom.h"
 #include "spu.h"
@@ -21,10 +23,21 @@ static PakRun *g_runs;
 static uint32_t g_nruns;
 static uint32_t g_disc_sectors;
 
-/* read-ahead cache over the pack file */
+/* Read-ahead cache over the pack file: two buffers. Once a read gets past the middle of a buffer, a prefetch thread
+ * (own file handle) loads the following 128 KB into the other one. A synchronous 128 KB memory stick read takes
+ * ~15 ms - with XA music streaming (150 sectors/s) that stalled the game thread every 0.4 s, a dropped frame at
+ * 60 fps. Only a seek (a new file) still reads synchronously. */
 #define CACHE_SIZE (128 * 1024)
-static uint8_t g_cache[CACHE_SIZE] __attribute__((aligned(64)));
-static uint32_t g_cache_off = 0xFFFFFFFFu, g_cache_len;
+static uint8_t (*g_cache)[CACHE_SIZE];       /* 2 x CACHE_SIZE, allocated in cdrom_init */
+static uint32_t g_cache_off[2] = {0xFFFFFFFFu, 0xFFFFFFFFu}, g_cache_len[2];
+static SceUID g_pf_sema = -1, g_pf_fd = -1;
+static volatile int g_pf_busy;             /* set by the game thread, cleared by the prefetch thread when done */
+static volatile int g_pf_len;
+static uint32_t g_pf_off;
+static int g_pf_idx, g_pf_pending;         /* game thread: a prefetch was issued and not yet collected */
+static uint32_t g_pf_waits, g_pf_sync;     /* statistics */
+int g_cd_prefetch = 1;                     /* settings.txt cd_prefetch */
+static int pf_thread(SceSize args, void *argp);
 
 static uint8_t g_index;
 static uint8_t g_params[16], g_nparams;
@@ -61,7 +74,12 @@ static uint8_t i2bcd(int v) { return (uint8_t)(((v / 10) << 4) | (v % 10)); }
 void cdrom_init(void)
 {
     char path[320];
-    snprintf(path, sizeof path, "%sGT2.PAK", g_basedir);
+    snprintf(path, sizeof path, "%spakpath.txt", g_basedir);
+    FILE *pf = fopen(path, "r");          /* tests through PSPLink: read the pack from the memory stick, not USB */
+    if (!pf || !fgets(path, sizeof path, pf)) snprintf(path, sizeof path, "%sGT2.PAK", g_basedir);
+    if (pf) fclose(pf);
+    path[strcspn(path, "\r\n")] = 0;
+    g_cache = memalign(64, 2 * CACHE_SIZE);
     g_pak = sceIoOpen(path, PSP_O_RDONLY, 0);
     struct { char magic[8]; uint32_t nruns, total; } h;
     if (g_pak < 0 || sceIoRead(g_pak, &h, sizeof h) != sizeof h || memcmp(h.magic, "GT2PAK1", 8) || h.nruns > 4096) {
@@ -76,19 +94,85 @@ void cdrom_init(void)
     g_runs = malloc(sizeof(PakRun) * g_nruns);
     sceIoRead(g_pak, g_runs, sizeof(PakRun) * g_nruns);
     logf_("data pack %s: %u runs, %u sectors\n", path, (unsigned)g_nruns, (unsigned)g_disc_sectors);
+    g_pf_fd = sceIoOpen(path, PSP_O_RDONLY, 0);
+    if (g_pf_fd >= 0) {
+        g_pf_sema = sceKernelCreateSema("cdpf", 0, 0, 1, 0);
+        SceUID t = sceKernelCreateThread("cdpf", pf_thread, 0x14, 0x2000, PSP_THREAD_ATTR_USER, 0);
+        if (g_pf_sema < 0 || t < 0 || sceKernelStartThread(t, 0, 0) < 0) g_pf_sema = -1;
+    }
+}
+
+static int pf_thread(SceSize args, void *argp)
+{
+    (void)args; (void)argp;
+    for (;;) {
+        sceKernelWaitSema(g_pf_sema, 1, 0);
+        int r = -1;
+        if (sceIoLseek32(g_pf_fd, (int)g_pf_off, PSP_SEEK_SET) == (int)g_pf_off)
+            r = sceIoRead(g_pf_fd, g_cache[g_pf_idx], CACHE_SIZE);
+        g_pf_len = r;
+        __sync_synchronize();
+        g_pf_busy = 0;
+    }
+    return 0;
+}
+
+static void pf_collect(int wait)
+{
+    if (!g_pf_pending) return;
+    if (g_pf_busy) {
+        if (!wait) return;
+        g_pf_waits++;
+        while (g_pf_busy) sceKernelDelayThread(100);
+    }
+    __sync_synchronize();
+    g_pf_pending = 0;
+    if (g_pf_len > 0) { g_cache_off[g_pf_idx] = g_pf_off; g_cache_len[g_pf_idx] = (uint32_t)g_pf_len; }
 }
 
 static int pak_read(uint32_t off, uint8_t *dst, uint32_t n)
 {
-    if (off < g_cache_off || off + n > g_cache_off + g_cache_len) {
-        if (sceIoLseek32(g_pak, (int)off, PSP_SEEK_SET) != (int)off) return 0;
-        int r = sceIoRead(g_pak, g_cache, CACHE_SIZE);
-        if (r < (int)n) { g_cache_off = 0xFFFFFFFFu; g_cache_len = 0; return 0; }
-        g_cache_off = off;
-        g_cache_len = (uint32_t)r;
+    pf_collect(0);
+    while (n) {
+        int i = -1;
+        for (int k = 0; k < 2; k++)
+            if (off >= g_cache_off[k] && off < g_cache_off[k] + g_cache_len[k]) i = k;
+        if (i < 0 && g_pf_pending && off >= g_pf_off && off < g_pf_off + CACHE_SIZE) {
+            pf_collect(1);                              /* the data is on its way */
+            if (g_pf_len <= 0) return 0;
+            continue;
+        }
+        if (i < 0) {                                    /* seek: synchronous read into the buffer not just used */
+            pf_collect(1);
+            i = g_cache_len[0] == 0 ? 0 : g_cache_len[1] == 0 ? 1 : g_pf_idx;
+            g_pf_sync++;
+            g_cache_off[i] = 0xFFFFFFFFu; g_cache_len[i] = 0;
+            if (sceIoLseek32(g_pak, (int)off, PSP_SEEK_SET) != (int)off) return 0;
+            int r = sceIoRead(g_pak, g_cache[i], CACHE_SIZE);
+            if (r <= 0) return 0;
+            g_cache_off[i] = off;
+            g_cache_len[i] = (uint32_t)r;
+        }
+        uint32_t end = g_cache_off[i] + g_cache_len[i], m = end - off < n ? end - off : n;
+        memcpy(dst, g_cache[i] + (off - g_cache_off[i]), m);
+        dst += m; off += m; n -= m;
+        /* past the middle of a full buffer: prefetch what follows it into the other buffer */
+        int o = i ^ 1;
+        if (g_cd_prefetch && g_pf_sema >= 0 && !g_pf_pending && g_cache_len[i] == CACHE_SIZE && off - g_cache_off[i] >= CACHE_SIZE / 2 &&
+            g_cache_off[o] != end) {
+            g_cache_off[o] = 0xFFFFFFFFu; g_cache_len[o] = 0;
+            g_pf_idx = o; g_pf_off = end; g_pf_pending = 1; g_pf_busy = 1;
+            __sync_synchronize();
+            sceKernelSignalSema(g_pf_sema, 1);
+        }
     }
-    memcpy(dst, g_cache + (off - g_cache_off), n);
     return 1;
+}
+
+void cdrom_stats(void)
+{
+    logf_("cd: %u synchronous pack reads, %u prefetch waits in 2 s\n", (unsigned)g_pf_sync, (unsigned)g_pf_waits);
+    g_pf_sync = g_pf_waits = 0;
 }
 
 static void push(uint64_t delay_us, uint8_t type, const uint8_t *b, int n)
