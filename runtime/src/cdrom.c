@@ -51,7 +51,7 @@ static uint8_t g_filter_file, g_filter_chan;
 static uint32_t g_setloc = LEADIN, g_pos = LEADIN;     /* MSF-absolute sector numbers */
 static int g_reading;
 static uint64_t g_next_sector_at;
-static uint32_t g_period_us = 1500;        /* data sector spacing; much faster breaks the game's CD code (see DEVLOG) */
+static uint32_t g_period_us = 750;         /* data sector spacing (0.75 ms = 1.5 ms halved, tested); 0.1 ms breaks the game's CD code (DEVLOG) */
 static uint32_t g_st_sectors;              /* statistics of the current read */
 static uint64_t g_st_start;
 
