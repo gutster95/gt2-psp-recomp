@@ -669,3 +669,15 @@ over 200000 random register sets incl. extreme values - 0 mismatches):
   and starting third-party kernel code on the PSP unattended was blocked by the session's safety check - needs the
   user's go-ahead. Offloading the GPU->GE path (~10 ms/frame) would also need the stall-address updates on the main
   CPU, the VRAM-access syncs as ME handshakes and all ge.c state in shared memory: several days of work.
+
+## 2026-11-20 - Media Engine test on the PSP-3000 (user approved)
+
+* `scripts/me/build-sample.sh <sample>` builds a sample of tools/downloads/me-custom-core (mcidclan, MIT) in WSL
+  without installing into /opt/pspdev. Upstream build bug: `psp-build-exports -s` writes kcall.S itself, the
+  `> kcall.S` redirect in its CMakeLists left the file empty (undefined kinit/kcall_2) - patched in the copy.
+* The poc sample, started through PSPLink: the kernel PRX (kcall.prx, written next to the module) loaded, the ME
+  booted custom code and wrote to shared uncached memory: table id 2 (`ME_CORE_T2_IMG_TABLE`, slim+), ME stack top
+  0x803FFFF8 (4 MB local eDRAM), bus clock enable 0x0F read from the ME. The module exited cleanly, PSPLink kept
+  answering - no hang, no power cycle needed.
+* Next: benchmark from the ME (main RAM reads through the uncached mirror, compute loop speed) to size an offload
+  of the GPU->GE path or of GTE work.
