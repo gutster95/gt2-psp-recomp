@@ -338,6 +338,7 @@ static void mix_xa(int16_t *out, int n)
 volatile int g_quit;
 volatile int g_audio_running;
 
+volatile int g_spu_paused;
 static int spu_thread(SceSize args, void *argp)
 {
     (void)args; (void)argp;
@@ -347,7 +348,8 @@ static int spu_thread(SceSize args, void *argp)
     g_audio_running++;
     for (int k = 0; !g_quit; k ^= 1) {
         uint64_t t0 = now_us();
-        mix_spu(buf[k], SPU_BLOCK);
+        if (g_spu_paused) memset(buf[k], 0, sizeof buf[k]);   /* settings menu open (menu.c) */
+        else mix_spu(buf[k], SPU_BLOCK);
         {   /* statistics: mixer CPU time per ~5 s and number of active voices */
             static uint64_t acc, next;
             static uint32_t voices, blocks;

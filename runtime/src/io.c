@@ -47,10 +47,19 @@ int g_fx60 = 1;   /* fps60_effects: keep mirror and tire smoke at 60 fps (0: the
 int g_lowlod;     /* lowlod: other cars always at the lowest LOD (recomp.py) */
 int g_performance;   /* performance=1: fps60, fps60_effects=0, lowlod=1 (main.c) */
 
+static int g_fps60_patched;   /* the frame interval currently 1 is ours (was 2) */
+
+/* settings menu (menu.c) switched fps60: back to the game's interval 2 if we had made it 1 */
+void io_fps60_changed(void)
+{
+    if (!g_fps60 && g_fps60_patched && g_ram[0x1D5864] == 1) g_ram[0x1D5864] = 2;
+    g_fps60_patched = 0;
+}
+
 void io_vblank(void)
 {
     g_vblank_count++;
-    if (g_fps60 && g_ram[0x1D5864] == 2) g_ram[0x1D5864] = 1;
+    if (g_fps60 && g_ram[0x1D5864] == 2) { g_ram[0x1D5864] = 1; g_fps60_patched = 1; }
     card_tick();
     raise_irq(0);
     gpu_present();

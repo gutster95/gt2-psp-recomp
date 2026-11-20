@@ -229,12 +229,14 @@ static int measure_mhz(void)
 {
     uint32_t best = 0xFFFFFFFFu;
     for (int k = 0; k < 3; k++) {
+        int st = sceKernelSuspendDispatchThread();      /* no thread switch in the middle (they made it read 313-399) */
         uint32_t t0 = sceKernelGetSystemTimeLow();
         /* all in asm: with the loop in C, gcc unrolled it into 1 MB of nops that ran from memory (4x too slow) */
         int n = 256;
         __asm__ volatile(".set push\n\t.set noreorder\n1:\n\t.rept 997\n\tnop\n\t.endr\n\taddiu %0, %0, -1\n\tbnez %0, 1b\n\tnop\n\t.set pop"
                          : "+r"(n));
         uint32_t dt = sceKernelGetSystemTimeLow() - t0;
+        sceKernelResumeDispatchThread(st);
         if (dt < best) best = dt;
     }
     return best ? (int)((256000u + best / 2) / best) : 0;
@@ -299,6 +301,8 @@ void rt_poll(PsxCpu *c)
         g_next_vblank = (g_next_vblank && t - g_next_vblank < 100000) ? g_next_vblank + 16683 : t + 16683;
         g_vblank_sync_us = 0;
         io_vblank();
+        extern void menu_poll(void);
+        if (!g_in_irq) menu_poll();               /* L+R+SELECT: settings menu (pauses the game here) */
         if (g_vblank_sync_us) g_next_vblank = g_vblank_sync_us + 16683 - 1200;   /* see ge.c present_scaled */
     }
     PT_(2);

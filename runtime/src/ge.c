@@ -853,12 +853,20 @@ static int hud_anchor(const int *box, int kind)
     int lo = box[0], hi = box[2], anchor;
     if (hi - lo > w / 2) return HUD_NO_SQUEEZE;
     int g = -1;
-    for (int i = g_nhg - 1; i >= 0; i--)          /* touching or overlapping (glyph gaps up to 12 pixels) */
-        if (g_hg[i].kind == kind && box[1] <= g_hg[i].y1 + 2 && box[3] >= g_hg[i].y0 - 2 && lo <= g_hg[i].hi + 12 &&
-            hi >= g_hg[i].lo - 12) {
+    int cx = (lo + hi) >> 1, cy = (box[1] + box[3]) >> 1;
+    for (int i = g_nhg - 1; i >= 0; i--) {
+        /* same kind: touching or overlapping (glyph gaps up to 12 pixels); other kind: one inside the other (the
+         * tachometer needle - a line - inside the textured dial; pointing right it ended in the right 10% and moved
+         * to the screen edge on its own) */
+        int gx = (g_hg[i].lo + g_hg[i].hi) >> 1, gy = (g_hg[i].y0 + g_hg[i].y1) >> 1;
+        if (g_hg[i].kind == kind ? box[1] <= g_hg[i].y1 + 2 && box[3] >= g_hg[i].y0 - 2 && lo <= g_hg[i].hi + 12 &&
+                                       hi >= g_hg[i].lo - 12
+                                 : (cx >= g_hg[i].lo && cx <= g_hg[i].hi && cy >= g_hg[i].y0 && cy <= g_hg[i].y1) ||
+                                       (gx >= lo && gx <= hi && gy >= box[1] && gy <= box[3])) {
             g = i;
             break;
         }
+    }
     if (g >= 0) {
         anchor = g_hg[g].anchor;
         if (lo < g_hg[g].lo) g_hg[g].lo = (int16_t)lo;
