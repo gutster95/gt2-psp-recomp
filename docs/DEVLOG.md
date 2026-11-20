@@ -869,3 +869,17 @@ the Media Engine:
   Settings menu: "60 fps lock: auto / always 60".
 * Media Engine: submit wait measured (time the ME waits for the service thread to take the next list).
 
+
+## 2026-11-20 - Hitches every 2 s (log writing), race buttons, faster loads
+
+* User report: short "loading" hitches in both modes, even alone in front. The memory stick log showed exactly one
+  frame over 50 ms (max 53-65 ms) in every 2 s window, in menus too: the statistics block (dozens of lines, more
+  since the ME profiling work) was written in the game thread with an fflush per line and a close/reopen per
+  second. The log now goes through a 64 KB ring buffer; a low-priority thread ("logw", priority 0x48) appends it
+  about once a second (and on the fatal/quit path synchronously). Same scenes afterwards: max 5-14 ms.
+* CD sector spacing 1.5 ms -> 0.75 ms (tested working on 2026-11-18): loads read about twice as fast
+  (280 sectors 432 -> 224 ms). A 35-sector read that took 1 s before is gone too.
+* Race buttons (`race_buttons=1`, menu entry): the game's setup on the port is circle gas, triangle brake, X
+  handbrake, square reverse; in races the face buttons are turned to X gas, square brake, circle handbrake,
+  triangle reverse. Only while a race is drawn (ge_in_race), so menus keep X = confirm; the in-race pause menu
+  confirms with circle then.

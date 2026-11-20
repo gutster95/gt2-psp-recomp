@@ -24,6 +24,10 @@ int g_pad_analog = 1;          /* analog (DualShock) mode; settings.txt analog *
  * change view); 0 = the other way round */
 int g_lr_shift = 0;
 int g_dpad_shift = 1;          /* settings.txt dpad_shift: d-pad up/down shift gears in races */
+/* settings.txt race_buttons (default on): in races the face buttons are turned so that X accelerates, square brakes,
+ * circle is the handbrake and triangle reverse (GT2's manual layout). The game's own button setup on the port
+ * (DualShock analog mode with the user's save) is circle gas, triangle brake, X handbrake, square reverse. */
+int g_race_buttons = 1;
 static int g_config;           /* DualShock config mode */
 static uint8_t g_cmd;          /* command byte of the current transfer */
 static uint8_t g_resp[10];     /* response bytes from index 2 on */
@@ -94,10 +98,18 @@ static void sample_buttons(void)
             if (b & PSP_CTRL_DOWN) hi |= 0x01;
         }
     }
-    if (b & PSP_CTRL_TRIANGLE) hi |= 0x10;
-    if (b & PSP_CTRL_CIRCLE) hi |= 0x20;
-    if (b & PSP_CTRL_CROSS) hi |= 0x40;
-    if (b & PSP_CTRL_SQUARE) hi |= 0x80;
+    extern int ge_in_race(void);
+    if (g_race_buttons && ge_in_race()) {          /* PSP X -> PS circle, square -> triangle, circle -> X, triangle -> square */
+        if (b & PSP_CTRL_TRIANGLE) hi |= 0x80;
+        if (b & PSP_CTRL_CIRCLE) hi |= 0x40;
+        if (b & PSP_CTRL_CROSS) hi |= 0x20;
+        if (b & PSP_CTRL_SQUARE) hi |= 0x10;
+    } else {
+        if (b & PSP_CTRL_TRIANGLE) hi |= 0x10;
+        if (b & PSP_CTRL_CIRCLE) hi |= 0x20;
+        if (b & PSP_CTRL_CROSS) hi |= 0x40;
+        if (b & PSP_CTRL_SQUARE) hi |= 0x80;
+    }
     if (g_pad_analog) {
         /* left analog stick with a dead zone (the PSP nub rarely rests exactly at the centre) */
         int ax = d.Lx - 128, ay = d.Ly - 128;
