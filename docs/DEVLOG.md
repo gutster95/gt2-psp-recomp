@@ -651,3 +651,21 @@ over 200000 random register sets incl. extreme values - 0 mismatches):
   (0 33.6, 1 KB 31.2, 3 KB 33.9, 4 KB 33.7 ms) picked 1 KB, partly within that noise.
 * Git Bash rewrites `/root/...` in environment variables for wsl.exe into `C:/Program Files/Git/root/...`:
   `MSYS_NO_PATHCONV=1` and a Windows path for `--cd` (scripts/pgo.sh does both).
+
+## 2026-11-20 - Night summary; Media Engine research
+
+* Attract race on the PSP-3000 (16:9), start of the night -> now: display lists 3 vblanks apart 27.6% -> 3.8%, race
+  fps (pacing) 26.2 -> 29.4; frame work over 33.4 ms 51.6% -> ~28% (incl. load spikes); `race work` average
+  (frames 300-2999) ~35 -> ~32.4 ms. Steps: GTE constant variants + inline MVMVA, asynchronous presentation, PGO with
+  -O2 generated code, hot code layout. GE frame benchmark (1428 prims) unchanged at ~10 ms CPU.
+* Menus, GT mode and a license test: 0 primitives through the software fallback (no 15-bit textures / texture
+  windows seen), so nothing to move to the GE there. CD data sectors already come every 1.5 ms (~9x the PS1 drive);
+  the memory card load at boot is 36 sectors within the first 2 s.
+* Media Engine: mcidclan/psp-media-engine-custom-core (MIT, built with psp-gcc 15.2) boots custom ME code through a
+  small kernel PRX (kcall: runs a function in kernel mode), copies the ME image to 0xBFC00000 and toggles
+  0xBC10004C; shared data through uncached memory (0x40000000 mirror), a hardware mutex at 0xBC100048 (main CPU sets
+  bit 0, ME bit 1), main->ME soft interrupt 0xBC100044; the ME makes no syscalls; samples include gu-shared-list (GE
+  lists built on the ME). Downloaded to tools/downloads/me-custom-core and reviewed, **not built or run**: building
+  and starting third-party kernel code on the PSP unattended was blocked by the session's safety check - needs the
+  user's go-ahead. Offloading the GPU->GE path (~10 ms/frame) would also need the stall-address updates on the main
+  CPU, the VRAM-access syncs as ME handshakes and all ge.c state in shared memory: several days of work.

@@ -77,21 +77,18 @@ PowerShell `Set-Content -Encoding utf8` writes a BOM. CMake globs: build.sh re-r
 * Not implemented yet: reverb,
   15-bit textures / texture windows on the GE (software fallback).
 
-## Next steps (as of 2026-11-19)
+## Next steps (as of 2026-11-20)
 
-Real PSP-3000: attract race ~25-27 fps (was 22.2; build-to-build layout noise is +-1.5 fps, so judge GPU-path
-changes with the deterministic benchmark, not the race fps). License tests 30 fps.
+Real PSP-3000, attract race 16:9: pacing ~29.4 fps, `race work` avg ~32.4 ms, ~28% of the frames still over 33.4 ms
+(`build/racework.sh`, same EBOOT +-0.8 ms between runs; the code layout alone moves it +-10% - see ARCHITECTURE
+"Code layout and PGO"). Release = `scripts/pgo.sh build` (profile in build/pgo-data).
 
-1. **Top priority: 30 fps in races incl. replays.** The GPU -> GE path costs ~12 ms of the 33 ms frame:
-   `settings.txt gebench=6000` next to the EBOOT logs per-stage times (`gebench stage ...`; stage order 1 walk,
-   2 decode, 3 clip, 7/8/9 texture parts, 4 texture done, 5 draw prep, 6 emit, 0 full). Memory facts
-   (`membench=1`): miss ~150 ns, uncached sequential store 14 ns/word vs cached 24 ns/word. Ideas: uncached vertex
-   arena (first try hung the PSP early - or the USB link died; retry carefully), decode straight into the arena
-   (no memcpy), fewer table lookups per primitive, cheaper state changes. Then game code (~50%).
-2. 100% save: `build/save/gt2-max.mcd` (from a RetroPie v1.2 save, maxed with `scripts/gt2save.py`) - copy as
-   `IMPORT.MCD` next to the EBOOT; the game's current card is saved to `BACKUP.MCD` first.
-3. After 30 fps: proper 16:9 (user wants it designed properly), with PCSX-Redux reference pictures.
-4. Picture reference: PCSX-Redux (tools/downloads/pcsx-redux-*, OpenBIOS, `build/ref/shots.lua` screenshots every
-   30 vsyncs), never PPSSPP alone. PSPLink: tools/downloads/psplink-3.2.1 + pspsh-windows; `pspsh -e "scrshot ..."`.
-   Ask before taking over the PSP while the user is playing. If PSPLink stops answering, the PSP needs a manual
-   power cycle.
+1. **30 fps in races**: GTE ~21% of the race time (RTPS ~100k/s, MVMVA ~145k/s, RTPT ~22k/s), GE path ~30%
+   (benchmark ~10 ms per heavy frame), game code ~30%. Biggest lever: the GE path on the Media Engine
+   (tools/downloads/me-custom-core reviewed, not run - needs the user's OK; multi-day). Smaller: RTPS/RTPT cost
+   (~200 cycles per vertex, HI/LO chains + UNR division).
+2. 100% save: `build/save/gt2-max.mcd` as `IMPORT.MCD` next to the EBOOT (saving works on hardware since b9bea88).
+3. 16:9: race HUD now at PSP resolution (hud_defer); menus stay 4:3 unless `widescreen_menus=1`.
+4. Picture reference: PCSX-Redux (tools/downloads/pcsx-redux-*, OpenBIOS, `build/ref/shots.lua`), never PPSSPP alone.
+   PSPLink: tools/downloads/psplink-3.2.1 + pspsh-windows; `pspsh -e "scrshot ..."`. Ask before taking over the PSP
+   while the user is playing. If PSPLink stops answering, the PSP needs a manual power cycle.
