@@ -26,7 +26,7 @@
 #include <pspge.h>
 #include <pspkernel.h>
 #include <pspdisplay.h>
-#include <psppower.h>
+
 #include "rt.h"
 #include "gpu.h"
 #include "raster.h"
@@ -1633,8 +1633,8 @@ static void draw_fps_v(int buf, int value)
     if (!g_show_fps || value < 0) return;
     uint16_t *fb = (uint16_t *)(0x40000000u | (EDRAM + FB_OFF(buf)));
     draw_num(fb, value > 99 ? 99 : value, 2, 4);
-    static int mhz, age;
-    if (!me_on_me() && age-- <= 0) { mhz = scePowerGetCpuClockFrequencyInt(); age = 60; }   /* no syscalls on the ME */
+    extern int g_cpu_mhz;                      /* measured, core.c */
+    int mhz = me_on_me() ? 0 : g_cpu_mhz;
     if (mhz > 0) draw_num(fb, mhz > 999 ? 999 : mhz, 3, 18);
 }
 

@@ -2,6 +2,7 @@
  * overlay tracking and interrupt delivery. See docs/ARCHITECTURE.md. */
 #include <stdio.h>
 #include <string.h>
+#include <psppower.h>
 #include <psprtc.h>
 #include <pspthreadman.h>
 #include "rt.h"
@@ -220,6 +221,22 @@ void bios_return_from_exception(PsxCpu *c)
     longjmp(g_irq_jb, 1);
 }
 
+/* Real CPU clock: 256k single-cycle instructions against the 1 MHz system timer (best of 3 against preemption).
+ * scePowerGetCpuClockFrequencyInt cannot be trusted: ARK's overclock above 333 MHz programs the PLL directly and
+ * the power service keeps reporting 333. Costs ~2.3 ms every 2 s. Shown under the fps counter (ge.c). */
+int g_cpu_mhz;
+static int measure_mhz(void)
+{
+    uint32_t best = 0xFFFFFFFFu;
+    for (int k = 0; k < 3; k++) {
+        uint32_t t0 = sceKernelGetSystemTimeLow();
+        for (int i = 0; i < 256; i++) __asm__ volatile(".rept 1000\n\tnop\n\t.endr");
+        uint32_t dt = sceKernelGetSystemTimeLow() - t0;
+        if (dt < best) best = dt;
+    }
+    return best ? (int)((256000u + best / 2) / best) : 0;
+}
+
 void rt_poll(PsxCpu *c)
 {
     PHASE_BEGIN(PH_IRQ);
@@ -247,6 +264,8 @@ void rt_poll(PsxCpu *c)
         next_report = t + 2000000;
         extern void memprof_dump(void);
         memprof_dump();
+        g_cpu_mhz = measure_mhz();
+        logf_("cpu: %d MHz measured (power service says %d)\n", g_cpu_mhz, scePowerGetCpuClockFrequencyInt());
         extern uint32_t g_ot_entries, g_ot_empty;
         logf_("ot: %u entries (%u empty) in 2 s\n", (unsigned)g_ot_entries, (unsigned)g_ot_empty);
         g_ot_entries = g_ot_empty = 0;
