@@ -1003,3 +1003,12 @@ the Media Engine:
   real time in the log).
 * Reference timeline of the Arcade disc boot (Redux): SCEA presents ~vsync 300, legal notice ~480-1080, Polyphony
   logo ~1380, then the long intro movie (still running at vsync 10000).
+* Arcade movies (user: 5-6 fps): MDEC decode measured (mdec stats line): 3840 macroblocks per 2 s, 0.33 ms each =
+  ~6.4 movie frames per second. IDCT now skips zero coefficients (pass 1 only for columns with one, pass 2 only over
+  the rows pass 1 produced; scale/8 precomputed, exact truncating /0x2000) - verified bit-identical against the plain
+  psx-spx loops (20000 random blocks incl. dense ones); chroma terms once per chroma sample. 0.14 ms per macroblock,
+  ~10 frames/s in PPSSPP, now CPU-bound elsewhere (idle 60-80 ms of 2 s): profile on the PSP next.
+* In-game menu cleaned up (user's list): heading with the mode, then mirror + smoke (both modes now: the three
+  "interval < 2" tests follow fps60_effects), opponent car detail, FPS counter, L/R, race buttons. Performance mode
+  defaults to "always 60" (fps60_auto 0); mirror/smoke and opponent detail default by mode, the menu's saved choice
+  wins (the launcher resets them when the mode changes).

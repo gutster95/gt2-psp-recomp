@@ -15,6 +15,8 @@ static uint32_t g_in[IN_MAX];
 static uint32_t g_in_len;
 static uint8_t g_qt[128];                  /* luma (0-63) and chroma (64-127) quantization, zigzag order */
 static int16_t g_scale[64];
+static int32_t g_sc8[64];                  /* g_scale[i] / 8 (C division, as psx-spx's IDCT), set by cmd 3 */
+static inline int32_t div8192(int32_t v) { return v >= 0 ? v >> 13 : -((-v) >> 13); }   /* v / 0x2000, C semantics */
 static int g_decoding;                     /* cmd 1 complete: output available */
 static uint32_t g_rd;                      /* input read position in halfwords */
 static uint32_t g_out[192];                /* one decoded macroblock (16x16x24 bit at most) */
@@ -56,29 +58,43 @@ static int decode_block(int16_t *out, const uint8_t *qt)
     do { if (!next_half(&n)) return 0; } while (n == 0xFE00);
     memset(blk, 0, sizeof blk);
     int q = n >> 10, k = 0;
+    unsigned cols = 0;                            /* columns y (blk[y + z*8]) with a nonzero coefficient */
     int32_t val = s10(n & 0x3FF) * qt[0];
     for (;;) {
         if (q == 0) val = s10(n & 0x3FF) * 2;
         if (val < -0x400) val = -0x400; else if (val > 0x3FF) val = 0x3FF;
-        blk[q ? ZAGZIG[k] : k] = val;
+        int pos = q ? ZAGZIG[k] : k;
+        blk[pos] = val;
+        if (val) cols |= 1u << (pos & 7);
         if (!next_half(&n)) break;
         k += (n >> 10) + 1;
         if (k > 63) break;
         val = (s10(n & 0x3FF) * qt[k] * q + 4) / 8;
     }
-    /* IDCT: two passes of out[x + y*8] = sum_z in[y + z*8] * scale[x + z*8] (each pass transposes) */
+    /* IDCT (psx-spx): two passes of out[x + y*8] = (sum_z in[y + z*8] * (scale[x + z*8] / 8) + 0xFFF) / 0x2000, each
+     * transposing. Same products and rounding as the plain loops, but only over what is nonzero: a movie block has a
+     * few coefficients, so pass 1 runs only for the columns that have one, and pass 2 only sums over the rows pass 1
+     * produced (the others are 0: (0 + 0xFFF) / 0x2000 = 0). 0.33 -> ~0.1 ms per macroblock (PPSSPP). */
     int32_t tmp[64];
-    int32_t *src = blk, *dst = tmp;
-    for (int pass = 0; pass < 2; pass++) {
-        for (int x = 0; x < 8; x++)
-            for (int y = 0; y < 8; y++) {
-                int32_t sum = 0;
-                for (int z = 0; z < 8; z++) sum += src[y + z * 8] * (g_scale[x + z * 8] / 8);
-                dst[x + y * 8] = (sum + 0xFFF) / 0x2000;
-            }
-        int32_t *t = src; src = dst; dst = t;
+    memset(tmp, 0, sizeof tmp);
+    int ys[8], ny = 0;
+    for (int y = 0; y < 8; y++) {
+        if (!(cols >> y & 1)) continue;
+        ys[ny++] = y;
+        int zs[8], nz = 0;
+        for (int z = 0; z < 8; z++) if (blk[y + z * 8]) zs[nz++] = z;
+        for (int x = 0; x < 8; x++) {
+            int32_t sum = 0;
+            for (int i = 0; i < nz; i++) sum += blk[y + zs[i] * 8] * g_sc8[x + zs[i] * 8];
+            tmp[x + y * 8] = div8192(sum + 0xFFF);
+        }
     }
-    for (int i = 0; i < 64; i++) out[i] = (int16_t)src[i];
+    for (int x = 0; x < 8; x++)
+        for (int y = 0; y < 8; y++) {
+            int32_t sum = 0;
+            for (int i = 0; i < ny; i++) sum += tmp[y + ys[i] * 8] * g_sc8[x + ys[i] * 8];
+            out[x + y * 8] = (int16_t)div8192(sum + 0xFFF);
+        }
     g_blocks++;
     return 1;
 }
@@ -110,13 +126,17 @@ static int decode_macroblock(void)
     for (int i = 0; i < 4; i++) if (!decode_block(yb[i], g_qt)) return 0;
     uint8_t *o8 = (uint8_t *)g_out;
     uint16_t *o16 = (uint16_t *)g_out;
+    int16_t cR[64], cG[64], cB[64];               /* chroma terms once per chroma sample (shared by 2x2 pixels) */
+    for (int c = 0; c < 64; c++) {
+        int R = cr[c], B = cb[c];
+        cG[c] = (int16_t)((-88 * B - 183 * R) >> 8);
+        cR[c] = (int16_t)((359 * R) >> 8);
+        cB[c] = (int16_t)((454 * B) >> 8);
+    }
     for (int y = 0; y < 16; y++)
         for (int x = 0; x < 16; x++) {
             int c = (x >> 1) + (y >> 1) * 8;
-            int R = cr[c], B = cb[c];
-            int G = (-88 * B - 183 * R) >> 8;
-            R = (359 * R) >> 8;
-            B = (454 * B) >> 8;
+            int R = cR[c], G = cG[c], B = cB[c];
             int Y = yb[(x >> 3) + (y >> 3) * 2][(x & 7) + (y & 7) * 8];
             int r = clamp8(Y + R) ^ x80, g = clamp8(Y + G) ^ x80, b = clamp8(Y + B) ^ x80;
             r &= 0xFF; g &= 0xFF; b &= 0xFF;
@@ -131,10 +151,16 @@ static int decode_macroblock(void)
     return 1;
 }
 
+static uint64_t g_dec_us;                  /* statistics: decode time (mdec_stats) */
+static uint32_t g_dec_mbs;
 static uint32_t out_word(void)
 {
     if (g_out_pos >= g_out_len) {
-        if (!g_decoding || !decode_macroblock()) { g_decoding = 0; return 0; }
+        uint64_t t0 = now_us();
+        int ok = g_decoding && decode_macroblock();
+        g_dec_us += now_us() - t0;
+        if (!ok) { g_decoding = 0; return 0; }
+        g_dec_mbs++;
     }
     return g_out[g_out_pos++];
 }
@@ -155,6 +181,7 @@ static void command_complete(void)
         memcpy(g_qt, g_in, (g_cmd & 1) ? 128 : 64);
     } else if (op == 3) {
         memcpy(g_scale, g_in, 128);
+        for (int i = 0; i < 64; i++) g_sc8[i] = g_scale[i] / 8;
     }
 }
 
@@ -214,4 +241,12 @@ int mdec_dma_out(uint32_t madr, uint32_t words)
               (unsigned)g_blocks);
     }
     return 1;
+}
+
+/* every 2 s from rt_poll (core.c) while movies play */
+void mdec_stats(void)
+{
+    if (!g_dec_mbs) return;
+    logf_("mdec: %u macroblocks in 2 s, decode %u ms\n", (unsigned)g_dec_mbs, (unsigned)(g_dec_us / 1000));
+    g_dec_mbs = 0; g_dec_us = 0;
 }
