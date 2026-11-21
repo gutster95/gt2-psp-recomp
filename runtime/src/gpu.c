@@ -75,10 +75,25 @@ static int cmd_len(uint32_t cmd)
 /* CPU -> VRAM transfer: n words of pixel pairs; returns the words taken (the transfer may end inside the packet).
  * Column/row counters instead of a division per pixel, and whole packets instead of one gpu_gp0 call per word:
  * on the Media Engine (uncached VRAM shadow) the per-word path was ~6% of its time in races. */
+uint32_t g_vram_uploads;   /* finished CPU -> VRAM transfers (ge.c: 24-bit display conversion only after new data) */
 static uint32_t xfer_put(const uint32_t *w, uint32_t n)
 {
     int total = g_xw * g_xh, col = g_xi % g_xw, row = g_xi / g_xw;
     uint32_t i = 0;
+    /* whole words: even x, even width, row inside VRAM (movie frames, textures) - one 32-bit store per two pixels */
+    if (!((g_xx | g_xw | col) & 1) && g_xx + g_xw <= 1024) {
+        while (i < n && g_xi < total) {
+            uint32_t *d = (uint32_t *)&g_vram[((g_xy + row) & 511) * 1024 + g_xx + col];
+            uint32_t k = (uint32_t)(g_xw - col) >> 1;
+            if (k > n - i) k = n - i;
+            for (uint32_t j = 0; j < k; j++) d[j] = w[i + j];
+            i += k;
+            g_xi += (int)k * 2;
+            col += (int)k * 2;
+            if (col == g_xw) { col = 0; row++; }
+        }
+        if (g_xi > total) g_xi = total;
+    }
     while (i < n && g_xi < total) {
         uint32_t v = w[i++];
         for (int h = 0; h < 2 && g_xi < total; h++, v >>= 16) {
@@ -87,7 +102,7 @@ static uint32_t xfer_put(const uint32_t *w, uint32_t n)
             if (++col == g_xw) { col = 0; row++; }
         }
     }
-    if (g_xi >= total) { g_xfer_dir = 0; ge_upload_done(g_xx, g_xy, g_xw, g_xh); }
+    if (g_xi >= total) { g_xfer_dir = 0; g_vram_uploads++; ge_upload_done(g_xx, g_xy, g_xw, g_xh); }
     return i;
 }
 
@@ -206,8 +221,11 @@ static void exec(const uint32_t *f)
         g_xi = 0;
         g_xfer_dir = (op >> 5) == 5 ? 1 : 2;
         if (g_xfer_dir == 2) ge_note_read(g_xx, g_xy, g_xw, g_xh);
-        g_sync_why = g_xfer_dir == 1 ? 2 : 3;
-        ge_sync();                              /* the CPU accesses VRAM directly */
+        extern int ge_upload_needs_sync(int x, int y, int w, int h);
+        if (g_xfer_dir == 2 || ge_upload_needs_sync(g_xx, g_xy, g_xw, g_xh)) {
+            g_sync_why = g_xfer_dir == 1 ? 2 : 3;
+            ge_sync();                          /* the CPU accesses VRAM directly */
+        }
         if (g_xfer_dir == 2) ge_pull(g_xx, g_xy, g_xw, g_xh);   /* Media Engine: VRAM shadow (ge.c) */
         if (g_xfer_dir == 1) ge_vram_written(g_xx, g_xy, g_xw, g_xh);
         return;

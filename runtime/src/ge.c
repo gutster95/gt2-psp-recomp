@@ -153,6 +153,9 @@ static int g_scissor_is_width = 1;    /* sceGuScissor(x, y, w, h) semantics, che
 uint32_t g_ge_prims, g_ge_sw_prims, g_ge_tex_uploads, g_ge_syncs, g_ge_pgxp;
 int g_sync_why;                       /* reason of the next ge_sync (statistics, see SYNC_* in ge.h) */
 uint32_t g_sync_stats[16], g_sync_us[16];   /* syncs and ME wait time by reason (g_sync_why) */
+#define PUSH_MAX 32
+static int16_t g_push_rect[PUSH_MAX][4];  /* shadow -> eDRAM copies since the last ge_sync (ge_upload_needs_sync) */
+static int g_npush;                       /* > PUSH_MAX: too many to track, every upload syncs */
 
 static inline int sx11(uint32_t v) { return ((int32_t)(v << 21)) >> 21; }
 
@@ -303,6 +306,7 @@ void ge_sync(void)
     H.vlimit = g_varena_size;
     g_vflushed = 0;
     g_ge_pending = 0;
+    g_npush = 0;
     g_ge_syncs++;
     g_sync_stats[g_sync_why & 15]++;
     g_sync_why = 0;
@@ -441,11 +445,30 @@ static void ge_begin(void);
 static void check_list(void);
 void ge_sync(void);
 /* shadow -> VRAM (GE copy in the current list) */
+/* Shadow areas the GE still copies to eDRAM (ge_push since the last ge_sync): a CPU -> VRAM upload on the Media
+ * Engine writes the shadow, so it only has to wait for the GE when it overlaps one of them (gpu.c). Movies upload
+ * each frame strip by strip; a full sync before every strip made the game wait ~0.5 s per 2 s for the ME. */
+int ge_upload_needs_sync(int x, int y, int w, int h)
+{
+    if (!g_vshadow || (!g_open && !g_inflight)) return !g_vshadow;
+    if (g_npush > PUSH_MAX || x + w > 1024 || y + h > 512) return 1;
+    for (int i = 0; i < g_npush; i++) {
+        const int16_t *r = g_push_rect[i];
+        if (x < r[0] + r[2] && r[0] < x + w && y < r[1] + r[3] && r[1] < y + h) return 1;
+    }
+    return 0;
+}
+
 void ge_push(int x, int y, int w, int h)
 {
     if (!g_vshadow || w <= 0 || h <= 0) return;
     if (y + h > 512) { ge_push(x, 0, w, y + h - 512); h = 512 - y; }
     if (x + w > 1024) { ge_push(0, y, x + w - 1024, h); w = 1024 - x; }
+    if (g_npush < PUSH_MAX) {
+        int16_t *r = g_push_rect[g_npush];
+        r[0] = (int16_t)x; r[1] = (int16_t)y; r[2] = (int16_t)w; r[3] = (int16_t)h;
+    }
+    if (g_npush <= PUSH_MAX) g_npush++;
     ge_begin();
     sceGuCopyImage(GU_PSM_5551, x, y, w, h, 1024, (void *)g_vshadow, x, y, 1024, (void *)EDRAM);
     sceGuTexSync();
@@ -730,6 +753,7 @@ static void setup_texture_full(int depth, int page, uint32_t clut)
 int g_hires = 0, g_widescreen = 0;
 int g_disp24;                    /* the display area is in 24-bit mode (gpu.c, GP1(08) bit 4) */
 static uint16_t *g_conv24;       /* 512x512 15-bit texture for the 24-bit display mode (present_scaled) */
+static int g_conv_rect[4] = {-1, -1, 0, 0}, g_conv_dirty = 1;   /* area converted into g_conv24, new data in it */
 
 typedef struct {
     int x, y, w, h, used, drawn, band_clear, n3d_cur, n3d_last;
@@ -1512,6 +1536,11 @@ static void mirror(int x, int y, int w, int h)
 
 void ge_upload_done(int x, int y, int w, int h)
 {
+    /* 24-bit display: the conversion (present_scaled) is redone only when an upload reaches the displayed area (the
+     * area is 3/2 as wide in VRAM halfwords as in pixels) */
+    if (x < g_conv_rect[0] + g_conv_rect[2] * 3 / 2 && g_conv_rect[0] < x + w && y < g_conv_rect[1] + g_conv_rect[3] &&
+        g_conv_rect[1] < y + h)
+        g_conv_dirty = 1;
     ge_push(x, y, w, h);
     if (x + w <= 1024 && y + h <= 512) mirror(x, y, w, h);
 }
@@ -1600,18 +1629,36 @@ static int present_scaled(int tgt, int dx, int dy, int w, int h, int blank)
     flat_sprite(0, 0, 480, 272, 0xFF000000u);
     const uint8_t *tex_base = (const uint8_t *)EDRAM;
     int tex_y = dy, conv = 0;
-    if (!blank && g_disp24 && g_conv24) {
+    if (!blank && g_disp24 && g_conv24 && !g_conv_dirty && g_conv_rect[0] == dx && g_conv_rect[1] == dy &&
+        g_conv_rect[2] == w && g_conv_rect[3] == h) {
+        /* nothing uploaded into the displayed area since the last conversion (movies: 15 new pictures per second,
+         * uploaded into the hidden buffer and presented every vblank - converting each time cost the Media Engine
+         * most of its time, profile 2026-11-21) */
+        tex_base = (const uint8_t *)g_conv24;
+        tex_y = 0;
+        conv = 1;
+    } else if (!blank && g_disp24 && g_conv24) {
+        g_conv_dirty = 0;
+        g_conv_rect[0] = dx; g_conv_rect[1] = dy; g_conv_rect[2] = w; g_conv_rect[3] = h;
         /* 24-bit display mode (GP1(08) bit 4, the Arcade disc's movies: MDEC output uploaded as RGB888, 3 bytes per
          * pixel): converted into a 15-bit texture in RAM, read from the VRAM of the side that presents (eDRAM on
          * the main CPU, the shadow on the Media Engine). Uncached writes: the GE reads RAM, the ME has no cache ops. */
         uint16_t *d = (uint16_t *)((uintptr_t)g_conv24 | 0x40000000u);
         int hh = h > 512 ? 512 : h, ww = w > 512 ? 512 : w;
+#define RGB15(r, g, b) (uint16_t)((((r) & 0xFF) >> 3) | ((((g) & 0xFF) >> 3) << 5) | ((((b) & 0xFF) >> 3) << 10) | 0x8000)
         for (int y = 0; y < hh; y++) {
-            const uint8_t *s = (const uint8_t *)(g_vram + ((dy + y) & 511) * 1024) + (dx & 1023) * 2;
+            /* 4 pixels = 12 bytes = 3 words per (uncached) read; the display x is even, so rows start word-aligned */
+            const uint32_t *s = (const uint32_t *)(g_vram + ((dy + y) & 511) * 1024 + (dx & 1023));
             uint16_t *o = d + y * 512;
-            for (int x = 0; x < ww; x++, s += 3)
-                o[x] = (uint16_t)((s[0] >> 3) | ((s[1] >> 3) << 5) | ((s[2] >> 3) << 10) | 0x8000);
+            for (int x = 0; x + 3 < ww; x += 4, s += 3, o += 4) {
+                uint32_t a = s[0], b = s[1], c = s[2];   /* R0 G0 B0 R1 | G1 B1 R2 G2 | B2 R3 G3 B3 */
+                o[0] = RGB15(a, a >> 8, a >> 16);
+                o[1] = RGB15(a >> 24, b, b >> 8);
+                o[2] = RGB15(b >> 16, b >> 24, c);
+                o[3] = RGB15(c >> 8, c >> 16, c >> 24);
+            }
         }
+#undef RGB15
         tex_base = (const uint8_t *)g_conv24;
         tex_y = 0;
         conv = 1;

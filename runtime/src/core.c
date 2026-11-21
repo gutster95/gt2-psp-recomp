@@ -300,6 +300,9 @@ void rt_poll(PsxCpu *c)
     static uint64_t next_report;
     if (t >= next_report) {
         next_report = t + 2000000;
+        /* The log writer (priority 0x48, below the game thread - above it froze the PSP) only runs when the game
+         * thread sleeps; busy scenes (60 fps races, movies) never do. A short sleep every 2 s lets it write. */
+        sceKernelDelayThread(500);
         extern void memprof_dump(void);
         memprof_dump();
         g_cpu_mhz = measure_mhz();

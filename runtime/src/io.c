@@ -320,7 +320,7 @@ static void dma_run(int ch)
             PHASE_END();
         } else {                                /* block / sync mode */
             uint32_t words = (bcr & 0xFFFF) * ((bcr >> 16) ? (bcr >> 16) : 1);
-            if (g_me_active) { me_post_block(madr, words, chcr & 1); return; }
+            if (g_me_active) { if (me_post_block(madr, words, chcr & 1)) break; return; }   /* break: done now */
             if (chcr & 1) {
                 for (uint32_t i = 0; i < words; i++) gpu_gp0(*(uint32_t *)(g_ram + ((madr + 4 * i) & 0x1FFFFC)));
             } else {

@@ -1012,3 +1012,10 @@ the Media Engine:
   "interval < 2" tests follow fps60_effects), opponent car detail, FPS counter, L/R, race buttons. Performance mode
   defaults to "always 60" (fps60_auto 0); mirror/smoke and opponent detail default by mode, the menu's saved choice
   wins (the launcher resets them when the mode changes).
+* Arcade movie on the PSP, step by step (profile: the game waited 766 ms per 2 s for the Media Engine):
+  24-bit conversion only when an upload reached the displayed area (was every vblank), read as words (3 per 4
+  pixels); a CPU -> VRAM upload syncs the GE only when it overlaps a shadow -> eDRAM copy still queued (was always:
+  322 syncs per 2 s -> 5); word-wise upload copies; a snapshotted block DMA is complete at once (the data is copied,
+  as on the PS1 the DMA reads it then) - ME waits 766 -> 0 ms. Movie 5-6 -> ~9.6 frames/s; now the main CPU limits
+  (MDEC decode ~1 s per 2 s, the game's VLC decoding). Simulation checked on the PSP (race HUD, clock, GT mode).
+* Log: the game thread sleeps 0.5 ms every 2 s so the writer (priority 0x48) gets to run in busy scenes.

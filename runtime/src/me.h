@@ -21,7 +21,7 @@ void me_gpu_start(void);             /* after gpu_init/ge_init: start the ME (no
 void me_post_gp0(uint32_t v);
 void me_post_gp1(uint32_t v);
 void me_post_walk(uint32_t madr);    /* DMA2 linked list: io_dma_done(2) when the ME has walked it */
-void me_post_block(uint32_t madr, uint32_t words, int to_gpu);   /* DMA2 block mode, either direction */
+int me_post_block(uint32_t madr, uint32_t words, int to_gpu);    /* DMA2 block mode, either direction; 1: done now */
 void me_post_vblank(void);
 uint32_t me_gpu_read(void);          /* GPUREAD port (waits for the ME) */
 uint32_t me_gpu_status(void);        /* GPUSTAT as published by the ME */

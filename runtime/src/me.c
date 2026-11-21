@@ -216,7 +216,7 @@ void me_post_walk(uint32_t madr)
 int g_me_snapshot = 1;     /* settings.txt me_snapshot=0: uploads read from PS1 RAM by the ME (freeze hunt) */
 static uint32_t *g_snap;   /* heap (keeps the BSS layout of the hot data) */
 static uint32_t g_snap_pos, g_snap_idx[2];   /* write position; ring index after the last command reading each half */
-void me_post_block(uint32_t madr, uint32_t words, int to_gpu)
+int me_post_block(uint32_t madr, uint32_t words, int to_gpu)
 {
     if (!g_snap) g_snap = memalign(64, SNAP_WORDS * 4);
     if (to_gpu && g_me_snapshot && g_snap && words <= SNAP_HALF && (madr & 0x1FFFFC) + 4 * words <= PSX_RAM_SIZE) {
@@ -237,13 +237,15 @@ void me_post_block(uint32_t madr, uint32_t words, int to_gpu)
         sceKernelDcacheWritebackRange(d, words * 4);
         post(CMD_BLOCK_SNAP, (uint32_t)d, words);
         g_snap_idx[half] = SH->head;
-        g_dma_idx = SH->head;
-        return;
+        /* The words are copied: for the game the DMA is complete, as on the PS1 where it reads them now. The ME
+         * uploads them in queue order. Waiting for the ME here cost the game ~0.4 s per 2 s in movies. */
+        return 1;
     }
     if (to_gpu) sceKernelDcacheWritebackAll();
     else sceKernelDcacheWritebackInvalidateRange(g_ram + madr, words * 4);   /* the ME writes it uncached */
     post(to_gpu ? CMD_BLOCK_IN : CMD_BLOCK_OUT, madr, words);
     g_dma_idx = SH->head;
+    return 0;
 }
 void me_join(void)
 {
