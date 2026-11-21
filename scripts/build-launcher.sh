@@ -1,9 +1,11 @@
 #!/bin/bash
 # Build the launcher EBOOT (runtime/launcher) inside GT2PSPDev. Output: build/launcher/EBOOT.PBP
 set -euo pipefail
-. /etc/profile.d/pspdev.sh
+[ -f /etc/profile.d/pspdev.sh ] && . /etc/profile.d/pspdev.sh   # WSL setup; the pspdev Docker image sets PSPDEV/PATH itself
 PROJ="$(cd "$(dirname "$0")/.." && pwd)"
-B=/root/gt2launcher
+WORK="${GT2_WORK:-/root}"
+[ -n "${PSPDEV:-}" ] && export PATH="$PSPDEV/bin:$PATH"
+B="$WORK/gt2launcher"
 mkdir -p "$B"
 cd "$B"
 psp-cmake "$PROJ/runtime/launcher" >/dev/null

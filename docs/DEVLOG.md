@@ -1019,3 +1019,14 @@ the Media Engine:
   as on the PS1 the DMA reads it then) - ME waits 766 -> 0 ms. Movie 5-6 -> ~9.6 frames/s; now the main CPU limits
   (MDEC decode ~1 s per 2 s, the game's VLC decoding). Simulation checked on the PSP (race HUD, clock, GT mode).
 * Log: the game thread sleeps 0.5 ms every 2 s so the writer (priority 0x48) gets to run in busy scenes.
+
+## 2026-11-21 (evening) - release preparation
+
+* Release decision (docs/RELEASE-PLAN.md): no game code or data in the release. The converter recompiles and
+  compiles on the user's machine from their own discs; Windows gets our own pspdev build (no WSL, no Docker).
+* Converter web app started: `convert.bat` / `convert.command` / `convert.sh` -> `converter/server.py` (Python
+  standard library only) + `converter/web/index.html` (GT-style UI). Finds .cue/.bin in `input/`, verifies the
+  .bin by SHA-1 (Simulation Rev 2 c4813703..., Arcade a617b948...), runs extract / recomp / pack per disc, compile
+  step, writes `output/PSP/GAME/GT2PSP`. Missing: toolchain download and the bash-free build driver (plan steps 1-3).
+* Media Engine library vendored as `third_party/me-custom-core` (MIT); build scripts take `GT2_WORK` (scratch dir,
+  default /root) and `PSPDEV`, so they also run outside the dev WSL distro.

@@ -1,0 +1,316 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GT2 PSP Converter</title>
+<style>
+  :root {
+    --bg: #07090f;
+    --panel: #10151f;
+    --panel-hi: #161d2b;
+    --line: #232c3d;
+    --text: #eef2f8;
+    --muted: #8a96aa;
+    --red: #e3242b;
+    --blue: #1d5bd8;
+    --ok: #3ecf6e;
+    --warn: #f2b632;
+    --bad: #ff4b55;
+    --font: "Arial Black", "Helvetica Neue", Arial, sans-serif;
+    --body: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    --mono: "Consolas", "SF Mono", "Menlo", monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--text); font-family: var(--body); }
+  body {
+    min-height: 100vh;
+    background:
+      linear-gradient(180deg, rgba(29, 91, 216, .10), transparent 260px),
+      repeating-linear-gradient(115deg, transparent 0 46px, rgba(255, 255, 255, .012) 46px 47px),
+      var(--bg);
+  }
+  .wrap { max-width: 980px; margin: 0 auto; padding: 28px 16px 64px; }
+
+  /* header: menu bar with racing stripes */
+  header { position: relative; padding: 18px 0 26px; }
+  .stripes { display: flex; gap: 6px; margin-bottom: 14px; }
+  .stripes span { height: 6px; transform: skewX(-24deg); }
+  .stripes .r { width: 120px; background: var(--red); }
+  .stripes .b { width: 70px; background: var(--blue); }
+  .stripes .w { width: 30px; background: var(--text); }
+  h1 {
+    margin: 0; font-family: var(--font); font-style: italic; font-weight: 900; letter-spacing: .5px;
+    font-size: clamp(30px, 6vw, 54px); line-height: .95; text-transform: uppercase;
+  }
+  h1 em { color: var(--red); font-style: italic; }
+  .sub { margin-top: 10px; color: var(--muted); font-size: 15px; max-width: 640px; line-height: 1.45; }
+
+  /* section titles like the game's menu headers */
+  .sec {
+    display: flex; align-items: center; gap: 12px; margin: 34px 0 14px;
+    font-family: var(--font); font-style: italic; text-transform: uppercase; font-size: 18px; letter-spacing: 1px;
+  }
+  .sec .num {
+    display: inline-grid; place-items: center; width: 34px; height: 28px; background: var(--red);
+    transform: skewX(-18deg); font-size: 16px;
+  }
+  .sec .num b { transform: skewX(18deg); }
+  .sec::after { content: ""; flex: 1; height: 2px; background: linear-gradient(90deg, var(--line), transparent); }
+
+  /* disc cards */
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 14px; }
+  .card {
+    position: relative; background: var(--panel); border: 1px solid var(--line); border-radius: 4px;
+    padding: 18px 18px 16px; overflow: hidden;
+  }
+  .card::before {
+    content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 5px; background: var(--line);
+  }
+  .card.ok::before { background: var(--ok); }
+  .card.bad::before { background: var(--bad); }
+  .card.busy::before { background: var(--warn); }
+  .card h3 {
+    margin: 0 0 2px; font-family: var(--font); font-style: italic; text-transform: uppercase; font-size: 20px;
+  }
+  .card .tag { color: var(--muted); font-size: 13px; margin-bottom: 14px; }
+  .card .file { font-family: var(--mono); font-size: 12px; color: var(--muted); word-break: break-all; min-height: 18px; }
+  .state { display: flex; align-items: center; gap: 8px; margin-top: 12px; font-weight: 600; font-size: 14px; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--muted); flex: none; }
+  .ok .dot { background: var(--ok); } .bad .dot { background: var(--bad); } .busy .dot { background: var(--warn); }
+  .bar { height: 4px; background: var(--line); margin-top: 10px; border-radius: 2px; overflow: hidden; }
+  .bar i { display: block; height: 100%; width: 0; background: var(--warn); transition: width .2s; }
+  .ok .bar i { background: var(--ok); } .bad .bar i { background: var(--bad); }
+  select {
+    width: 100%; margin-top: 6px; padding: 8px; background: var(--panel-hi); color: var(--text);
+    border: 1px solid var(--line); border-radius: 3px; font-family: var(--mono); font-size: 12px;
+  }
+
+  /* buttons: slanted like menu buttons */
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 10px;
+    padding: 12px 26px; border: 0; cursor: pointer; color: #fff; background: var(--blue);
+    font-family: var(--font); font-style: italic; text-transform: uppercase; font-size: 15px; letter-spacing: .5px;
+    clip-path: polygon(10px 0, 100% 0, calc(100% - 10px) 100%, 0 100%);
+    transition: filter .15s, transform .1s;
+  }
+  .btn:hover:not(:disabled) { filter: brightness(1.15); }
+  .btn:active:not(:disabled) { transform: translateY(1px); }
+  .btn:disabled, .btn.red:disabled { background: #2a3242; color: #6c778a; cursor: not-allowed; }
+  .btn.red { background: var(--red); }
+  .btn.big { padding: 18px 42px; font-size: 20px; }
+  .btn.small { padding: 8px 18px; font-size: 12px; }
+
+  .row { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+  .note { color: var(--muted); font-size: 13px; line-height: 1.5; }
+  .note code, .path { font-family: var(--mono); font-size: 12px; background: var(--panel-hi); padding: 2px 6px; border-radius: 3px; color: var(--text); word-break: break-all; }
+
+  .status {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 14px 16px;
+    display: flex; gap: 12px; align-items: center;
+  }
+  .status.ok .dot { background: var(--ok); } .status.bad .dot { background: var(--warn); }
+
+  /* progress: tachometer-style segmented bar */
+  .tacho { display: grid; grid-template-columns: repeat(24, 1fr); gap: 3px; margin: 16px 0 8px; }
+  .tacho i { height: 22px; background: var(--line); transform: skewX(-18deg); transition: background .2s; }
+  .tacho i.on { background: var(--blue); }
+  .tacho i.on.hot { background: var(--red); }
+  .steps { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; margin: 12px 0; }
+  .step {
+    background: var(--panel); border: 1px solid var(--line); padding: 8px 10px; font-size: 13px;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .step.run { border-color: var(--warn); } .step.run .dot { background: var(--warn); animation: pulse 1s infinite; }
+  .step.done .dot { background: var(--ok); }
+  @keyframes pulse { 50% { opacity: .3; } }
+  pre.log {
+    background: #05070b; border: 1px solid var(--line); color: #b9c4d6; font-family: var(--mono); font-size: 12px;
+    line-height: 1.45; padding: 12px; height: 240px; overflow: auto; white-space: pre-wrap; margin: 12px 0 0;
+  }
+  pre.log:empty { display: none; }
+  .done {
+    display: none; margin-top: 18px; padding: 20px; border: 1px solid var(--ok); background: rgba(62, 207, 110, .07);
+  }
+  .done h3 { margin: 0 0 8px; font-family: var(--font); font-style: italic; text-transform: uppercase; color: var(--ok); }
+  .error { display: none; margin-top: 18px; padding: 16px; border: 1px solid var(--bad); background: rgba(255, 75, 85, .08); }
+  footer { margin-top: 48px; color: var(--muted); font-size: 12px; line-height: 1.6; border-top: 1px solid var(--line); padding-top: 16px; }
+  @media (max-width: 560px) { .btn.big { width: 100%; } .tacho { grid-template-columns: repeat(12, 1fr); } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="stripes"><span class="r"></span><span class="b"></span><span class="w"></span></div>
+    <h1>GT2 <em>PSP</em><br>Converter</h1>
+    <div class="sub">Turns your own Gran Turismo 2 discs into a native PSP version. Everything is built here, on your
+      computer, from your discs - nothing of the game is downloaded.</div>
+  </header>
+
+  <div class="sec"><span class="num"><b>1</b></span>Your discs</div>
+  <p class="note">Put the <code>.cue</code> and <code>.bin</code> files into <span class="path" id="inputDir">input/</span>
+    and press <b>Search again</b>. Supported: the USA discs - Simulation Mode (Rev 2) and Arcade Mode. One disc is enough;
+    with both you get a start menu to pick the mode.</p>
+  <div class="cards">
+    <div class="card" id="card-sim">
+      <h3>Simulation Mode</h3><div class="tag">GT mode, licenses, career - the main disc</div>
+      <select id="sel-sim"></select>
+      <div class="state"><span class="dot"></span><span class="txt">No disc selected</span></div>
+      <div class="bar"><i></i></div>
+    </div>
+    <div class="card" id="card-arc">
+      <h3>Arcade Mode</h3><div class="tag">Road race, rally, time trial - and the intro movie</div>
+      <select id="sel-arc"></select>
+      <div class="state"><span class="dot"></span><span class="txt">No disc selected</span></div>
+      <div class="bar"><i></i></div>
+    </div>
+  </div>
+  <div class="row" style="margin-top:14px">
+    <button class="btn small" id="rescan">Search again</button>
+    <button class="btn small" id="verify">Check discs</button>
+  </div>
+
+  <div class="sec"><span class="num"><b>2</b></span>PSP toolchain</div>
+  <div class="status" id="tool"><span class="dot"></span><span class="txt">Checking...</span></div>
+
+  <div class="sec"><span class="num"><b>3</b></span>Convert</div>
+  <p class="note">Takes about 10-20 minutes and needs ~3 GB of free space while it runs. The result is a folder you
+    copy to your memory stick.</p>
+  <div class="row"><button class="btn big red" id="go" disabled>Start conversion</button></div>
+  <div class="tacho" id="tacho"></div>
+  <div class="steps" id="steps"></div>
+  <pre class="log" id="log"></pre>
+  <div class="error" id="error"></div>
+  <div class="done" id="done">
+    <h3>Finished</h3>
+    <p class="note">Copy the folder <span class="path" id="outDir"></span> to your memory stick so that it ends up as
+      <code>PSP/GAME/GT2PSP</code>, then start it from the XMB (custom firmware needed).</p>
+    <button class="btn small" id="open">Open folder</button>
+  </div>
+
+  <footer>
+    Unofficial fan project, not affiliated with or endorsed by Sony Interactive Entertainment or Polyphony Digital.
+    Gran Turismo is a trademark of Sony Interactive Entertainment. You need your own original discs.
+  </footer>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const STEP_NAMES = {
+  "verify-sim": "Check Simulation", "verify-arc": "Check Arcade",
+  "extract-sim": "Read Simulation", "extract-arc": "Read Arcade",
+  "recomp-sim": "Recompile Simulation", "recomp-arc": "Recompile Arcade",
+  "pack-sim": "Pack Simulation data", "pack-arc": "Pack Arcade data",
+  "toolchain": "PSP toolchain", "compile": "Compile for PSP", "folder": "Build PSP folder",
+};
+let discs = [], verified = {}, toolOk = false, polling = null;
+
+for (let i = 0; i < 24; i++) { const t = document.createElement("i"); if (i >= 18) t.className = "hot"; $("tacho").appendChild(t); }
+
+async function api(path, body) {
+  const r = await fetch(path, body ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {});
+  return r.json();
+}
+
+function fill(sel, which) {
+  const el = $("sel-" + which);
+  const prev = el.value;
+  el.innerHTML = "";
+  const none = document.createElement("option"); none.value = ""; none.textContent = "- none -"; el.appendChild(none);
+  for (const d of discs) {
+    const o = document.createElement("option");
+    o.value = d.cue; o.textContent = d.name + (d.bin ? "" : "  (bin missing)");
+    el.appendChild(o);
+  }
+  const guess = discs.find((d) => d.guess === which);
+  el.value = prev && discs.some((d) => d.cue === prev) ? prev : (guess ? guess.cue : "");
+}
+
+function card(which) {
+  const c = $("card-" + which), cue = $("sel-" + which).value, v = verified[cue];
+  c.className = "card";
+  let txt = "No disc selected", pct = 0;
+  if (cue) {
+    const d = discs.find((x) => x.cue === cue);
+    txt = d && !d.bin ? "The .bin next to this .cue is missing" : "Not checked yet";
+    if (d && !d.bin) c.classList.add("bad");
+  }
+  if (cue && v) {
+    if (v.progress < 1 && v.ok === undefined) { c.classList.add("busy"); txt = "Checking... " + Math.round(v.progress * 100) + "%"; pct = v.progress; }
+    else if (v.ok && v.disc === which) { c.classList.add("ok"); txt = "Verified: " + v.name; pct = 1; }
+    else if (v.ok) { c.classList.add("bad"); txt = "That is the " + (v.disc === "sim" ? "Simulation" : "Arcade") + " disc"; pct = 1; }
+    else { c.classList.add("bad"); txt = v.message || "Unknown dump"; pct = 1; }
+  }
+  c.querySelector(".txt").textContent = txt;
+  c.querySelector(".bar i").style.width = (pct * 100) + "%";
+}
+
+function ready() {
+  const ok = (w) => { const cue = $("sel-" + w).value, v = verified[cue]; return cue && v && v.ok && v.disc === w; };
+  const sel = (w) => $("sel-" + w).value;
+  const any = (sel("sim") || sel("arc")) && (!sel("sim") || ok("sim")) && (!sel("arc") || ok("arc"));
+  $("go").disabled = !any || !toolOk;
+}
+
+async function scan() {
+  const r = await api("/api/scan");
+  discs = r.discs; $("inputDir").textContent = r.input;
+  fill(null, "sim"); fill(null, "arc");
+  toolOk = r.toolchain.ok;
+  $("tool").className = "status " + (r.toolchain.ok ? "ok" : "bad");
+  $("tool").querySelector(".txt").textContent = r.toolchain.message;
+  card("sim"); card("arc"); ready();
+}
+
+async function verify() {
+  for (const w of ["sim", "arc"]) {
+    const cue = $("sel-" + w).value;
+    if (cue && !(verified[cue] && verified[cue].ok !== undefined)) {
+      verified[cue] = { progress: 0 };
+      await api("/api/verify", { cue });
+    }
+  }
+  poll();
+}
+
+function render(s) {
+  for (const [cue, h] of Object.entries(s.hashes || {})) verified[cue] = h;
+  card("sim"); card("arc"); ready();
+  const lit = Math.round((s.progress || 0) * 24);
+  [...$("tacho").children].forEach((t, i) => t.classList.toggle("on", i < lit));
+  $("steps").innerHTML = (s.steps || []).map((st) =>
+    `<div class="step ${st.state}"><span class="dot"></span>${STEP_NAMES[st.id] || st.id}</div>`).join("");
+  const log = $("log"), atEnd = log.scrollTop + log.clientHeight >= log.scrollHeight - 20;
+  log.textContent = (s.log || []).join("\n");
+  if (atEnd) log.scrollTop = log.scrollHeight;
+  $("error").style.display = s.error ? "block" : "none";
+  $("error").textContent = s.error ? "Conversion stopped: " + s.error : "";
+  $("done").style.display = s.done ? "block" : "none";
+  $("outDir").textContent = s.output;
+  $("go").textContent = s.running ? "Converting..." : "Start conversion";
+  if (s.running) $("go").disabled = true;
+}
+
+async function poll() {
+  if (polling) return;
+  polling = setInterval(async () => {
+    const s = await api("/api/status");
+    render(s);
+    const hashing = Object.values(s.hashes || {}).some((h) => h.ok === undefined && h.progress < 1);
+    if (!s.running && !hashing) { clearInterval(polling); polling = null; }
+  }, 500);
+}
+
+$("rescan").onclick = scan;
+$("verify").onclick = verify;
+$("sel-sim").onchange = () => { card("sim"); ready(); };
+$("sel-arc").onchange = () => { card("arc"); ready(); };
+$("go").onclick = async () => {
+  await api("/api/convert", { sim: $("sel-sim").value || null, arc: $("sel-arc").value || null });
+  poll();
+};
+$("open").onclick = () => api("/api/open-output", {});
+scan().then(() => api("/api/status").then(render));
+</script>
+</body>
+</html>
