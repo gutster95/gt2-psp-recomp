@@ -22,6 +22,9 @@ static SceUID g_log_sema = -1;            /* the audio threads log too */
 static SceUID g_log_wake = -1;
 static SceUID g_log_io = -1;              /* one drain at a time (writer thread, fatal/quit path) */
 static volatile int g_log_quit;
+static SceUID g_logw = -1;
+/* settings.txt log_prio: priority of the writer thread (freeze hunt 2026-11-21; 0x48 until then) */
+void log_set_prio(int prio) { if (g_logw >= 0 && prio > 0) sceKernelChangeThreadPriority(g_logw, prio); }
 
 /* Writes what is in the ring; closes and reopens the file so the size on the stick stays current. */
 static void log_drain(void)
@@ -68,7 +71,7 @@ void log_init(const char *dir)
     g_log_wake = sceKernelCreateSema("logwake", 0, 0, 1, 0);
     g_log_io = sceKernelCreateSema("logio", 0, 1, 1, 0);
     /* above the game thread (0x20): at 60 fps the game thread never sleeps and a lower writer starved (log stopped) */
-    SceUID t = sceKernelCreateThread("logw", log_thread, 0x1F, 0x1000, PSP_THREAD_ATTR_USER, 0);
+    SceUID t = g_logw = sceKernelCreateThread("logw", log_thread, 0x1F, 0x1000, PSP_THREAD_ATTR_USER, 0);
     if (t >= 0) sceKernelStartThread(t, 0, 0);
 }
 

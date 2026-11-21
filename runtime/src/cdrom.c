@@ -57,6 +57,7 @@ static uint64_t g_next_sector_at;
  * game has left its CD interrupt handler (see deliver_at), so the spacing defaults to 0. */
 int g_cd_pause_us = 300, g_cd_seek_us = 300, g_cd_first_us = 200, g_cd_ack_us = 100;
 int g_period_us = 0;
+int g_cd_legacy;   /* settings.txt cd_legacy=1: the drive timing of 2026-11-20 (freeze hunt 2026-11-21) */
 static uint32_t g_st_sectors;              /* statistics of the current read */
 static uint64_t g_st_start;
 /* load phases: data sectors with gaps below 1.5 s form one phase (wall time from the first to the last sector) */
@@ -106,6 +107,10 @@ void cdrom_init(void)
     if (g_game == GAME_ARC) {                 /* pakpath.txt names GT2.PAK: the Arcade pack lies next to it */
         size_t n = strlen(path);
         if (n >= 7 && !strcmp(path + n - 7, "GT2.PAK")) snprintf(path + n - 7, sizeof path - (n - 7), "GT2A.PAK");
+    }
+    if (g_cd_legacy) {   /* 0.75 ms sectors, 600 us ACK, 2 ms Pause/Seek, 1 ms first sector, no interrupt gating */
+        g_period_us = 750; g_cd_ack_us = 600; g_cd_pause_us = 2000; g_cd_seek_us = 2000; g_cd_first_us = 1000;
+        logf_("cd: legacy timing\n");
     }
     g_cache = memalign(64, 2 * CACHE_SIZE);
     g_pak = sceIoOpen(path, PSP_O_RDONLY, 0);
@@ -372,7 +377,7 @@ static void deliver_at(uint64_t t)
      * drive needs 6.7 ms per sector; here a sector follows as soon as the handler has returned once, so the pace
      * is the game's own and no clock is needed (cd_period_us, default 0). XA streaming keeps its real clock. */
     extern int rt_in_irq(void);
-    if (!(g_mode & 0x40) && rt_in_irq()) return;
+    if (!g_cd_legacy && !(g_mode & 0x40) && rt_in_irq()) return;
     if (g_reading && t >= g_next_sector_at && !g_qn && g_consumed) {
         /* XA streaming runs on a fixed clock (75/150 sectors per second): the next sector is due one period after
          * the previous due time, not after this delivery, otherwise the stream drifts behind real time and the music

@@ -213,12 +213,13 @@ void me_post_walk(uint32_t madr)
  * from it must be done (normally long ago) - never the whole queue (this also runs inside interrupt handlers). */
 #define SNAP_WORDS (256 * 1024)
 #define SNAP_HALF (SNAP_WORDS / 2)
+int g_me_snapshot = 1;     /* settings.txt me_snapshot=0: uploads read from PS1 RAM by the ME (freeze hunt) */
 static uint32_t *g_snap;   /* heap (keeps the BSS layout of the hot data) */
 static uint32_t g_snap_pos, g_snap_idx[2];   /* write position; ring index after the last command reading each half */
 void me_post_block(uint32_t madr, uint32_t words, int to_gpu)
 {
     if (!g_snap) g_snap = memalign(64, SNAP_WORDS * 4);
-    if (to_gpu && g_snap && words <= SNAP_HALF && (madr & 0x1FFFFC) + 4 * words <= PSX_RAM_SIZE) {
+    if (to_gpu && g_me_snapshot && g_snap && words <= SNAP_HALF && (madr & 0x1FFFFC) + 4 * words <= PSX_RAM_SIZE) {
         static uint32_t cur_half;
         uint32_t half = g_snap_pos / SNAP_HALF;
         if (g_snap_pos + words > (half + 1) * SNAP_HALF) {          /* does not fit: start of the other half */
