@@ -8,6 +8,7 @@ typedef struct PsxCpu {
     uint32_t cop0[32];
     uint32_t gte_data[32];
     uint32_t gte_ctrl[32];
+    uint32_t resume_pc;   /* resume inside a function after a longjmp (recomp.py entry switch, core.c run_program) */
 } PsxCpu;
 
 typedef void (*RecompFunc)(PsxCpu *c);

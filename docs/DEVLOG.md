@@ -960,3 +960,22 @@ the Media Engine:
   after a longjmp (ovl2 menu code, never run on the Simulation disc) - open.
 * XMB icon/background from the user's Images/ (scripts/make_eboot_images.py -> build/ICON0.PNG, PIC1.PNG).
 * PSP: not yet tested with the dual build (PSPLink stopped answering).
+* Arcade race entry, step by step with data (stack and register snapshots at setjmp/longjmp): the Arcade menus run
+  as tasks switched with setjmp/longjmp (scheduler 0x80083a1c, task creation 0x80083ae4, own stacks). After a switch
+  the runtime follows the return addresses on the PS1 stack, which exposed three recompiler assumptions:
+  1. regflow.py: storing ra / s-registers to the stack "does not read them" - a caller left a stale ra in c->r[]
+     (the stack held the outer caller's ra, the resumed chain skipped a function). Callers of functions that may
+     switch tasks now write ra and s0-s7/fp back first.
+  2. A plain return does not hand back callee-saved registers - wrong for a function resumed mid-way (its entry
+     state came from the setjmp buffer). Resume points return them.
+  3. Return addresses after calls through function pointers are not known resume points, and splitting functions
+     there breaks loops (the scheduler loop). New: in-place resume - a function with resume points gets an entry
+     switch on c->resume_pc (recomp.py RESUME_INSIDE, table g_resume_inside, core.c run_program). Arcade: every
+     jalr return and every call of a function that may switch tasks (transitively: setjmp or a jalr), 1591 points.
+  All Arcade-only (profiles.py flags); the Simulation output stays bit-identical (its overlay-loader longjmp goes
+  to the top level, where none of this matters).
+* PSP freezes: the whole PSP (PSPLink included) froze several times today - at the ME start, during boot, and in
+  the Arcade intro movie (the ME stopped walking display lists, the game waited for DMA2). Points to the Media
+  Engine path; to be investigated before a new build goes onto the user's memory stick.
+* PPSSPP gives homebrew less memory than the PSP-3000 (stack 0x09FBFDF0 vs 0x0BEBFE10): with the larger Arcade code
+  the EXE no longer loads there.

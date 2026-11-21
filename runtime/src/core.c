@@ -30,6 +30,8 @@ int g_cur_overlay = -1;
 int g_game;                                /* GAME_SIM / GAME_ARC */
 #ifdef GT2_ARCADE
 extern const ModuleTable a_g_modules[];
+extern const FuncEntry a_g_resume_inside[];
+extern const int a_g_num_resume_inside;
 void af_8005d570(PsxCpu *c);
 void af_8005da48_impl(PsxCpu *c);
 #endif
@@ -38,11 +40,13 @@ typedef struct {
     uint32_t ovl_hi;                       /* end of the overlay window = start of the resident code */
     uint32_t ovl_table;                    /* overlay entry addresses (logging) */
     void (*entry)(PsxCpu *c);
+    const FuncEntry *resume_inside;        /* return addresses inside functions that a longjmp resumes */
+    const int *num_resume_inside;
 } Game;
 static const Game g_games[] = {
-    {g_modules, 0x8005D600u, 0x80091174u, f_8005d600},
+    {g_modules, 0x8005D600u, 0x80091174u, f_8005d600, 0, 0},
 #ifdef GT2_ARCADE
-    {a_g_modules, 0x8005D570u, 0x80090EB8u, af_8005d570},
+    {a_g_modules, 0x8005D570u, 0x80090EB8u, af_8005d570, a_g_resume_inside, &a_g_num_resume_inside},
 #endif
 };
 int rt_have_arcade(void) { return sizeof g_games / sizeof g_games[0] > 1; }
@@ -122,8 +126,12 @@ void hle_longjmp(PsxCpu *c)
     static const int regs[12] = {31, 29, 30, 16, 17, 18, 19, 20, 21, 22, 23, 28};
     for (int i = 0; i < 12; i++) c->r[regs[i]] = mem_r32(b + 4 * i);
     c->r[2] = c->r[5];
-    logf_("longjmp buf=%08x -> ra=%08x v0=%08x sp=%08x\n", (unsigned)b, (unsigned)c->r[31],
-          (unsigned)c->r[2], (unsigned)c->r[29]);
+    static int logged;   /* the Arcade menus switch tasks with longjmp several times per frame */
+    if (logged < 40) {
+        logged++;
+        logf_("longjmp buf=%08x -> ra=%08x v0=%08x sp=%08x\n", (unsigned)b, (unsigned)c->r[31],
+              (unsigned)c->r[2], (unsigned)c->r[29]);
+    }
     irq_abandon();                          /* a longjmp out of an interrupt handler ends it */
     g_phase = PH_GAME;
     longjmp(g_top, 1);
@@ -148,6 +156,9 @@ void run_program(PsxCpu *c)
             return;
         }
         RecompFunc f = lookup(ra);
+        if (!f && G_->resume_inside)          /* a return address inside a function: its entry switch jumps there */
+            for (int i = 0; i < *G_->num_resume_inside; i++)
+                if (G_->resume_inside[i].addr == ra) { c->resume_pc = ra; f = G_->resume_inside[i].fn; break; }
         if (!f) fatal(c, "resume at %08x: not a function start", (unsigned)ra);
         f(c);
         if (c->r[31] == ra) fatal(c, "resume at %08x returned without changing ra", (unsigned)ra);
