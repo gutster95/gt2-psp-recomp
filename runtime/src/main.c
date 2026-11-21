@@ -42,7 +42,7 @@ static int load_exe(void)
 }
 
 /* Optional settings.txt next to the EBOOT, lines "name=0|1": widescreen, hires, pgxp, filter, hud_anchor. */
-int g_log_prio;   /* settings.txt log_prio (log.c), 0 = keep 0x1F */
+int g_log_prio;   /* settings.txt log_prio (log.c), 0 = keep 0x48 */
 
 static void load_settings(void)
 {
@@ -144,7 +144,7 @@ int main(int argc, char **argv)
         extern int g_cd_legacy, g_card_fast, g_me_snapshot;
         log_set_prio(g_log_prio);
         logf_("suspects: cd_legacy %d card_fast %d me_snapshot %d log_prio 0x%x\n", g_cd_legacy, g_card_fast,
-              g_me_snapshot, g_log_prio ? g_log_prio : 0x1F);
+              g_me_snapshot, g_log_prio ? g_log_prio : 0x48);
     }
     logf_("game: %s\n", g_game == GAME_ARC ? "Arcade Mode (SCUS_944.55)" : "Simulation Mode (SCUS_944.88)");
     if (g_game == GAME_ARC) {   /* the game patches (16:9 view, 60 fps, LOD) exist for the Simulation disc only */

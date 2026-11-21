@@ -70,8 +70,10 @@ void log_init(const char *dir)
     g_log_sema = sceKernelCreateSema("log", 0, 1, 1, 0);
     g_log_wake = sceKernelCreateSema("logwake", 0, 0, 1, 0);
     g_log_io = sceKernelCreateSema("logio", 0, 1, 1, 0);
-    /* above the game thread (0x20): at 60 fps the game thread never sleeps and a lower writer starved (log stopped) */
-    SceUID t = g_logw = sceKernelCreateThread("logw", log_thread, 0x1F, 0x1000, PSP_THREAD_ATTR_USER, 0);
+    /* Below the game thread. 0x1F (above it, 2026-11-21 morning, so the log would not stop at 60 fps when the game
+     * thread never sleeps) froze the whole PSP, PSPLink included (freeze hunt: 6 runs fine at 0x48, the first at
+     * 0x1F froze). The log may stall in heavy 60 fps races; it catches up in menus. */
+    SceUID t = g_logw = sceKernelCreateThread("logw", log_thread, 0x48, 0x1000, PSP_THREAD_ATTR_USER, 0);
     if (t >= 0) sceKernelStartThread(t, 0, 0);
 }
 

@@ -1,7 +1,7 @@
 #!/bin/bash
 # Freeze hunt (2026-11-21): runs the Simulation release on the PSP through PSPLink with today's changes switched on
 # one at a time (settings.txt toggles), each config N times (attract demo + GT mode via build/input-gtmode.txt, pack
-# from the memory stick). A run counts as frozen when the log stops early or PSPLink no longer answers afterwards;
+# from the memory stick). A run counts as frozen when PSPLink stops answering (checked after the run);
 # the hunt stops there (the PSP then needs a power cycle).   scripts/freeze-hunt.sh [runs per config] [first config]
 cd "$(dirname "$0")/.."
 N=${1:-3}
@@ -17,7 +17,7 @@ CONFIGS=(
   "logprio|cd_legacy=1\ncard_fast=0\nme_snapshot=0\nlog_prio=31\n"
   "cardfast|cd_legacy=1\ncard_fast=1\nme_snapshot=0\nlog_prio=72\n"
   "cdfast|cd_legacy=0\ncard_fast=0\nme_snapshot=0\nlog_prio=72\n"
-  "all-on|"
+  "all-on|log_prio=72\n"
 )
 alive() { (cd $T && timeout 8 ./pspsh.exe -e "ls host0:/" 2>&1 | grep -q Listing); }
 echo "ms0:/PSP/GAME/GT2PSP/GT2.PAK" > $R/pakpath.txt
@@ -28,10 +28,13 @@ for ((i = FIRST; i < ${#CONFIGS[@]}; i++)); do
     printf "${BASE}${set}" > $R/settings.txt
     rm -f $R/gt2log.txt
     GT2_PRX_DIR=build/gt2psp timeout 220 bash scripts/psp-run.sh 100 build/input-gtmode.txt > /dev/null 2>&1
+    dead=0   # a real freeze takes PSPLink with it (no pspsh commands during the run: they might disturb it)
+    alive || dead=1
     cp $R/gt2log.txt $O/$name-$k.log 2>/dev/null
     vb=$(grep -oE "^gpu: vblank [0-9]+" $O/$name-$k.log | tail -1 | awk '{print $3}')
     sus=$(grep -m1 "^suspects" $O/$name-$k.log)
-    if [ "${vb:-0}" -lt 5400 ] || ! alive; then
+    # (the log alone is no proof: with log_prio 72 the writer starves in races and the log stops early)
+    if [ $dead = 1 ]; then
       echo "FREEZE: $name run $k (log up to vblank ${vb:-0}) [$sus]"
       rm -f $R/pakpath.txt; exit 1
     fi
