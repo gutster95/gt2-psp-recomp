@@ -55,6 +55,7 @@ static const uint32_t g_interval = 0x1D52C4u;
 #else
 static const uint32_t g_interval = 0x1D5864u;
 #endif
+int g_fstep_log;   /* settings.txt fstep_log=1 (rt_frame_step diagnostics) */
 static int g_fps60_patched;   /* the frame interval currently 1 is ours (was 2) */
 int g_fps60_dyn = 1;          /* settings.txt fps60_dynamic: game time step = vblanks that really passed */
 uint32_t g_step_hist[4];      /* statistics: time steps given (1, 2, 3+) and frames with debt */
@@ -130,6 +131,13 @@ void rt_frame_step(uint32_t disp, int after_wait)
     uint32_t now = g_vblank_count, el = last ? now - last : 1;
     last = now;
     t_aw = now_us();
+    if (g_fstep_log) {   /* settings.txt fstep_log=1: the frame step state about once a second */
+        static uint32_t n;
+        if ((n++ % 60) == 0)
+            logf_("fstep: disp %08x wait %u interval@%06x %u el %u owned %d fps60 %d lock30 %d\n", (unsigned)disp,
+                  (unsigned)g_ram[a & 0x1FFFFF], (unsigned)G, (unsigned)g_ram[G], (unsigned)el, g_dyn_owned, g_fps60,
+                  g_lock30);
+    }
     if (!g_dyn_owned) return;
     if (g_fps60_auto && !g_lock30) {                  /* misses of the last 32 frames (bit history) */
         miss_hist = (miss_hist << 1) | (el >= 2);

@@ -992,3 +992,14 @@ the Media Engine:
   every original instruction word bit-identical on both discs; table in profiles.py (patch_map). The race frame
   interval byte moves with the race display struct: 0x801D5864 -> 0x801D52C4 (all 5 struct references -0x5A0).
   Arcade no longer forces 16:9 / 60 fps / LOD off; the settings menu saves there too.
+* 30/60 fps is chosen in the launcher (Left/Right, written to settings.txt for both discs); the in-game settings menu
+  only shows it. Switching 30 -> 60 fps during a race ran the game at double speed (the game sets up its timing
+  from the frame interval when a race starts); 60 -> 30 was fixed earlier today.
+* Arcade "slow motion" report, checked against PCSX-Redux (build/ref/arcshots.lua: START at vsync 1500 skips the
+  intro, screenshots of the attract replay): the replay's camera cuts come at the same race times in the port
+  (REPLAY 0:01.1, wall cam 0:06.1, front 0:10.7, side 0:12.5; port +6/+10/+12 s after REPLAY) - game logic speed
+  correct at 30 fps in PPSSPP. Arcade race clock at forced 60 fps: 9.982 s in 10.087 s (99%).
+  Diagnostics: settings fstep_log=1 (frame step state), snap_at1=<vblank>/snap_at2=<interval> (16 snapshots with
+  real time in the log).
+* Reference timeline of the Arcade disc boot (Redux): SCEA presents ~vsync 300, legal notice ~480-1080, Polyphony
+  logo ~1380, then the long intro movie (still running at vsync 10000).

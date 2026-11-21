@@ -108,6 +108,17 @@ void gpu_present(void)
         if (down && !combo_down && !g_me_active) gpu_snapshot();
         combo_down = down;
     }
+    {   /* settings.txt snap_at1=<vblank>, snap_at2=<interval>: 16 timed snapshots with the real time logged (game
+         * clock and replay comparisons against PCSX-Redux) */
+        extern int g_snap_at[2];
+        extern uint32_t g_vblank_count;
+        uint32_t s0 = (uint32_t)g_snap_at[0], d = g_snap_at[1] > 0 ? (uint32_t)g_snap_at[1] : 600;
+        if (s0 && g_vblank_count >= s0 && (g_vblank_count - s0) % d == 0 && (g_vblank_count - s0) / d < 16 &&
+            !g_me_active) {
+            logf_("timed snapshot at vblank %u, real time %u ms\n", (unsigned)g_vblank_count, (unsigned)(now_us() / 1000));
+            gpu_snapshot();
+        }
+    }
     {   /* settings.txt autoexit=N: quit after N seconds (PSPLink profiling runs) */
         extern int g_autoexit;
         static uint64_t start;

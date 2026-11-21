@@ -61,11 +61,10 @@ static void toggle(int item, int dir)
 {
     int was60 = g_fps60;
     switch (item) {
-    case M_MODE:
-        if (mode_of() == 1) { g_fps60 = 0; g_fx60 = 1; g_lowlod = 0; }   /* -> quality */
-        else { g_fps60 = 1; g_fx60 = 0; g_lowlod = 1; }                   /* quality/custom -> performance */
+    case M_MODE: case M_FPS60:
+        /* chosen in the launcher before the game starts: switching 30 -> 60 fps during a race ran the game at double
+         * speed (the game sets up its timing from the frame interval when a race starts) */
         break;
-    case M_FPS60: g_fps60 ^= 1; break;
     case M_AUTO: g_fps60_auto ^= 1; break;
     case M_FX: g_fx60 ^= 1; break;
     case M_LOD: g_lowlod ^= 1; break;
@@ -83,7 +82,7 @@ static void draw(uint32_t *base, int sel)
     static const char *const MODES[] = {"Quality (30 fps)", "Performance (60 fps)", "Custom"};
     char v[M_COUNT][40];
     snprintf(v[M_MODE], 40, "%s", MODES[mode_of()]);
-    snprintf(v[M_FPS60], 40, "%s", g_fps60 ? "on" : "off");
+    snprintf(v[M_FPS60], 40, "%s  (start menu)", g_fps60 ? "on" : "off");
     snprintf(v[M_AUTO], 40, "%s", g_fps60_auto ? "auto (30 when needed)" : "always 60");
     snprintf(v[M_FX], 40, "%s", g_fx60 ? "on" : "off");
     snprintf(v[M_LOD], 40, "%s", g_lowlod ? "low" : "normal");

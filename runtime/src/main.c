@@ -42,15 +42,16 @@ static int load_exe(void)
 }
 
 /* Optional settings.txt next to the EBOOT, lines "name=0|1": widescreen, hires, pgxp, filter, hud_anchor. */
+int g_snap_at[2];   /* settings.txt snap_at1/2 (gpuvbl.c) */
 int g_log_prio;   /* settings.txt log_prio (log.c), 0 = keep 0x48 */
 
 static void load_settings(void)
 {
-    extern int g_hud_anchor, g_near_clip, g_pad_analog, g_audio, g_autoexit, g_frames_forced, g_show_fps, g_gebench, g_membench, g_varena_uncached, g_walklog, g_ws_menus, g_gedump, g_gebenchfile, g_varena_edram, g_sharp, g_async_present, g_list_uncached, g_hud_defer, g_me_gpu, g_fps60, g_cd_prefetch, g_fx60, g_lowlod, g_performance, g_lr_shift, g_dpad_shift, g_fps60_dyn, g_track_lod, g_fps60_auto, g_race_buttons, g_period_us, g_fps60_flip[4], g_cd_pause_us, g_cd_seek_us, g_cd_first_us, g_card_fast, g_card_event_us, g_cd_ack_us, g_cd_legacy, g_me_snapshot;
+    extern int g_hud_anchor, g_near_clip, g_pad_analog, g_audio, g_autoexit, g_frames_forced, g_show_fps, g_gebench, g_membench, g_varena_uncached, g_walklog, g_ws_menus, g_gedump, g_gebenchfile, g_varena_edram, g_sharp, g_async_present, g_list_uncached, g_hud_defer, g_me_gpu, g_fps60, g_cd_prefetch, g_fx60, g_lowlod, g_performance, g_lr_shift, g_dpad_shift, g_fps60_dyn, g_track_lod, g_fps60_auto, g_race_buttons, g_period_us, g_fps60_flip[4], g_cd_pause_us, g_cd_seek_us, g_cd_first_us, g_card_fast, g_card_event_us, g_cd_ack_us, g_cd_legacy, g_me_snapshot, g_fstep_log, g_snap_at[2];
     static const struct { const char *name; int *var; } opts[] = {
         {"widescreen", &g_widescreen}, {"hires", &g_hires}, {"pgxp", &g_pgxp}, {"filter", &g_tex_filter},
         {"hud_anchor", &g_hud_anchor}, {"near_clip", &g_near_clip}, {"analog", &g_pad_analog}, {"audio", &g_audio}, {"autoexit", &g_autoexit}, {"frames1x", &g_frames_forced}, {"ge", &g_use_ge}, {"fps", &g_show_fps}, {"gebench", &g_gebench}, {"membench", &g_membench}, {"varena_uncached", &g_varena_uncached}, {"walklog", &g_walklog}, {"widescreen_menus", &g_ws_menus}, {"gedump", &g_gedump}, {"gebenchfile", &g_gebenchfile}, {"varena_edram", &g_varena_edram}, {"sharp", &g_sharp}, {"async_present", &g_async_present}, {"list_uncached", &g_list_uncached}, {"hud_defer", &g_hud_defer}, {"me_gpu", &g_me_gpu}, {"fps60", &g_fps60}, {"cd_prefetch", &g_cd_prefetch}, {"fps60_effects", &g_fx60}, {"lowlod", &g_lowlod}, {"performance", &g_performance}, {"lr_shift", &g_lr_shift}, {"dpad_shift", &g_dpad_shift}, {"fps60_dynamic", &g_fps60_dyn}, {"track_lod", &g_track_lod}, {"fps60_auto", &g_fps60_auto}, {"race_buttons", &g_race_buttons}, {"cd_period_us", &g_period_us},
-        {"cd_pause_us", &g_cd_pause_us}, {"cd_seek_us", &g_cd_seek_us}, {"cd_first_us", &g_cd_first_us}, {"card_fast", &g_card_fast}, {"cd_ack_us", &g_cd_ack_us}, {"cd_legacy", &g_cd_legacy}, {"me_snapshot", &g_me_snapshot}, {"log_prio", &g_log_prio}, {"card_event_us", &g_card_event_us},
+        {"cd_pause_us", &g_cd_pause_us}, {"cd_seek_us", &g_cd_seek_us}, {"cd_first_us", &g_cd_first_us}, {"card_fast", &g_card_fast}, {"cd_ack_us", &g_cd_ack_us}, {"cd_legacy", &g_cd_legacy}, {"fstep_log", &g_fstep_log}, {"snap_at1", &g_snap_at[0]}, {"snap_at2", &g_snap_at[1]}, {"me_snapshot", &g_me_snapshot}, {"log_prio", &g_log_prio}, {"card_event_us", &g_card_event_us},
         {"fps60_flip1", &g_fps60_flip[0]}, {"fps60_flip2", &g_fps60_flip[1]}, {"fps60_flip3", &g_fps60_flip[2]}, {"fps60_flip4", &g_fps60_flip[3]},
     };
     char path[300], line[64];
@@ -62,7 +63,7 @@ static void load_settings(void)
             if (!eq) continue;
             *eq = 0;
             for (unsigned i = 0; i < sizeof opts / sizeof opts[0]; i++)
-                if (!strcmp(line, opts[i].name)) *opts[i].var = (opts[i].var == &g_autoexit || opts[i].var == &g_gebench || opts[i].var == &g_walklog || opts[i].var == &g_membench || opts[i].var == &g_gedump || opts[i].var == &g_period_us || opts[i].var == &g_cd_pause_us || opts[i].var == &g_cd_seek_us || opts[i].var == &g_cd_first_us || opts[i].var == &g_card_event_us || opts[i].var == &g_card_fast || opts[i].var == &g_cd_ack_us || opts[i].var == &g_log_prio || (opts[i].var >= &g_fps60_flip[0] && opts[i].var <= &g_fps60_flip[3])) ? atoi(eq + 1) : atoi(eq + 1) != 0;
+                if (!strcmp(line, opts[i].name)) *opts[i].var = (opts[i].var == &g_autoexit || opts[i].var == &g_gebench || opts[i].var == &g_walklog || opts[i].var == &g_membench || opts[i].var == &g_gedump || opts[i].var == &g_period_us || opts[i].var == &g_cd_pause_us || opts[i].var == &g_cd_seek_us || opts[i].var == &g_cd_first_us || opts[i].var == &g_card_event_us || opts[i].var == &g_card_fast || opts[i].var == &g_cd_ack_us || opts[i].var == &g_log_prio || opts[i].var == &g_snap_at[0] || opts[i].var == &g_snap_at[1] || (opts[i].var >= &g_fps60_flip[0] && opts[i].var <= &g_fps60_flip[3])) ? atoi(eq + 1) : atoi(eq + 1) != 0;
         }
         fclose(f);
     }
