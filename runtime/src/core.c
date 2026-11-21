@@ -25,16 +25,8 @@ int g_cur_overlay = -1;
 
 #define OVL_LO 0x80010000u
 
-/* The two discs (src/gt2psp/profiles.py): Simulation Mode (generated/) and Arcade Mode (generated/arcade/, symbols
- * with the prefix "a"). g_game is chosen at start (main.c) before anything of the game runs. */
-int g_game;                                /* GAME_SIM / GAME_ARC */
-#ifdef GT2_ARCADE
-extern const ModuleTable a_g_modules[];
-extern const FuncEntry a_g_resume_inside[];
-extern const int a_g_num_resume_inside;
-void af_8005d570(PsxCpu *c);
-void af_8005da48_impl(PsxCpu *c);
-#endif
+/* One build per disc (CMake GT2_GAME, src/gt2psp/profiles.py): Simulation Mode (generated/) or Arcade Mode
+ * (generated/arcade/, symbols with the prefix "a"). The launcher (runtime/launcher) starts one of the two PRXs. */
 typedef struct {
     const ModuleTable *mods;               /* resident, boot, ovl0..ovl5 (see program.py) */
     uint32_t ovl_hi;                       /* end of the overlay window = start of the resident code */
@@ -43,20 +35,17 @@ typedef struct {
     const FuncEntry *resume_inside;        /* return addresses inside functions that a longjmp resumes */
     const int *num_resume_inside;
 } Game;
-static const Game g_games[] = {
-    {g_modules, 0x8005D600u, 0x80091174u, f_8005d600, 0, 0},
-#ifdef GT2_ARCADE
-    {a_g_modules, 0x8005D570u, 0x80090EB8u, af_8005d570, a_g_resume_inside, &a_g_num_resume_inside},
+#ifdef GT2_ARC_BUILD
+extern const ModuleTable a_g_modules[];
+extern const FuncEntry a_g_resume_inside[];
+extern const int a_g_num_resume_inside;
+int g_game = GAME_ARC;
+static const Game G_[1] = {{a_g_modules, 0x8005D570u, 0x80090EB8u, af_8005d570, a_g_resume_inside,
+                            &a_g_num_resume_inside}};
+#else
+int g_game = GAME_SIM;
+static const Game G_[1] = {{g_modules, 0x8005D600u, 0x80091174u, f_8005d600, 0, 0}};
 #endif
-};
-int rt_have_arcade(void) { return sizeof g_games / sizeof g_games[0] > 1; }
-static const Game *G_ = &g_games[0];
-void rt_set_game(int game)
-{
-    if (game == GAME_ARC && !rt_have_arcade()) game = GAME_SIM;
-    g_game = game;
-    G_ = &g_games[game];
-}
 
 static RecompFunc find_in(int mod, uint32_t addr)
 {
@@ -177,9 +166,10 @@ static void overlay_load(PsxCpu *c, void (*impl)(PsxCpu *c))
     g_cur_overlay = n;
     g_overlay_loads++;
 }
-void f_8005dad8(PsxCpu *c) { overlay_load(c, f_8005dad8_impl); }
-#ifdef GT2_ARCADE
+#ifdef GT2_ARC_BUILD
 void af_8005da48(PsxCpu *c) { overlay_load(c, af_8005da48_impl); }
+#else
+void f_8005dad8(PsxCpu *c) { overlay_load(c, f_8005dad8_impl); }
 #endif
 
 /* ---- time & interrupts ---------------------------------------------------------------------------------- */

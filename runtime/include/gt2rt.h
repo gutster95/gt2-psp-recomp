@@ -27,9 +27,7 @@ typedef struct ModuleTable {
 extern const ModuleTable g_modules[];
 extern const int g_num_modules;
 enum { GAME_SIM = 0, GAME_ARC = 1 };
-extern int g_game;                    /* which disc runs (core.c, chosen in main.c) */
-void rt_set_game(int game);
-int rt_have_arcade(void);
+extern int g_game;                    /* which disc this build runs (core.c, CMake GT2_GAME) */
 
 /* ---- memory ---------------------------------------------------------------------------------------- */
 

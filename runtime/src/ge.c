@@ -1863,7 +1863,7 @@ static void selftest_3d(void)
 
 void ge_init(void)
 {
-    if (rt_have_arcade()) g_conv24 = memalign(64, 512 * 512 * 2);   /* the Arcade disc's movies run in 24-bit mode */
+    if (g_game == GAME_ARC) g_conv24 = memalign(64, 512 * 512 * 2);   /* the Arcade disc's movies run in 24-bit mode */
     if (g_varena_edram) g_varena_size = 0x200000u - VARENA_EDRAM_OFF;
     memset((void *)0x00010000u, 0, 0x1000);         /* scratchpad: S, g_rs (raster_state_init), GeHot, memo */
     raster_state_init();

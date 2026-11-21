@@ -979,3 +979,10 @@ the Media Engine:
   Engine path; to be investigated before a new build goes onto the user's memory stick.
 * PPSSPP gives homebrew less memory than the PSP-3000 (stack 0x09FBFDF0 vs 0x0BEBFE10): with the larger Arcade code
   the EXE no longer loads there.
+* Two programs instead of one (user's suggestion): runtime/CMakeLists.txt GT2_GAME=sim|arc builds one runtime per
+  disc (GT2SIM.PRX / GT2ARC.PRX); EBOOT.PBP is a small launcher (runtime/launcher) with the start menu (last choice
+  preselected, lastgame.txt) and the XMB images, which loads and starts the chosen PRX (like PSPLink does). The
+  Simulation binary stays exactly the tested one (code layout moves performance by +-10%), no Arcade code in it.
+  scripts/build-launcher.sh; `GT2_GAME=arc scripts/build.sh`.
+* With the task-switch fixes the Arcade disc runs into a race in PPSSPP: menus, course selection (Tahiti Road),
+  race start (overlays 3 and 0).

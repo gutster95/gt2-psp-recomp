@@ -1,0 +1,17 @@
+cmake_minimum_required(VERSION 3.10)
+project(gt2launcher C)
+
+# EBOOT.PBP of the PSP folder: start menu, then GT2SIM.PRX or GT2ARC.PRX (main.c)
+add_executable(gt2launcher main.c)
+target_compile_options(gt2launcher PRIVATE -O2 -Wall)
+target_link_libraries(gt2launcher PRIVATE pspdebug pspdisplay pspge pspctrl)
+
+# XMB icon and background (scripts/make_eboot_images.py from the user's Images/, not in git)
+set(PBP_IMAGES "")
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../../build/ICON0.PNG")
+  list(APPEND PBP_IMAGES ICON_PATH "${CMAKE_CURRENT_SOURCE_DIR}/../../build/ICON0.PNG")
+endif()
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../../build/PIC1.PNG")
+  list(APPEND PBP_IMAGES BACKGROUND_PATH "${CMAKE_CURRENT_SOURCE_DIR}/../../build/PIC1.PNG")
+endif()
+create_pbp_file(TARGET gt2launcher TITLE "Gran Turismo 2" ${PBP_IMAGES} BUILD_PRX)
