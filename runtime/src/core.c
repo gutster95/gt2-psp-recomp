@@ -200,6 +200,7 @@ static void call_irq_handlers(PsxCpu *c)
 }
 
 void irq_abandon(void) { g_in_irq = 0; }
+int rt_in_irq(void) { return g_in_irq; }
 
 /* Run a game callback (BIOS event handler) in interrupt context: own stack, CPU state restored afterwards. */
 void rt_callback(PsxCpu *c, uint32_t func)

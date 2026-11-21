@@ -912,3 +912,27 @@ the Media Engine:
   ~10 s into races. Now 0x1F (above the game thread; it sleeps on its semaphore and writes once a second). On host0
   (PSPLink) the file is no longer closed/reopened per drain (raced with pspsh screenshots).
 * `cd_period_us` was read as 0/1 (missing from the numeric settings list) - fixed.
+
+
+## 2026-11-21 - Faster loads: CD command latency, sectors without a clock, memory card fast path, ME snapshot fix
+
+* Where a load's time goes (GT mode entry, command timeline): ~52 small reads of 6 commands each (Setloc, Setmode,
+  ReadN, Getstat x2, GetlocL, Pause), ~3 ms per command - the per-command delays, not the sectors. ACK 600 ->
+  100 us: 1043 -> 686 ms; Pause/Seek 2 -> 0.3 ms, first sector 1 -> 0.2 ms: 536 ms (PPSSPP). Below 100 us no gain.
+* Sector spacing: below 0.75 ms the game hung or read runaway (55605 sectors). Cause: libcd's interrupt handler
+  loops while CD interrupts are pending; a sector that arrives while it runs keeps it inside, and the Pause after
+  the last sector comes from the game's main code, which never runs. Data sectors are now held back while the game
+  is in an interrupt handler (rt_in_irq) and otherwise come at once (cd_period_us 0). Boot load 527 -> 136 ms.
+  (The 2026-11-20 test "0.2/0.4 ms hang" was not one: cd_period_us was parsed as 0/1, i.e. 1 us.)
+* PSP freeze found on the way: the ME upload snapshot ring (2026-11-21 morning) called me_join() when it wrapped -
+  also inside the CD interrupt handler, where waiting for the whole ME queue could hang (in_irq 1, almost no
+  polls; seen with fast loads). The ring is now 1 MB in two halves; entering a half waits only for the commands
+  that read it (long done). 3 runs at 0 ms spacing with the ME: all reach the race.
+* Memory card: GT2 reads one 128-byte sector per frame from its card task (0x8007EACC), 254 sectors = 4.2 s when
+  GT mode loads the save. The task now runs again right after each read result (bios.c, interrupt context like
+  its vblank call; EXE check on the code bytes): 105 ms, identical save state (632 days, 9,999,999 Cr, same
+  garage). Card result delay 2 -> 0.3 ms (card_event_us). Writes: unchanged (one per frame) until saving is
+  verified - in PPSSPP no save prompt was reached by script (leaving GT mode does not ask); `card_fast=2`.
+* Open: PSP verification of this build. One run of eight on the PSP (0.75 ms spacing, gating, new snapshot ring)
+  froze the whole PSP during boot, PSPLink included - cause unknown. The final defaults are verified only in
+  PPSSPP (me_gpu=0): boot, attract race, GT mode with the save loaded.

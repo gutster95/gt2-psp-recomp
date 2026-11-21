@@ -21,10 +21,25 @@ typedef struct { uint32_t cls, spec; uint64_t at; } Pending;
 static Pending g_pending[16];
 static int g_npending;
 
+int g_card_event_us = 300;   /* settings.txt card_event_us: memory card result delay (a real card: ~1 ms per sector) */
 void bios_event_later(uint32_t cls, uint32_t spec)
 {
     if (g_npending >= 16) { logf_("BIOS: event queue full\n"); return; }
-    g_pending[g_npending++] = (Pending){cls, spec, now_us() + 2000};
+    g_pending[g_npending++] = (Pending){cls, spec, now_us() + (uint64_t)g_card_event_us};
+}
+
+/* Memory card fast path (card_fast, default on). GT2 drives the card from a task that runs once per vblank
+ * (0x8007EACC, context 0x801F06E0): it looks at the result of the last sector operation and starts the next one -
+ * one 128-byte sector per frame, so loading a GT mode save (254 sectors) took 4.2 s. Right after a card result is
+ * delivered, the task runs once more (interrupt context, like its vblank call), so the next sector starts at once:
+ * 254 sectors in 105 ms, same save state. */
+int g_card_fast = 1;   /* 1: reads only (verified), 2: writes too (saving not verified yet) */
+extern int g_card_last_write;
+static int card_task_ok(void)
+{
+    static int ok = -1;
+    if (ok < 0) ok = mem_r32(0x8007EACCu) == 0x3C04801Fu && mem_r32(0x8007EAD0u) == 0x248406E0u;   /* this EXE */
+    return ok;
 }
 
 static void deliver(PsxCpu *c, uint32_t cls, uint32_t spec)
@@ -45,6 +60,7 @@ void bios_poll_events(PsxCpu *c)
         Pending p = g_pending[0];
         memmove(g_pending, g_pending + 1, sizeof(Pending) * (--g_npending));
         deliver(c, p.cls, p.spec);
+        if (g_card_fast && (g_card_fast >= 2 || !g_card_last_write) && p.cls == 0xF0000011u && card_task_ok()) rt_callback(c, 0x8007EACCu);
     }
 }
 

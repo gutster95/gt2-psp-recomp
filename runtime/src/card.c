@@ -136,6 +136,7 @@ void card_tick(void)
 static int slot1(uint32_t port) { return (port & 0x30) == 0 && g_present; }
 
 static int g_log_ops = 64;   /* log the first card operations */
+int g_card_last_write;       /* the last sector operation was a write (bios.c card fast path) */
 
 uint32_t card_info(uint32_t port)
 {
@@ -149,6 +150,7 @@ uint32_t card_read(uint32_t port, uint32_t sector, uint32_t dst)
     if (g_log_ops > 0) { g_log_ops--; logf_("card: read(port %02x, sector %u)\n", (unsigned)port, (unsigned)sector); }
     if (!slot1(port) || sector >= SECTORS) { bios_event_later(HW_CARD, EV_TIMEOUT); return 1; }
     card_span(0);
+    g_card_last_write = 0;
     for (int i = 0; i < SECTOR; i++) mem_w8(dst + i, g_img[sector * SECTOR + i]);
     bios_event_later(HW_CARD, EV_IOE);
     return 1;
@@ -159,6 +161,7 @@ uint32_t card_write(uint32_t port, uint32_t sector, uint32_t src)
     if (g_log_ops > 0) { g_log_ops--; logf_("card: write(port %02x, sector %u, src %08x)\n", (unsigned)port, (unsigned)sector, (unsigned)src); }
     if (!slot1(port) || sector >= SECTORS) { bios_event_later(HW_CARD, EV_TIMEOUT); return 1; }
     if (src) card_span(1);
+    g_card_last_write = 1;
     if (src) {                                     /* src = 0: _new_card() acknowledge, nothing is written */
         for (int i = 0; i < SECTOR; i++) g_img[sector * SECTOR + i] = (uint8_t)mem_r8(src + i);
         savedata_written();

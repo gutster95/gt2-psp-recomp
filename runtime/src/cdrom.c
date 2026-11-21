@@ -51,8 +51,12 @@ static uint8_t g_filter_file, g_filter_chan;
 static uint32_t g_setloc = LEADIN, g_pos = LEADIN;     /* MSF-absolute sector numbers */
 static int g_reading;
 static uint64_t g_next_sector_at;
-int g_cd_pause_us = 2000, g_cd_seek_us = 2000;   /* settings cd_pause_us / cd_seek_us (test) */
-int g_period_us = 750;                     /* data sector spacing (0.75 ms = 1.5 ms halved, tested); 0.1 ms breaks the game's CD code (DEVLOG) */
+/* Drive timing (settings cd_ack_us, cd_pause_us, cd_seek_us, cd_first_us, cd_period_us). There is no drive: a GT
+ * mode load is ~50 small reads of 6 commands each, so the per-command delays set the load time (ACK 600 -> 100 us:
+ * 1043 -> 686 ms; with Pause/Seek/first sector shortened 536 ms). Data sectors follow each other as soon as the
+ * game has left its CD interrupt handler (see deliver_at), so the spacing defaults to 0. */
+int g_cd_pause_us = 300, g_cd_seek_us = 300, g_cd_first_us = 200, g_cd_ack_us = 100;
+int g_period_us = 0;
 static uint32_t g_st_sectors;              /* statistics of the current read */
 static uint64_t g_st_start;
 /* load phases: data sectors with gaps below 1.5 s form one phase (wall time from the first to the last sector) */
@@ -263,7 +267,7 @@ static void stop_reading(void)
 
 static void command(uint8_t cmd)
 {
-    const uint64_t ACK = 600;      /* us until INT3 */
+    const uint64_t ACK = (uint64_t)g_cd_ack_us;   /* us until INT3 */
     g_ld_cmd[cmd & 31]++;
     switch (cmd) {
     case 0x01: push_stat(ACK, 3); break;                                    /* Getstat */
@@ -278,11 +282,11 @@ static void command(uint8_t cmd)
         g_reading = 1;
         g_stat = (g_stat & ~0x40) | 0x22;
         push_stat(ACK, 3);
-        g_next_sector_at = now_us() + 1000;
+        g_next_sector_at = now_us() + (uint64_t)g_cd_first_us;
         break;
     case 0x07: g_stat |= 0x02; push_stat(ACK, 3); push_stat(50000, 2); break;  /* MotorOn */
     case 0x08: stop_reading(); push_stat(ACK, 3); g_stat &= ~0x02; push_stat(100000, 2); break;  /* Stop */
-    case 0x09: push_stat(ACK, 3); stop_reading(); push_stat((uint64_t)g_cd_pause_us, 2); break;    /* Pause (a drive takes ~30 ms; GT2 pauses after every read, 2 ms saves ~1 s per load) */
+    case 0x09: push_stat(ACK, 3); stop_reading(); push_stat((uint64_t)g_cd_pause_us, 2); break;    /* Pause (a drive takes ~30 ms; GT2 pauses after every read) */
     case 0x0A:                                                              /* Init */
         g_mode = 0x20;
         stop_reading();
@@ -358,10 +362,17 @@ static void deliver_at(uint64_t t)
      * interrupt handler is never overtaken in the middle of reading a sector. */
     /* No overrun: a slow frame (or a slow PSP) must never let a new sector replace one the game has not taken yet,
      * that desynchronises libcd's interrupt handler (it then waits forever for data). */
+    /* Data reads: never while the game is inside an interrupt handler. libcd's handler loops as long as the CD
+     * raises interrupts; a sector that arrives before it returns keeps it inside, the game's main code (which
+     * sends Pause after the last sector) never runs and the read runs away (55k sectors at 0.1 ms spacing). A real
+     * drive needs 6.7 ms per sector; here a sector follows as soon as the handler has returned once, so the pace
+     * is the game's own and no clock is needed (cd_period_us, default 0). XA streaming keeps its real clock. */
+    extern int rt_in_irq(void);
+    if (!(g_mode & 0x40) && rt_in_irq()) return;
     if (g_reading && t >= g_next_sector_at && !g_qn && g_consumed) {
         /* XA streaming runs on a fixed clock (75/150 sectors per second): the next sector is due one period after
          * the previous due time, not after this delivery, otherwise the stream drifts behind real time and the music
-         * buffer runs dry. Data reads simply come every 1.5 ms. */
+         * buffer runs dry. Data reads: g_period_us (0 = as soon as the game is out of the interrupt handler). */
         if (g_mode & 0x40) {
             uint64_t period = (g_mode & 0x80) ? 6667 : 13333;
             g_next_sector_at = (t - g_next_sector_at < 4 * period) ? g_next_sector_at + period : t + period;

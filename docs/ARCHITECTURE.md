@@ -110,9 +110,16 @@ tools/             (ignored) local toolchain (pspdev inside a project-local WSL 
   a shared subheader, padding file FAULTY.PSX dropped (587 MB vs 692 MB). The runtime rebuilds raw sectors on
   demand (128 KB read-ahead with sceIo) and loads SCUS_944.88 from the pack, so the PSP folder is just
   `EBOOT.PBP` + `GT2.PAK`. The CD controller interface stays as the adapter between game and pack for now
-  (GT2's own CD layer is driven by libcd interrupts); data sectors come every 1.5 ms (~4x the 2x drive rate;
-  faster rates make the libcd interrupt handler loop for seconds with interrupts blocked) and only after the
-  game has taken the previous one. Next: replace the read path at the libcd level so no CD timing remains.
+  (GT2's own CD layer is driven by libcd interrupts). No clock for data reads: a sector follows as soon as the game
+  has taken the previous one *and* is outside its interrupt handler (libcd's handler loops while CD interrupts are
+  pending; a sector arriving inside it kept it there and the read ran away). Per-command delays are minimal (ACK
+  100 us, Pause/Seek 300 us): a GT mode load is ~50 small reads x 6 commands, so they, not the sectors, set the
+  time. XA streaming keeps the real 75/150 sectors per second. GT2's layers above libcd (2026-11-21): read
+  request 0x8007CFDC (context 0x801F0510: LBA, end, callback, destination, size), command script 0x8007C744,
+  sector callback 0x80082574 (compares the header LBA, copies), wait loop 0x8007AB14.
+* Memory card fast path: GT2's card task (0x8007EACC, once per vblank, one sector per call) runs again right after
+  each card read result is delivered (bios.c), so a save loads in ~0.1 s instead of 4.2 s. Writes stay at one
+  sector per frame until saving is verified (`card_fast=2` enables it).
 
 ## Performance design
 

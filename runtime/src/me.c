@@ -209,20 +209,33 @@ void me_post_walk(uint32_t madr)
 /* CPU -> VRAM block DMA: the ME runs behind the game, and GT2 reuses the source buffer right after the DMA (the race
  * HUD builds each text's glyphs in one buffer and uploads them string by string). Reading g_ram later uploaded the
  * next string's pixels (wrong HUD glyphs, "2:22.222"). The words are copied at DMA time into this ring, as the PS1
- * DMA would have read them then; when it wraps, the ME first finishes every queued command. */
-#define SNAP_WORDS (64 * 1024)
+ * DMA would have read them then. The ring has two halves; before a half is reused, only the ME commands that read
+ * from it must be done (normally long ago) - never the whole queue (this also runs inside interrupt handlers). */
+#define SNAP_WORDS (256 * 1024)
+#define SNAP_HALF (SNAP_WORDS / 2)
 static uint32_t *g_snap;   /* heap (keeps the BSS layout of the hot data) */
-static uint32_t g_snap_pos;
+static uint32_t g_snap_pos, g_snap_idx[2];   /* write position; ring index after the last command reading each half */
 void me_post_block(uint32_t madr, uint32_t words, int to_gpu)
 {
     if (!g_snap) g_snap = memalign(64, SNAP_WORDS * 4);
-    if (to_gpu && g_snap && words <= SNAP_WORDS && (madr & 0x1FFFFC) + 4 * words <= PSX_RAM_SIZE) {
-        if (g_snap_pos + words > SNAP_WORDS) { me_join(); g_snap_pos = 0; }
+    if (to_gpu && g_snap && words <= SNAP_HALF && (madr & 0x1FFFFC) + 4 * words <= PSX_RAM_SIZE) {
+        static uint32_t cur_half;
+        uint32_t half = g_snap_pos / SNAP_HALF;
+        if (g_snap_pos + words > (half + 1) * SNAP_HALF) {          /* does not fit: start of the other half */
+            half ^= 1;
+            g_snap_pos = half * SNAP_HALF;
+        }
+        if (half != cur_half) {                                     /* entering a half: its old uploads are done */
+            while ((int32_t)(SH->tail - g_snap_idx[half]) < 0) me_service();
+            cur_half = half;
+        }
         uint32_t *d = &g_snap[g_snap_pos];
         memcpy(d, g_ram + (madr & 0x1FFFFC), words * 4);
         g_snap_pos = (g_snap_pos + words + 15) & ~15u;   /* 64-byte aligned slices: no shared cache lines */
+        if (g_snap_pos >= SNAP_WORDS) g_snap_pos = 0;
         sceKernelDcacheWritebackRange(d, words * 4);
         post(CMD_BLOCK_SNAP, (uint32_t)d, words);
+        g_snap_idx[half] = SH->head;
         g_dma_idx = SH->head;
         return;
     }
