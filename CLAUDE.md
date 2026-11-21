@@ -39,15 +39,22 @@ ISO/ extracted/ generated/ build/ Recomps/ tools/   (all git-ignored)
 
 ```
 python -m gt2psp extract "ISO/Gran Turismo 2 (USA) (Simulation Mode) (Rev 2).cue" --out extracted
-python -m gt2psp recomp                      # -> generated/*.c (2853 functions)
+python -m gt2psp recomp                      # -> generated/*.c (Simulation disc)
+python -m gt2psp extract "ISO/Gran Turismo 2 (USA) (Arcade Mode)/...cue" --out extracted-arcade
+python -m gt2psp recomp --disc arc --files extracted-arcade/files --out generated/arcade --no-memprof
+python -m gt2psp pack "<arcade cue>" --out build/GT2A.PAK
 python -m gt2psp pack "ISO/...cue"          # -> build/GT2.PAK (PSP data pack, converted once)
-wsl -d GT2PSPDev -u root --cd "<proj>" -- bash scripts/build.sh      # -> build/gt2psp/EBOOT.PBP
+wsl -d GT2PSPDev -u root --cd "<proj>" -- bash scripts/build.sh      # -> build/gt2psp (Simulation runtime)
+  ... -- env GT2_GAME=arc GT2_OUT=build/arc GT2_BUILD_DIR=/root/gt2arcrel bash scripts/build.sh   # Arcade runtime
+  ... -- bash scripts/build-launcher.sh                                 # -> build/launcher/EBOOT.PBP (start menu)
+python scripts/make_eboot_images.py                                      # XMB icon/background from Images/
 bash scripts/pgo.sh profile && bash scripts/pgo.sh build             # release: profile-guided (PSP via PSPLink) -> build/gt2psp
 powershell -ExecutionPolicy Bypass -File scripts/run-ppsspp.ps1 -Seconds 40 -Shot <png>   # stages + runs + log
 powershell -ExecutionPolicy Bypass -File scripts/package-psp.ps1   # -> build/psp/PSP/GAME/GT2PSP for a real PSP
 ```
-(PYTHONPATH=src for the python calls.) The PSP folder holds only `EBOOT.PBP` + `GT2.PAK` (the EXE is read from the
-pack too); run-ppsspp.ps1 stages them (hard links) into `tools/ppsspp/memstick/PSP/GAME/GT2PSP/`.
+(PYTHONPATH=src for the python calls.) The PSP folder: `EBOOT.PBP` (launcher: Simulation/Arcade menu) +
+`GT2SIM.PRX` + `GT2ARC.PRX` (one runtime build per disc) + `GT2.PAK` + `GT2A.PAK` (the EXEs are read from the packs);
+PSPLink tests run a runtime PRX directly (`GT2_PRX_DIR=build/arc scripts/psp-run.sh ...`); run-ppsspp.ps1 stages them (hard links) into `tools/ppsspp/memstick/PSP/GAME/GT2PSP/`.
 Target hardware: PSP-3000 (the user tests on it manually). Goal: a native port - convert code AND assets on the PC,
 no raw disc image, no hardware emulation where a native PSP implementation is possible.
 Runtime log: `gt2log.txt` there (watchdog "alive" lines every 2 s with the last called functions).
@@ -76,6 +83,18 @@ PowerShell `Set-Content -Encoding utf8` writes a BOM. CMake globs: build.sh re-r
 * MDEC: software decoder (`mdec.c`); the Simulation disc has no movies (they are on the Arcade disc).
 * Not implemented yet: reverb,
   15-bit textures / texture windows on the GE (software fallback).
+
+## 2026-11-21
+
+* Arcade Mode disc: recompiler disc profiles (profiles.py, sigmap.py), task switches via setjmp/longjmp handled
+  (in-place resume points), runs into races on the PSP. Not yet ported: 16:9 / 60 fps / LOD patches (use Silent's
+  existing Arcade-disc cheats, do not guess addresses).
+* Loads: CD per-command delays minimal, sectors without clock (held back inside interrupt handlers), memory card
+  read fast path (save load 4.2 s -> 0.1 s). Card writes still one sector per frame (`card_fast=2` untested).
+* PSP freezes of the day: the log writer at priority 0x1F (above the game thread) froze the whole PSP. Never give
+  a thread that does file I/O a priority above the game thread. scripts/freeze-hunt.sh switches suspects via
+  settings.txt (cd_legacy, card_fast, me_snapshot, log_prio).
+* PPSSPP gives homebrew less memory than the PSP-3000.
 
 ## Next steps (as of 2026-11-20)
 
