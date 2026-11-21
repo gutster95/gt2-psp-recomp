@@ -6,6 +6,7 @@ The pack holds only what the game reads, in a compact, directly addressable layo
   subheader share one table entry.
 * Form 2 sectors (XA-ADPCM music streams in MUSIC.DAT) keep their 2336 bytes (subheader + data + EDC), one table
   entry per run; the subheader of every sector is inside the stored bytes.
+* Form 1 sectors in runs shorter than MIN_RUN (movie streams) are stored raw like Form 2.
 * Unused sectors are dropped: the 27 MB padding file FAULTY.PSX.
 
 Format (little endian)::
@@ -31,6 +32,7 @@ MAGIC = b"GT2PAK1\0"
 RUN = struct.Struct("<III4sHH")
 HEADER = struct.Struct("<8sII")
 FORM2 = 0x20
+MIN_RUN = 8              # shorter Form 1 runs (same subheader) are stored raw
 
 
 def build_pack(disc: Disc, out: Path, skip: list[tuple[int, int]]) -> dict:
@@ -40,6 +42,18 @@ def build_pack(disc: Disc, out: Path, skip: list[tuple[int, int]]) -> dict:
     tmp = out.with_suffix(".tmp")
     data = open(tmp, "wb")
     end = disc.sector_count
+    # Form 1 sectors whose subheader changes every few sectors (STR movie streams on the Arcade disc: one table entry
+    # per sector, 163k runs) are stored raw like Form 2 (2336 bytes with their subheader): one run for the stream.
+    subs = [disc.raw(a)[16:20] for a in range(end)]
+    short = bytearray(end)
+    a = 0
+    while a < end:
+        b = a
+        while b + 1 < end and subs[b + 1] == subs[a]:
+            b += 1
+        if not subs[a][2] & FORM2 and b - a + 1 < MIN_RUN:
+            short[a:b + 1] = bytes([1]) * (b - a + 1)
+        a = b + 1
     lba = 0
     while lba < end:
         sk = next((e for s, e in skip if s <= lba < e), None)
@@ -48,7 +62,7 @@ def build_pack(disc: Disc, out: Path, skip: list[tuple[int, int]]) -> dict:
             continue
         raw = disc.raw(lba)
         sub = raw[16:20]
-        if sub[2] & FORM2:
+        if sub[2] & FORM2 or short[lba]:
             stride, payload, key = 2336, raw[16:16 + 2336], b"\xff\xff\xff\xff"
         else:
             stride, payload, key = 2048, raw[24:24 + 2048], sub

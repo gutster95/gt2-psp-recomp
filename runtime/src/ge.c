@@ -728,6 +728,8 @@ static void setup_texture_full(int depth, int page, uint32_t clut)
  * or distorts parts of the 3D scene (fine in PPSSPP); everything is drawn in through mode then (settings.txt can
  * enable them for experiments). Widescreen (16:9 HUD + view window patches) works at 1x. */
 int g_hires = 0, g_widescreen = 0;
+int g_disp24;                    /* the display area is in 24-bit mode (gpu.c, GP1(08) bit 4) */
+static uint16_t *g_conv24;       /* 512x512 15-bit texture for the 24-bit display mode (present_scaled) */
 
 typedef struct {
     int x, y, w, h, used, drawn, band_clear, n3d_cur, n3d_last;
@@ -1596,8 +1598,26 @@ static int present_scaled(int tgt, int dx, int dy, int w, int h, int blank)
     set_atest(0);
     set_tex(0);
     flat_sprite(0, 0, 480, 272, 0xFF000000u);
+    const uint8_t *tex_base = (const uint8_t *)EDRAM;
+    int tex_y = dy, conv = 0;
+    if (!blank && g_disp24 && g_conv24) {
+        /* 24-bit display mode (GP1(08) bit 4, the Arcade disc's movies: MDEC output uploaded as RGB888, 3 bytes per
+         * pixel): converted into a 15-bit texture in RAM, read from the VRAM of the side that presents (eDRAM on
+         * the main CPU, the shadow on the Media Engine). Uncached writes: the GE reads RAM, the ME has no cache ops. */
+        uint16_t *d = (uint16_t *)((uintptr_t)g_conv24 | 0x40000000u);
+        int hh = h > 512 ? 512 : h, ww = w > 512 ? 512 : w;
+        for (int y = 0; y < hh; y++) {
+            const uint8_t *s = (const uint8_t *)(g_vram + ((dy + y) & 511) * 1024) + (dx & 1023) * 2;
+            uint16_t *o = d + y * 512;
+            for (int x = 0; x < ww; x++, s += 3)
+                o[x] = (uint16_t)((s[0] >> 3) | ((s[1] >> 3) << 5) | ((s[2] >> 3) << 10) | 0x8000);
+        }
+        tex_base = (const uint8_t *)g_conv24;
+        tex_y = 0;
+        conv = 1;
+    }
     if (!blank) {
-        int ax = dx & ~7, uo = dx - ax;
+        int ax = conv ? 0 : dx & ~7, uo = conv ? 0 : dx - ax;
         set_tex(1);
         sceGuTexMode(GU_PSM_5551, 0, 0, 0);
         sceGuTexFunc(GU_TFX_REPLACE, GU_TCC_RGB);
@@ -1608,8 +1628,11 @@ static int present_scaled(int tgt, int dx, int dy, int w, int h, int blank)
         /* GE textures are at most 512 wide: 640-pixel modes are drawn in strips */
         for (int s0 = 0; s0 < w; s0 += 256) {
             int s1 = s0 + 256 < w ? s0 + 256 : w;
-            sceGuTexImage(0, 512, h > 256 ? 512 : 256, 1024,
-                          (void *)(EDRAM + (unsigned)dy * 2048 + (unsigned)((ax + s0) & 1023) * 2));
+            if (conv)
+                sceGuTexImage(0, 512, h > 256 ? 512 : 256, 512, (void *)(tex_base + (unsigned)s0 * 2));
+            else
+                sceGuTexImage(0, 512, h > 256 ? 512 : 256, 1024,
+                              (void *)(tex_base + (unsigned)tex_y * 2048 + (unsigned)((ax + s0) & 1023) * 2));
             GeVtx *gv = sceGuGetMemory(2 * (int)sizeof(GeVtx));
             gv[0] = (GeVtx){(uint16_t)uo, 0, 0xFFFFFFFFu, (int16_t)(ox + s0 * ow / w), (int16_t)oy, 0, 0};
             gv[1] = (GeVtx){(uint16_t)(uo + s1 - s0), (uint16_t)h, 0xFFFFFFFFu, (int16_t)(ox + s1 * ow / w),
@@ -1840,6 +1863,7 @@ static void selftest_3d(void)
 
 void ge_init(void)
 {
+    if (rt_have_arcade()) g_conv24 = memalign(64, 512 * 512 * 2);   /* the Arcade disc's movies run in 24-bit mode */
     if (g_varena_edram) g_varena_size = 0x200000u - VARENA_EDRAM_OFF;
     memset((void *)0x00010000u, 0, 0x1000);         /* scratchpad: S, g_rs (raster_state_init), GeHot, memo */
     raster_state_init();

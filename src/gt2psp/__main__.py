@@ -42,7 +42,7 @@ def cmd_hash(args: argparse.Namespace) -> None:
 def _space(args: argparse.Namespace):
     from .analysis import Space
     from .image import load_overlays, load_psx_exe
-    exe = load_psx_exe(Path(args.files) / "SCUS_944.88")
+    exe = load_psx_exe(next(Path(args.files).glob("SCUS_944.*")))
     if args.ovl is None:
         return exe, None, Space([exe])
     ovl = load_overlays(Path(args.files) / "GT2.OVL")[args.ovl]
@@ -84,6 +84,8 @@ def cmd_analyze(args: argparse.Namespace) -> None:
 
 def cmd_functions(args: argparse.Namespace) -> None:
     from .program import build, to_json
+    from .profiles import use
+    use(args.disc)
     mods = build(Path(args.files))
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -96,6 +98,8 @@ def cmd_functions(args: argparse.Namespace) -> None:
 
 def cmd_recomp(args: argparse.Namespace) -> None:
     from .program import build, to_json
+    from .profiles import use
+    use(args.disc)
     from .recomp import generate
     mods = build(Path(args.files))
     out = Path(args.out)
@@ -130,6 +134,7 @@ def main() -> None:
     f = sub.add_parser("functions", help="partition all code (resident, boot, overlays) into functions")
     f.add_argument("--files", default="extracted/files")
     f.add_argument("--out", default="generated/functions.json")
+    f.add_argument("--disc", default="sim", choices=["sim", "arc"], help="disc profile (profiles.py)")
     f.set_defaults(func=cmd_functions)
     r = sub.add_parser("recomp", help="translate all modules to C")
     r.add_argument("--files", default="extracted/files")
@@ -138,6 +143,7 @@ def main() -> None:
                    help="memory profile (memprof.txt of a GT2_MEMPROF run); may be given several times "
                         "(default: data/memprof/*.txt)")
     r.add_argument("--no-memprof", action="store_true", help="all memory accesses checked (for profiling builds)")
+    r.add_argument("--disc", default="sim", choices=["sim", "arc"], help="disc profile (profiles.py)")
     r.set_defaults(func=cmd_recomp)
     for name, fn, hlp in (("disasm", cmd_disasm, "disassemble main EXE or an overlay"),
                           ("analyze", cmd_analyze, "function discovery, BIOS stubs, I/O accesses")):

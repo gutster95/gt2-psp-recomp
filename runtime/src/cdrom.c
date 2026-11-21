@@ -100,9 +100,13 @@ void cdrom_init(void)
     char path[320];
     snprintf(path, sizeof path, "%spakpath.txt", g_basedir);
     FILE *pf = fopen(path, "r");          /* tests through PSPLink: read the pack from the memory stick, not USB */
-    if (!pf || !fgets(path, sizeof path, pf)) snprintf(path, sizeof path, "%sGT2.PAK", g_basedir);
+    if (!pf || !fgets(path, sizeof path, pf)) snprintf(path, sizeof path, "%s%s", g_basedir, g_game == GAME_ARC ? "GT2A.PAK" : "GT2.PAK");
     if (pf) fclose(pf);
     path[strcspn(path, "\r\n")] = 0;
+    if (g_game == GAME_ARC) {                 /* pakpath.txt names GT2.PAK: the Arcade pack lies next to it */
+        size_t n = strlen(path);
+        if (n >= 7 && !strcmp(path + n - 7, "GT2.PAK")) snprintf(path + n - 7, sizeof path - (n - 7), "GT2A.PAK");
+    }
     g_cache = memalign(64, 2 * CACHE_SIZE);
     g_pak = sceIoOpen(path, PSP_O_RDONLY, 0);
     struct { char magic[8]; uint32_t nruns, total; } h;

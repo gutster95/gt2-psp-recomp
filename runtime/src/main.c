@@ -4,6 +4,9 @@
 #include <string.h>
 #include <pspkernel.h>
 #include <pspdebug.h>
+#include <pspctrl.h>
+#include <pspdisplay.h>
+#include <pspiofilemgr.h>
 #include <psppower.h>
 #include "rt.h"
 #include "gpu.h"
@@ -33,9 +36,12 @@ static int load_exe(void)
     uint32_t pc0 = *(uint32_t *)(hdr + 0x10), taddr = *(uint32_t *)(hdr + 0x18), tsize = *(uint32_t *)(hdr + 0x1C);
     if (tsize > 0x1F0000 || (tsize & 2047)) return 0;
     if (!cdrom_read_data(EXE_LBA + 1, tsize / 2048, g_ram + (taddr & 0x1FFFFF))) return 0;
-    logf_("SCUS_944.88: pc0=%08x text=%08x size=%08x\n", (unsigned)pc0, (unsigned)taddr, (unsigned)tsize);
+    logf_("%s: pc0=%08x text=%08x size=%08x\n", g_game == GAME_ARC ? "SCUS_944.55" : "SCUS_944.88", (unsigned)pc0,
+          (unsigned)taddr, (unsigned)tsize);
     return 1;
 }
+
+static int g_game_pref = -1;   /* settings.txt game=sim|arc: start that disc without the menu (tests); -1 = ask */
 
 /* Optional settings.txt next to the EBOOT, lines "name=0|1": widescreen, hires, pgxp, filter, hud_anchor. */
 static void load_settings(void)
@@ -55,6 +61,7 @@ static void load_settings(void)
             char *eq = strchr(line, '=');
             if (!eq) continue;
             *eq = 0;
+            if (!strcmp(line, "game")) { g_game_pref = eq[1] == 'a' ? GAME_ARC : eq[1] == 's' ? GAME_SIM : -1; continue; }
             for (unsigned i = 0; i < sizeof opts / sizeof opts[0]; i++)
                 if (!strcmp(line, opts[i].name)) *opts[i].var = (opts[i].var == &g_autoexit || opts[i].var == &g_gebench || opts[i].var == &g_walklog || opts[i].var == &g_membench || opts[i].var == &g_gedump || opts[i].var == &g_period_us || opts[i].var == &g_cd_pause_us || opts[i].var == &g_cd_seek_us || opts[i].var == &g_cd_first_us || opts[i].var == &g_card_event_us || opts[i].var == &g_card_fast || opts[i].var == &g_cd_ack_us || (opts[i].var >= &g_fps60_flip[0] && opts[i].var <= &g_fps60_flip[3])) ? atoi(eq + 1) : atoi(eq + 1) != 0;
         }
@@ -95,6 +102,64 @@ void quit_game(const char *why)
     sceKernelExitGame();
 }
 
+/* Start menu: which disc to play. The packs are converted on the PC (GT2.PAK Simulation, GT2A.PAK Arcade); with
+ * only one of them there is nothing to choose. */
+static int file_exists(const char *name)
+{
+    char p[320];
+    SceIoStat st;
+    snprintf(p, sizeof p, "%s%s", g_basedir, name);
+    return sceIoGetstat(p, &st) >= 0;
+}
+
+static int choose_game(void)
+{
+    if (!rt_have_arcade()) return GAME_SIM;
+    if (g_game_pref >= 0) return g_game_pref;
+    int sim = file_exists("GT2.PAK"), arc = file_exists("GT2A.PAK");
+    if (file_exists("pakpath.txt")) sim = arc = 1;       /* tests: packs on the memory stick */
+    if (!arc) return GAME_SIM;
+    if (!sim) return GAME_ARC;
+    static const char *const NAMES[2] = {"Simulation Mode", "Arcade Mode"};
+    pspDebugScreenInit();
+    pspDebugScreenClearLineDisable();
+    SceCtrlData pad;
+    sceCtrlSetSamplingCycle(0);
+    sceCtrlSetSamplingMode(PSP_CTRL_MODE_DIGITAL);
+    uint32_t prev = ~0u;                                  /* buttons held at start do not count */
+    int sel = 0;
+    for (int frame = 0;; frame++) {
+        sceCtrlPeekBufferPositive(&pad, 1);
+        uint32_t b = pad.Buttons, e = b & ~prev;
+        prev = b;
+        if (e & (PSP_CTRL_UP | PSP_CTRL_DOWN)) sel ^= 1;
+        if (e & (PSP_CTRL_CROSS | PSP_CTRL_START)) break;
+        if (frame == 0 || (e & (PSP_CTRL_UP | PSP_CTRL_DOWN))) {
+            pspDebugScreenSetBackColor(0xFF000000);
+            pspDebugScreenClear();
+            pspDebugScreenSetXY(19, 10);
+            pspDebugScreenSetTextColor(0xFFFFFFFF);
+            pspDebugScreenPrintf("GRAN TURISMO 2");
+            for (int i = 0; i < 2; i++) {
+                pspDebugScreenSetXY(19, 14 + 2 * i);
+                pspDebugScreenSetTextColor(i == sel ? 0xFF40FFFF : 0xFFA0A0A0);
+                pspDebugScreenPrintf("%c %s", i == sel ? '>' : ' ', NAMES[i]);
+            }
+            pspDebugScreenSetXY(19, 21);
+            pspDebugScreenSetTextColor(0xFF808080);
+            pspDebugScreenPrintf("Up/Down, X: start");
+        }
+        sceDisplayWaitVblankStart();
+    }
+    for (int i = 0; i < 60; i++) {                       /* the game must not see the X that started it */
+        sceCtrlPeekBufferPositive(&pad, 1);
+        if (!pad.Buttons) break;
+        sceDisplayWaitVblankStart();
+    }
+    pspDebugScreenClear();
+    return sel;
+}
+
 static int exit_callback(int a, int b, void *arg)
 {
     (void)a; (void)b; (void)arg;
@@ -133,6 +198,13 @@ int main(int argc, char **argv)
     }
     logf_("GT2 PSP runtime, base dir '%s'\n", dir);
     load_settings();
+    rt_set_game(choose_game());
+    logf_("game: %s\n", g_game == GAME_ARC ? "Arcade Mode (SCUS_944.55)" : "Simulation Mode (SCUS_944.88)");
+    if (g_game == GAME_ARC) {   /* the game patches (16:9 view, 60 fps, LOD) exist for the Simulation disc only */
+        extern int g_fps60, g_performance, g_lowlod, g_ws_menus;
+        g_widescreen = g_ws_menus = 0;
+        g_fps60 = g_performance = g_lowlod = 0;
+    }
     {   /* performance mode: 60 fps with the game's own trade-offs (no mirror/tire smoke) and low-detail opponents */
         extern int g_fps60, g_fx60, g_lowlod, g_performance;
         if (g_performance) { g_fps60 = 1; g_fx60 = 0; g_lowlod = 1; if (!g_track_lod) g_track_lod = 2; }

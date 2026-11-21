@@ -35,11 +35,14 @@ void bios_event_later(uint32_t cls, uint32_t spec)
  * 254 sectors in 105 ms, same save state. */
 int g_card_fast = 1;   /* 1: reads only (verified), 2: writes too (saving not verified yet) */
 extern int g_card_last_write;
-static int card_task_ok(void)
+/* the card task of each disc (Arcade: same code 0xF0 lower, context 0x801F00D0); 0 when the code does not match */
+static uint32_t card_task(void)
 {
     static int ok = -1;
-    if (ok < 0) ok = mem_r32(0x8007EACCu) == 0x3C04801Fu && mem_r32(0x8007EAD0u) == 0x248406E0u;   /* this EXE */
-    return ok;
+    static const uint32_t addr[2] = {0x8007EACCu, 0x8007E9DCu}, ctx_lo[2] = {0x248406E0u, 0x248400D0u};
+    uint32_t a = addr[g_game];
+    if (ok < 0) ok = mem_r32(a) == 0x3C04801Fu && mem_r32(a + 4) == ctx_lo[g_game];
+    return ok ? a : 0;
 }
 
 static void deliver(PsxCpu *c, uint32_t cls, uint32_t spec)
@@ -60,7 +63,8 @@ void bios_poll_events(PsxCpu *c)
         Pending p = g_pending[0];
         memmove(g_pending, g_pending + 1, sizeof(Pending) * (--g_npending));
         deliver(c, p.cls, p.spec);
-        if (g_card_fast && (g_card_fast >= 2 || !g_card_last_write) && p.cls == 0xF0000011u && card_task_ok()) rt_callback(c, 0x8007EACCu);
+        if (g_card_fast && (g_card_fast >= 2 || !g_card_last_write) && p.cls == 0xF0000011u && card_task())
+            rt_callback(c, card_task());
     }
 }
 

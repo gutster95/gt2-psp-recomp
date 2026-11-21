@@ -398,6 +398,8 @@ void gpu_present_core(void)
     int disabled = g_status & 0x800000u;
     static int frame;
     if (g_use_ge) {
+        extern int g_disp24;
+        g_disp24 = (g_disp_mode & 0x10) != 0;
         ge_present((int)g_disp_x, (int)g_disp_y, w, h, disabled);
         goto stats;
     }

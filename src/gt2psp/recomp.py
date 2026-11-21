@@ -139,6 +139,21 @@ OVERRIDE[("ovl0", 0x80020418)] = "c->r[2] = g_track_lod ? 0u : (uint32_t)ram_r8o
 OVERRIDE[("ovl0", 0x80020428)] = "c->r[2] = c->r[17] < (g_track_lod ? (uint32_t)g_track_lod : 3u);"
 
 
+SIM_HOOKS, SIM_OVERRIDE = dict(HOOKS), dict(OVERRIDE)
+
+
+def use_profile(p) -> None:
+    """Switch to a disc (profiles.py). The Simulation disc's game patches (HOOKS/OVERRIDE above) only apply to it;
+    other discs get their own runtime hooks."""
+    global OVL_WINDOW, REPLACE, WRAP, HOOKS, OVERRIDE, PREFIX
+    OVL_WINDOW = (0x80010000, p.resident_text[0])
+    REPLACE = {p.setjmp: "hle_setjmp", p.longjmp: "hle_longjmp"}
+    WRAP = {p.ovl_loader}
+    HOOKS = dict(SIM_HOOKS) if p.game_patches else dict(p.hooks)
+    OVERRIDE = dict(SIM_OVERRIDE) if p.game_patches else {}
+    PREFIX = p.prefix
+
+
 # Runtime functions that take the CPU but never touch c->r[] (GTE, coprocessor 0, division, interrupt polling,
 # the widescreen clipper): calls to them need no register write-back (see registers_to_locals).
 _NO_FLUSH = {"POLL", "gte_cmd", "gte_cmd_nf", "gte_read_data", "gte_write_data", "gte_read_ctrl", "gte_write_ctrl",
@@ -250,12 +265,15 @@ def registers_to_locals(body: list[str], dirty: int = ALL, info: dict | None = N
 _STACK_OPS = {"lb", "lbu", "lh", "lhu", "lw", "sb", "sh", "sw"}
 
 
+PREFIX = ""   # symbol prefix of the current disc (profiles.py: "" Simulation, "a" Arcade)
+
+
 def sym(mod: str, addr: int) -> str:
     if mod == "resident":
-        return f"f_{addr:08x}"
+        return f"{PREFIX}f_{addr:08x}"
     if mod == "boot":
-        return f"b_{addr:08x}"
-    return f"o{mod[3:]}_{addr:08x}"
+        return f"{PREFIX}b_{addr:08x}"
+    return f"{PREFIX}o{mod[3:]}_{addr:08x}"
 
 
 def R(n: int) -> str:
@@ -635,10 +653,11 @@ def tables(mods: list[Module]) -> str:
             out.append(f"    {{0x{f.start:08x}u, {s}}},")
         out.append("};")
         idx.append(f'    {{"{m.name}", {tn}, {len(m.funcs)}}},')
-    out.append("const ModuleTable g_modules[] = {")
+    pre = f"{PREFIX}_" if PREFIX else ""
+    out.append(f"const ModuleTable {pre}g_modules[] = {{")
     out += idx
     out.append("};")
-    out.append(f"const int g_num_modules = {len(mods)};")
+    out.append(f"const int {pre}g_num_modules = {len(mods)};")
     return "\n".join(out) + "\n"
 
 

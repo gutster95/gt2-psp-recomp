@@ -936,3 +936,27 @@ the Media Engine:
 * Open: PSP verification of this build. One run of eight on the PSP (0.75 ms spacing, gating, new snapshot ring)
   froze the whole PSP during boot, PSPLink included - cause unknown. The final defaults are verified only in
   PPSSPP (me_gpu=0): boot, attract race, GT mode with the save loaded.
+
+
+## 2026-11-21 - Arcade Mode disc (work in progress)
+
+* Recompiler: disc profiles (src/gt2psp/profiles.py; `recomp --disc arc --files extracted-arcade/files --out
+  generated/arcade`). The Arcade EXE (SCUS_944.55) is the same code ~0x90-0xF0 lower; its constants were derived with
+  code signatures (sigmap.py: jump targets and address immediates masked). Arcade symbols carry the prefix "a"
+  (af_/ab_/ao<N>_, a_g_modules). The Simulation output stays bit-identical (checked after every change).
+* Arcade-only recompiler fixes (kept off for the tested Simulation code): a data table in ovl2 taken as code
+  (text_exclude); constants passed to "load overlay a0 and longjmp to a1" (0x8005D9EC) belong to the loaded overlay,
+  not the caller (ovl1 passed ovl0's 0x80011f64, which in ovl1 split a switch); resume point after the jalr at ovl2
+  0x80014228; switch cases split off their jr become function starts. Making every jalr return a resume point hung
+  the game (splits inside loops become tail-call chains).
+* Runtime: one EBOOT with both discs. Start menu (main.c) when GT2.PAK and GT2A.PAK are present; settings.txt
+  `game=sim|arc` skips it. Per game: module tables, entry, overlay loader wrapper, pack, card task (Arcade
+  0x8007E9DC). Arcade runs without the Simulation game patches (16:9, 60 fps, LOD forced off; the settings menu
+  does not save there). Pack tool: Form 1 runs shorter than 8 sectors (STR movie streams) stored raw: 9 runs
+  instead of 163592.
+* 24-bit display mode (GP1(08) bit 4) for the Arcade disc's movies: presentation converts the RGB888 display area
+  into a 15-bit texture in RAM (ge.c). MDEC decoding (untested so far) works: intro movie correct.
+* PPSSPP: intro movie, title, "Game Selection" menu and attract race run. Entering a race: `resume at 801ff9f0`
+  after a longjmp (ovl2 menu code, never run on the Simulation disc) - open.
+* XMB icon/background from the user's Images/ (scripts/make_eboot_images.py -> build/ICON0.PNG, PIC1.PNG).
+* PSP: not yet tested with the dual build (PSPLink stopped answering).

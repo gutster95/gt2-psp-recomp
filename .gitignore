@@ -6,8 +6,11 @@ ISO/
 *.img
 # Extracted disc contents and anything generated from them
 extracted/
+extracted-arcade/
 build/
 generated/
+# User's artwork for the XMB images (scripts/make_eboot_images.py)
+Images/
 # Third-party reference port (not ours, contains no source anyway)
 Recomps/
 

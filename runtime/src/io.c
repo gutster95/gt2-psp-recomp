@@ -157,7 +157,7 @@ void io_vblank(void)
             io_fps60_changed();
             logf_("fps60_flip: fps60 %d at vblank %u\n", g_fps60, (unsigned)g_vblank_count);
         }
-    if (g_fps60 && !g_dyn_owned && g_ram[0x1D5864] == 2) { g_ram[0x1D5864] = 1; g_fps60_patched = 1; }
+    if (g_fps60 && !g_dyn_owned && g_game == GAME_SIM && g_ram[0x1D5864] == 2) { g_ram[0x1D5864] = 1; g_fps60_patched = 1; }
     card_tick();
     raise_irq(0);
     gpu_present();

@@ -24,12 +24,39 @@ uint64_t g_poll_now;                       /* time of the current rt_poll (for t
 int g_cur_overlay = -1;
 
 #define OVL_LO 0x80010000u
-#define OVL_HI 0x8005D600u
 
-/* Module order in g_modules: resident, boot, ovl0..ovl5 (see program.py). */
+/* The two discs (src/gt2psp/profiles.py): Simulation Mode (generated/) and Arcade Mode (generated/arcade/, symbols
+ * with the prefix "a"). g_game is chosen at start (main.c) before anything of the game runs. */
+int g_game;                                /* GAME_SIM / GAME_ARC */
+#ifdef GT2_ARCADE
+extern const ModuleTable a_g_modules[];
+void af_8005d570(PsxCpu *c);
+void af_8005da48_impl(PsxCpu *c);
+#endif
+typedef struct {
+    const ModuleTable *mods;               /* resident, boot, ovl0..ovl5 (see program.py) */
+    uint32_t ovl_hi;                       /* end of the overlay window = start of the resident code */
+    uint32_t ovl_table;                    /* overlay entry addresses (logging) */
+    void (*entry)(PsxCpu *c);
+} Game;
+static const Game g_games[] = {
+    {g_modules, 0x8005D600u, 0x80091174u, f_8005d600},
+#ifdef GT2_ARCADE
+    {a_g_modules, 0x8005D570u, 0x80090EB8u, af_8005d570},
+#endif
+};
+int rt_have_arcade(void) { return sizeof g_games / sizeof g_games[0] > 1; }
+static const Game *G_ = &g_games[0];
+void rt_set_game(int game)
+{
+    if (game == GAME_ARC && !rt_have_arcade()) game = GAME_SIM;
+    g_game = game;
+    G_ = &g_games[game];
+}
+
 static RecompFunc find_in(int mod, uint32_t addr)
 {
-    const ModuleTable *m = &g_modules[mod];
+    const ModuleTable *m = &G_->mods[mod];
     int lo = 0, hi = m->count - 1;
     while (lo <= hi) {
         int mid = (lo + hi) >> 1;
@@ -43,7 +70,7 @@ static RecompFunc find_in(int mod, uint32_t addr)
 RecompFunc lookup(uint32_t addr)
 {
     addr = (addr & 0x1FFFFFFFu) | 0x80000000u;
-    if (addr >= OVL_LO && addr < OVL_HI)
+    if (addr >= OVL_LO && addr < G_->ovl_hi)
         return find_in(g_cur_overlay < 0 ? 1 : 2 + g_cur_overlay, addr);
     return find_in(0, addr);
 }
@@ -109,7 +136,7 @@ void run_program(PsxCpu *c)
     if (!started) {
         started = 1;
         c->r[31] = SENTINEL_RA;
-        f_8005d600(c);
+        G_->entry(c);
         logf_("program entry returned, v0=%08x\n", (unsigned)c->r[2]);
         return;
     }
@@ -130,15 +157,19 @@ void run_program(PsxCpu *c)
 /* ---- overlay loader hook ------------------------------------------------------------------------------ */
 
 uint32_t g_overlay_loads;   /* bumped by every overlay load (gpu.c race work statistics) */
-void f_8005dad8(PsxCpu *c)
+static void overlay_load(PsxCpu *c, void (*impl)(PsxCpu *c))
 {
     int n = (int)c->r[4];
-    logf_("overlay load %d (entry %08x) at vblank %u\n", n, (unsigned)mem_r32(0x80091174u + 4 * n),
+    logf_("overlay load %d (entry %08x) at vblank %u\n", n, (unsigned)mem_r32(G_->ovl_table + 4 * n),
           (unsigned)g_vblank_count);
-    f_8005dad8_impl(c);
+    impl(c);
     g_cur_overlay = n;
     g_overlay_loads++;
 }
+void f_8005dad8(PsxCpu *c) { overlay_load(c, f_8005dad8_impl); }
+#ifdef GT2_ARCADE
+void af_8005da48(PsxCpu *c) { overlay_load(c, af_8005da48_impl); }
+#endif
 
 /* ---- time & interrupts ---------------------------------------------------------------------------------- */
 
