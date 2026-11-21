@@ -1,6 +1,8 @@
 /* In-game settings menu: L + R + SELECT opens it anywhere (title, menus, race). The game thread stops inside rt_poll
  * while the menu is open (the game is paused, SPU output muted); the menu is drawn with pspdebug's 8x8 font into the
- * picture on screen. Every option except 16:9 takes effect at once; closing writes settings.txt. */
+ * picture on screen. Every option takes effect at once; closing writes them to settings.txt.
+ * The picture mode (30 / 60 fps) and 16:9 are chosen in the launcher before the game starts and only shown here:
+ * switching 30 -> 60 fps during a race ran the game at double speed. */
 #include <stdio.h>
 #include <string.h>
 #include <pspctrl.h>
@@ -9,30 +11,21 @@
 #include <pspkernel.h>
 #include "rt.h"
 
-extern int g_fps60, g_fx60, g_lowlod, g_performance, g_show_fps, g_widescreen, g_lr_shift, g_fps60_auto, g_race_buttons;
+extern int g_fps60, g_fx60, g_lowlod, g_show_fps, g_lr_shift, g_race_buttons;
 extern volatile int g_spu_paused;
-void io_fps60_changed(void);
 
 #define COMBO (PSP_CTRL_LTRIGGER | PSP_CTRL_RTRIGGER | PSP_CTRL_SELECT)
 
-static int g_ws_next = -1;   /* 16:9 for the next start */
+enum { M_FX, M_LOD, M_FPS, M_LR, M_RB, M_CLOSE, M_COUNT };
 
-enum { M_MODE, M_FPS60, M_AUTO, M_FX, M_LOD, M_FPS, M_LR, M_RB, M_WS, M_CLOSE, M_COUNT };
-
-static int mode_of(void)     /* 0 quality, 1 performance, 2 custom */
-{
-    if (!g_fps60 && !g_lowlod) return 0;
-    if (g_fps60 && !g_fx60 && g_lowlod) return 1;
-    return 2;
-}
-
+/* Only the menu's own keys are rewritten; every other line of settings.txt (mode, 16:9, test options) is kept. */
 static void save_settings(void)
 {
-    static const char *const KEYS[] = {"performance", "fps60", "fps60_effects", "lowlod", "fps", "widescreen", "lr_shift", "fps60_auto", "race_buttons"};
+    static const char *const KEYS[] = {"fps60_effects", "lowlod", "fps", "lr_shift", "race_buttons"};
     char path[300], keep[2048] = "", line[256];
     snprintf(path, sizeof path, "%ssettings.txt", g_basedir);
     FILE *f = fopen(path, "r");
-    if (f) {                                  /* keep every line that is not one of ours */
+    if (f) {
         while (fgets(line, sizeof line, f)) {
             int ours = 0;
             for (unsigned i = 0; i < sizeof KEYS / sizeof *KEYS; i++) {
@@ -50,50 +43,35 @@ static void save_settings(void)
     f = fopen(path, "w");
     if (!f) { logf_("menu: cannot write %s\n", path); return; }
     fputs(keep, f);
-    fprintf(f, "widescreen=%d\nperformance=%d\nfps60=%d\nfps60_effects=%d\nlowlod=%d\nfps=%d\nlr_shift=%d\nfps60_auto=%d\nrace_buttons=%d\n",
-            g_ws_next >= 0 ? g_ws_next : g_widescreen, mode_of() == 1, g_fps60, g_fx60, g_lowlod, g_show_fps, g_lr_shift, g_fps60_auto, g_race_buttons);
+    fprintf(f, "fps60_effects=%d\nlowlod=%d\nfps=%d\nlr_shift=%d\nrace_buttons=%d\n", g_fx60, g_lowlod, g_show_fps,
+            g_lr_shift, g_race_buttons);
     fclose(f);
-    logf_("menu: settings saved (mode %d, fps60 %d, effects %d, lowlod %d, fps %d)\n", mode_of(), g_fps60, g_fx60,
-          g_lowlod, g_show_fps);
+    logf_("menu: settings saved (effects %d, lowlod %d, fps %d, lr_shift %d, race_buttons %d)\n", g_fx60, g_lowlod,
+          g_show_fps, g_lr_shift, g_race_buttons);
 }
 
-static void toggle(int item, int dir)
+static void toggle(int item)
 {
-    int was60 = g_fps60;
     switch (item) {
-    case M_MODE: case M_FPS60:
-        /* chosen in the launcher before the game starts: switching 30 -> 60 fps during a race ran the game at double
-         * speed (the game sets up its timing from the frame interval when a race starts) */
-        break;
-    case M_AUTO: g_fps60_auto ^= 1; break;
     case M_FX: g_fx60 ^= 1; break;
     case M_LOD: g_lowlod ^= 1; break;
     case M_FPS: g_show_fps ^= 1; break;
     case M_LR: g_lr_shift ^= 1; break;
     case M_RB: g_race_buttons ^= 1; break;
-    case M_WS: g_ws_next = (g_ws_next >= 0 ? g_ws_next : g_widescreen) ^ 1; break;
     }
-    (void)dir;
-    if (g_fps60 != was60) io_fps60_changed();
 }
 
 static void draw(uint32_t *base, int sel)
 {
-    static const char *const MODES[] = {"Quality (30 fps)", "Performance (60 fps)", "Custom"};
     char v[M_COUNT][40];
-    snprintf(v[M_MODE], 40, "%s", MODES[mode_of()]);
-    snprintf(v[M_FPS60], 40, "%s  (start menu)", g_fps60 ? "on" : "off");
-    snprintf(v[M_AUTO], 40, "%s", g_fps60_auto ? "auto (30 when needed)" : "always 60");
     snprintf(v[M_FX], 40, "%s", g_fx60 ? "on" : "off");
     snprintf(v[M_LOD], 40, "%s", g_lowlod ? "low" : "normal");
     snprintf(v[M_FPS], 40, "%s", g_show_fps ? "on" : "off");
     snprintf(v[M_LR], 40, "%s", g_lr_shift ? "shift (L2/R2)" : "views (L1/R1)");
     snprintf(v[M_RB], 40, "%s", g_race_buttons ? "X gas, square brake" : "as the game");
-    int ws = g_ws_next >= 0 ? g_ws_next : g_widescreen;
-    snprintf(v[M_WS], 40, "%s%s", ws ? "on" : "off", ws != g_widescreen ? "  (after restart)" : "");
     v[M_CLOSE][0] = 0;
-    static const char *const NAMES[M_COUNT] = {"Mode", "60 fps", "60 fps lock", "Mirror + smoke at 60 fps", "Opponent car detail",
-                                               "FPS / CPU counter", "L / R buttons", "Race buttons", "Widescreen 16:9", "Close and save"};
+    static const char *const NAMES[M_COUNT] = {"Mirror + smoke", "Opponent car detail", "FPS / CPU counter",
+                                               "L / R buttons", "Race buttons", "Close and save"};
     pspDebugScreenSetBase(base);
     pspDebugScreenSetBackColor(0xFF301000);
     pspDebugScreenSetTextColor(0xFFFFFFFF);
@@ -103,17 +81,20 @@ static void draw(uint32_t *base, int sel)
         pspDebugScreenPrintData("                                              ", 46);
     }
     pspDebugScreenSetXY(x0, y0);
-    pspDebugScreenPrintf("GT2 PSP - settings");
+    pspDebugScreenPrintf("GT2 PSP - Settings");
+    pspDebugScreenSetXY(x0, y0 + 1);
+    pspDebugScreenSetTextColor(0xFFA0A0A0);
+    pspDebugScreenPrintf("Mode: %s", g_fps60 ? "Performance (60 fps)" : "Quality (30 fps)");
     for (int i = 0; i < M_COUNT; i++) {
-        pspDebugScreenSetXY(x0, y0 + 2 + i);
+        pspDebugScreenSetXY(x0, y0 + 3 + i);
         pspDebugScreenSetTextColor(i == sel ? 0xFF40FFFF : 0xFFFFFFFF);
-        pspDebugScreenPrintf("%c %-25s %s", i == sel ? '>' : ' ', NAMES[i], v[i]);
+        pspDebugScreenPrintf("%c %-22s %s", i == sel ? '>' : ' ', NAMES[i], v[i]);
     }
     pspDebugScreenSetTextColor(0xFFA0A0A0);
-    pspDebugScreenSetXY(x0, y0 + M_COUNT + 3);
+    pspDebugScreenSetXY(x0, y0 + M_COUNT + 4);
     pspDebugScreenPrintf("Up/Down select, X/Left/Right change");
     pspDebugScreenSetXY(x0, y0 + M_COUNT + 5);
-    pspDebugScreenPrintf("SELECT+L/R: the other L/R pair");
+    pspDebugScreenPrintf("Mode: in the start menu");
     pspDebugScreenSetXY(x0, y0 + M_COUNT + 6);
     pspDebugScreenPrintf("O / START / L+R+SELECT: back to the game");
 }
@@ -145,7 +126,7 @@ static void run(void)
         if (e & PSP_CTRL_DOWN) sel = (sel + 1) % M_COUNT;
         if (e & (PSP_CTRL_CROSS | PSP_CTRL_LEFT | PSP_CTRL_RIGHT)) {
             if (sel == M_CLOSE) { if (e & PSP_CTRL_CROSS) break; }
-            else toggle(sel, (e & PSP_CTRL_LEFT) ? -1 : 1);
+            else toggle(sel);
         }
         sceDisplayGetFrameBuf(&top, &bw, &fmt, PSP_DISPLAY_SETBUF_NEXTFRAME);
         if (top) draw((uint32_t *)((uintptr_t)top | 0x40000000u), sel);

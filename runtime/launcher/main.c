@@ -63,14 +63,17 @@ static int read_mode(void)
 
 static void write_mode(int perf)
 {
-    static const char *const KEYS[] = {"performance=", "fps60=", "fps60_effects=", "lowlod="};
+    /* the mode keys; fps60_auto (old lock setting, now "always 60"); on a mode change also the menu's mirror/smoke and
+     * opponent detail choices, so the new mode starts with its defaults */
+    static const char *const KEYS[] = {"performance=", "fps60=", "fps60_auto=", "fps60_effects=", "lowlod="};
+    int nkeys = perf != read_mode() ? 5 : 3;
     char p[320], line[256], keep[4096] = "";
     snprintf(p, sizeof p, "%ssettings.txt", g_dir);
     FILE *f = fopen(p, "r");
     if (f) {
         while (fgets(line, sizeof line, f)) {
             int ours = 0;
-            for (int i = 0; i < 4; i++) if (!strncmp(line, KEYS[i], strlen(KEYS[i]))) ours = 1;
+            for (int i = 0; i < nkeys; i++) if (!strncmp(line, KEYS[i], strlen(KEYS[i]))) ours = 1;
             size_t l = strlen(line);
             if (!ours && l > 1 && strlen(keep) + l + 2 < sizeof keep) {
                 strcat(keep, line);
@@ -82,8 +85,7 @@ static void write_mode(int perf)
     f = fopen(p, "w");
     if (!f) return;
     fputs(keep, f);
-    fputs(perf ? "performance=1\nfps60=1\nfps60_effects=0\nlowlod=1\n" : "performance=0\nfps60=0\nfps60_effects=1\nlowlod=0\n",
-          f);
+    fputs(perf ? "performance=1\nfps60=1\n" : "performance=0\nfps60=0\n", f);   /* mirror/smoke + detail: by mode */
     fclose(f);
 }
 

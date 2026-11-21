@@ -43,8 +43,8 @@ static void seen(uint32_t off, const char *rw, uint32_t v)
 void raise_irq(int bit) { g_i_stat |= 1u << bit; }
 
 int g_fps60;   /* settings.txt fps60: frame interval 1 instead of 2 (recomp.py, Silent's 60 FPS cheat); experiment */
-int g_fx60 = 1;   /* fps60_effects: keep mirror and tire smoke at 60 fps (0: the game turns them off) */
-int g_lowlod;     /* lowlod: other cars always at the lowest LOD (recomp.py) */
+int g_fx60 = -1;  /* fps60_effects: mirror and tire smoke on/off (-1: by mode, main.c) */
+int g_lowlod = -1; /* lowlod: other cars always at the lowest LOD (recomp.py; -1: by mode, main.c) */
 int g_track_lod;  /* track_lod: distance classes with the full scenery model (0 = game: 3, replays all) */
 int g_performance;   /* performance=1: fps60, fps60_effects=0, lowlod=1 (main.c) */
 
@@ -71,7 +71,7 @@ static uint32_t g_dyn_wait;     /* RAM offset of the display struct's wait byte 
  * scene keeps missing (3 of the last 32 frames), the game is locked to 30 fps (every frame waits 2 vblanks); it goes
  * back to 60 once every frame of two seconds was ready in 15.5 ms (work = end of the previous wait to the start of
  * this one, including the wait for the Media Engine). The time step follows real time in both. */
-int g_fps60_auto = 1;
+int g_fps60_auto = 0;   /* default "always 60" in performance mode (user's choice 2026-11-21) */
 int g_lock30;                 /* currently locked to 30 fps (fps counter, statistics) */
 uint32_t g_lock_switches;
 void rt_frame_step(uint32_t disp, int after_wait)
