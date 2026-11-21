@@ -39,7 +39,9 @@ static void log_drain(void)
         r += n;
     }
     g_ring_r = r;
-    if (!g_log_quit) {
+    /* reopen only on the memory stick: on host0 (PSPLink) a close/open racing with a pspsh screenshot blocked the
+     * writer for good, and the host sees the size anyway */
+    if (!g_log_quit && strncmp(g_log_path, "host", 4)) {
         sceIoClose(g_log_fd);
         g_log_fd = sceIoOpen(g_log_path, PSP_O_WRONLY | PSP_O_APPEND, 0777);
     }
@@ -65,7 +67,8 @@ void log_init(const char *dir)
     g_log_sema = sceKernelCreateSema("log", 0, 1, 1, 0);
     g_log_wake = sceKernelCreateSema("logwake", 0, 0, 1, 0);
     g_log_io = sceKernelCreateSema("logio", 0, 1, 1, 0);
-    SceUID t = sceKernelCreateThread("logw", log_thread, 0x48, 0x1000, PSP_THREAD_ATTR_USER, 0);
+    /* above the game thread (0x20): at 60 fps the game thread never sleeps and a lower writer starved (log stopped) */
+    SceUID t = sceKernelCreateThread("logw", log_thread, 0x1F, 0x1000, PSP_THREAD_ATTR_USER, 0);
     if (t >= 0) sceKernelStartThread(t, 0, 0);
 }
 

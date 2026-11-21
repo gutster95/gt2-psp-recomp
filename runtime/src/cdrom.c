@@ -51,6 +51,7 @@ static uint8_t g_filter_file, g_filter_chan;
 static uint32_t g_setloc = LEADIN, g_pos = LEADIN;     /* MSF-absolute sector numbers */
 static int g_reading;
 static uint64_t g_next_sector_at;
+int g_cd_pause_us = 2000, g_cd_seek_us = 2000;   /* settings cd_pause_us / cd_seek_us (test) */
 int g_period_us = 750;                     /* data sector spacing (0.75 ms = 1.5 ms halved, tested); 0.1 ms breaks the game's CD code (DEVLOG) */
 static uint32_t g_st_sectors;              /* statistics of the current read */
 static uint64_t g_st_start;
@@ -281,7 +282,7 @@ static void command(uint8_t cmd)
         break;
     case 0x07: g_stat |= 0x02; push_stat(ACK, 3); push_stat(50000, 2); break;  /* MotorOn */
     case 0x08: stop_reading(); push_stat(ACK, 3); g_stat &= ~0x02; push_stat(100000, 2); break;  /* Stop */
-    case 0x09: push_stat(ACK, 3); stop_reading(); push_stat(2000, 2); break;    /* Pause (a drive takes ~30 ms; GT2 pauses after every read, 2 ms saves ~1 s per load) */
+    case 0x09: push_stat(ACK, 3); stop_reading(); push_stat((uint64_t)g_cd_pause_us, 2); break;    /* Pause (a drive takes ~30 ms; GT2 pauses after every read, 2 ms saves ~1 s per load) */
     case 0x0A:                                                              /* Init */
         g_mode = 0x20;
         stop_reading();
@@ -314,7 +315,7 @@ static void command(uint8_t cmd)
         g_stat |= 0x40;
         push_stat(ACK, 3);
         g_stat &= ~0x40;
-        push_stat(2000, 2);                                                 /* seek done (no real drive) */
+        push_stat((uint64_t)g_cd_seek_us, 2);                               /* seek done (no real drive) */
         break;
     case 0x19:                                                              /* Test */
         if (g_params[0] == 0x20) { uint8_t b[4] = {0x94, 0x09, 0x19, 0xC0}; push(ACK, 3, b, 4); }

@@ -57,7 +57,8 @@ uint32_t g_step_hist[4];      /* statistics: time steps given (1, 2, 3+) and fra
  * before the wait the interval is 1 (no frame is stretched to two vblanks), after it the vblanks the frame really
  * took (1 or 2, more is carried over, at most 4) - the next frame simulates that much time, like the game's own
  * 30 fps mode with interval 2. The frame rate floats between 30 and 60, game time follows real time. */
-static int g_dyn_owned;       /* the interval byte is managed here (io_vblank leaves it alone) */
+static int g_dyn_owned;         /* the interval byte is managed here (io_vblank leaves it alone) */
+static uint32_t g_dyn_wait;     /* RAM offset of the display struct's wait byte we manage (0: none) */
 /* fps60_auto (default on): stable frame rates. Frames that miss 60 fps alternate 1 and 2 vblanks (judder). When a
  * scene keeps missing (3 of the last 32 frames), the game is locked to 30 fps (every frame waits 2 vblanks); it goes
  * back to 60 once every frame of two seconds was ready in 15.5 ms (work = end of the previous wait to the start of
@@ -84,7 +85,14 @@ void rt_frame_step(uint32_t disp, int after_wait)
      * global interval at 0x801D5864 */
     const uint32_t G = 0x1D5864u;
     if (!g_fps60 || !g_fps60_dyn) {
-        if (g_dyn_owned) { g_ram[G] = (uint8_t)(g_fps60 ? 1 : 2); g_dyn_owned = 0; }
+        if (g_dyn_owned) {
+            g_ram[G] = (uint8_t)(g_fps60 ? 1 : 2);
+            /* the wait byte we set to 1 must go back too: with wait 1 and the game's step 2 the race ran at 60 fps
+             * with 30 fps time steps (double speed), and 30 fps could not be switched back on */
+            if (!g_fps60 && g_dyn_wait == a && a < PSX_RAM_SIZE) g_ram[a] = 2;
+            g_dyn_owned = 0;
+        }
+        g_dyn_wait = 0;
         return;
     }
     static uint64_t t_aw;                             /* end of the previous wait */
@@ -105,7 +113,10 @@ void rt_frame_step(uint32_t disp, int after_wait)
                 }
             }
             /* the wait: one vblank, or two when locked to 30 fps */
-            if (a < PSX_RAM_SIZE && g_ram[a] == g_ram[G]) g_ram[a] = (uint8_t)(g_fps60_auto && g_lock30 ? 2 : 1);
+            if (a < PSX_RAM_SIZE && (g_ram[a] == g_ram[G] || g_dyn_wait == a)) {
+                g_ram[a] = (uint8_t)(g_fps60_auto && g_lock30 ? 2 : 1);
+                g_dyn_wait = a;
+            }
         }
         return;
     }
@@ -136,9 +147,16 @@ void io_fps60_changed(void)
     g_fps60_patched = 0;
 }
 
+int g_fps60_flip[4];   /* settings.txt fps60_flip1..4: test - toggle fps60 at these vblanks, like the settings menu */
 void io_vblank(void)
 {
     g_vblank_count++;
+    for (int i = 0; i < 4; i++)
+        if (g_fps60_flip[i] && g_vblank_count == (uint32_t)g_fps60_flip[i]) {
+            g_fps60 ^= 1;
+            io_fps60_changed();
+            logf_("fps60_flip: fps60 %d at vblank %u\n", g_fps60, (unsigned)g_vblank_count);
+        }
     if (g_fps60 && !g_dyn_owned && g_ram[0x1D5864] == 2) { g_ram[0x1D5864] = 1; g_fps60_patched = 1; }
     card_tick();
     raise_irq(0);

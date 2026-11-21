@@ -888,3 +888,27 @@ the Media Engine:
   pauses after every read (29 Pause commands per load) and the emulated drive answered each after 30 ms (SeekL
   20 ms). Pause/SeekL now answer after 2 ms: GT mode 1.1 s, boot load 0.97 -> 0.69 s. Sector spacing below
   0.75 ms still hangs the game (0.2 and 0.4 ms tested on the PSP), so 0.75 ms stays (`cd_period_us` for tests).
+
+
+## 2026-11-21 - Broken race HUD text on the ME path, 60 -> 30 fps switch, log writer
+
+* User report: race HUD text "pixelated", performance mode at double speed, no way back from 60 to 30 fps.
+* HUD: the glyphs were wrong (the clock showed "2:22.222" instead of "0:00.000"), not a scaling problem. Same
+  build with `me_gpu=0`: clean. The ME received CPU->VRAM block DMAs (LoadImage) as a RAM address and read the
+  words when it got to the command; GT2 builds each HUD string's glyphs in one buffer and reuses it at once for the
+  next string, so a lagging ME uploaded the next string's pixels. Timing-dependent (how far the ME is behind), so
+  it showed in the 16:19 screenshots of yesterday's build too, only at other moments. me.c now copies the words
+  into a 256 KB snapshot ring at DMA time (CMD_BLOCK_SNAP), as the PS1 DMA reads them then; when the ring wraps,
+  me_join first. Checked on the PSP: six race screenshots over 10 s, all clean, in quality and performance mode.
+  The CD timing changes of 2026-11-20 were suspected first and ruled out (all combinations tested,
+  `cd_pause_us` / `cd_seek_us` settings added for that); the screenshots only differed because faster loads
+  start the race earlier.
+* 60 -> 30 fps (settings menu, or performance -> quality): fps60_dynamic sets the display struct's wait byte to 1
+  and the game's step byte (0x801D5864) per frame. Switching off only restored the step byte to 2, the wait byte
+  stayed 1: 60 frames per second with 30 fps time steps = double speed, and 30 fps never came back. The managed
+  wait byte is remembered (g_dyn_wait) and set back to 2 when fps60 goes off. Test: `fps60_flip1..4=<vblank>`
+  toggles fps60 like the menu; attract race 30 -> 60 -> 30 -> 60 -> 30 switches cleanly (pacing 0/60 at 30 fps).
+* Log writer: at 60 fps the game thread never sleeps and the writer (priority 0x48) starved - the log stopped
+  ~10 s into races. Now 0x1F (above the game thread; it sleeps on its semaphore and writes once a second). On host0
+  (PSPLink) the file is no longer closed/reopened per drain (raced with pspsh screenshots).
+* `cd_period_us` was read as 0/1 (missing from the numeric settings list) - fixed.

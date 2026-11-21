@@ -29,7 +29,7 @@ int g_me_active;
 
 #define RING 4096
 #define LOGN 64
-enum { CMD_GP0 = 1, CMD_GP1, CMD_WALK, CMD_BLOCK_IN, CMD_BLOCK_OUT, CMD_VBLANK, CMD_READ1 };
+enum { CMD_GP0 = 1, CMD_GP1, CMD_WALK, CMD_BLOCK_IN, CMD_BLOCK_OUT, CMD_VBLANK, CMD_READ1, CMD_BLOCK_SNAP };
 
 typedef struct {
     uint32_t head, tail;                 /* commands posted (main) / processed (ME), monotonic */
@@ -123,6 +123,10 @@ static void me_exec(volatile uint32_t *e)
         if ((a & 0x1FFFFC) + 4 * n <= PSX_RAM_SIZE) gpu_packet((const uint32_t *)(g_ram + (a & 0x1FFFFC)), n);   /* uploads */
         else for (uint32_t i = 0; i < n; i++) gpu_gp0(*(uint32_t *)(g_ram + ((a + 4 * i) & 0x1FFFFC)));
         break;
+    case CMD_BLOCK_SNAP:                         /* uploads from a snapshot taken when the game started the DMA */
+        me_dcache_wbinv_all();
+        gpu_packet((const uint32_t *)a, n);
+        break;
     case CMD_BLOCK_OUT:
         for (uint32_t i = 0; i < n; i++)
             *(volatile uint32_t *)(((uintptr_t)(g_ram + ((a + 4 * i) & 0x1FFFFC))) | 0x40000000u) = gpu_read();
@@ -202,8 +206,26 @@ void me_post_walk(uint32_t madr)
     g_dma_idx = SH->head;
     g_walk_t0 = now_us();
 }
+/* CPU -> VRAM block DMA: the ME runs behind the game, and GT2 reuses the source buffer right after the DMA (the race
+ * HUD builds each text's glyphs in one buffer and uploads them string by string). Reading g_ram later uploaded the
+ * next string's pixels (wrong HUD glyphs, "2:22.222"). The words are copied at DMA time into this ring, as the PS1
+ * DMA would have read them then; when it wraps, the ME first finishes every queued command. */
+#define SNAP_WORDS (64 * 1024)
+static uint32_t *g_snap;   /* heap (keeps the BSS layout of the hot data) */
+static uint32_t g_snap_pos;
 void me_post_block(uint32_t madr, uint32_t words, int to_gpu)
 {
+    if (!g_snap) g_snap = memalign(64, SNAP_WORDS * 4);
+    if (to_gpu && g_snap && words <= SNAP_WORDS && (madr & 0x1FFFFC) + 4 * words <= PSX_RAM_SIZE) {
+        if (g_snap_pos + words > SNAP_WORDS) { me_join(); g_snap_pos = 0; }
+        uint32_t *d = &g_snap[g_snap_pos];
+        memcpy(d, g_ram + (madr & 0x1FFFFC), words * 4);
+        g_snap_pos = (g_snap_pos + words + 15) & ~15u;   /* 64-byte aligned slices: no shared cache lines */
+        sceKernelDcacheWritebackRange(d, words * 4);
+        post(CMD_BLOCK_SNAP, (uint32_t)d, words);
+        g_dma_idx = SH->head;
+        return;
+    }
     if (to_gpu) sceKernelDcacheWritebackAll();
     else sceKernelDcacheWritebackInvalidateRange(g_ram + madr, words * 4);   /* the ME writes it uncached */
     post(to_gpu ? CMD_BLOCK_IN : CMD_BLOCK_OUT, madr, words);
