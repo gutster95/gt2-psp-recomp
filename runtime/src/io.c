@@ -48,6 +48,13 @@ int g_lowlod;     /* lowlod: other cars always at the lowest LOD (recomp.py) */
 int g_track_lod;  /* track_lod: distance classes with the full scenery model (0 = game: 3, replays all) */
 int g_performance;   /* performance=1: fps60, fps60_effects=0, lowlod=1 (main.c) */
 
+/* the race frame interval byte (0x801D5864 on the Simulation disc; Arcade: 0x5A0 lower, all references to the race
+ * display struct 0x801D585C/0x801D52BC moved alike, src/gt2psp/profiles.py) */
+#ifdef GT2_ARC_BUILD
+static const uint32_t g_interval = 0x1D52C4u;
+#else
+static const uint32_t g_interval = 0x1D5864u;
+#endif
 static int g_fps60_patched;   /* the frame interval currently 1 is ours (was 2) */
 int g_fps60_dyn = 1;          /* settings.txt fps60_dynamic: game time step = vblanks that really passed */
 uint32_t g_step_hist[4];      /* statistics: time steps given (1, 2, 3+) and frames with debt */
@@ -83,7 +90,7 @@ void rt_frame_step(uint32_t disp, int after_wait)
     }
     /* the wait uses a copy of the interval in the display struct (a stack variable); the simulation reads the
      * global interval at 0x801D5864 */
-    const uint32_t G = 0x1D5864u;
+    const uint32_t G = g_interval;
     if (!g_fps60 || !g_fps60_dyn) {
         if (g_dyn_owned) {
             g_ram[G] = (uint8_t)(g_fps60 ? 1 : 2);
@@ -143,7 +150,7 @@ void rt_frame_step(uint32_t disp, int after_wait)
 /* settings menu (menu.c) switched fps60: back to the game's interval 2 if we had made it 1 */
 void io_fps60_changed(void)
 {
-    if (!g_fps60 && g_fps60_patched && g_ram[0x1D5864] == 1) g_ram[0x1D5864] = 2;
+    if (!g_fps60 && g_fps60_patched && g_ram[g_interval] == 1) g_ram[g_interval] = 2;
     g_fps60_patched = 0;
 }
 
@@ -157,7 +164,7 @@ void io_vblank(void)
             io_fps60_changed();
             logf_("fps60_flip: fps60 %d at vblank %u\n", g_fps60, (unsigned)g_vblank_count);
         }
-    if (g_fps60 && !g_dyn_owned && g_game == GAME_SIM && g_ram[0x1D5864] == 2) { g_ram[0x1D5864] = 1; g_fps60_patched = 1; }
+    if (g_fps60 && !g_dyn_owned && g_ram[g_interval] == 2) { g_ram[g_interval] = 1; g_fps60_patched = 1; }
     card_tick();
     raise_irq(0);
     gpu_present();

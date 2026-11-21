@@ -28,7 +28,6 @@ static int mode_of(void)     /* 0 quality, 1 performance, 2 custom */
 
 static void save_settings(void)
 {
-    if (g_game == GAME_ARC) return;   /* Arcade runs with the Simulation-only options forced off: keep the file as it is */
     static const char *const KEYS[] = {"performance", "fps60", "fps60_effects", "lowlod", "fps", "widescreen", "lr_shift", "fps60_auto", "race_buttons"};
     char path[300], keep[2048] = "", line[256];
     snprintf(path, sizeof path, "%ssettings.txt", g_basedir);

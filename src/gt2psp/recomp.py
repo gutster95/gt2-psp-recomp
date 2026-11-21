@@ -149,8 +149,12 @@ def use_profile(p) -> None:
     OVL_WINDOW = (0x80010000, p.resident_text[0])
     REPLACE = {p.setjmp: "hle_setjmp", p.longjmp: "hle_longjmp"}
     WRAP = {p.ovl_loader}
-    HOOKS = dict(SIM_HOOKS) if p.game_patches else dict(p.hooks)
-    OVERRIDE = dict(SIM_OVERRIDE) if p.game_patches else {}
+    if p.patch_map:   # the Simulation patches at this disc's addresses (profiles.py)
+        HOOKS = {(m, p.patch_map[(m, a)]): code for (m, a), code in SIM_HOOKS.items()}
+        OVERRIDE = {(m, p.patch_map[(m, a)]): code for (m, a), code in SIM_OVERRIDE.items()}
+    else:
+        HOOKS = dict(SIM_HOOKS) if p.game_patches else dict(p.hooks)
+        OVERRIDE = dict(SIM_OVERRIDE) if p.game_patches else {}
     PREFIX = p.prefix
     RESUME_FULL_RETURN = p.resume_full_return
     RESUME_INSIDE = p.resume_inside

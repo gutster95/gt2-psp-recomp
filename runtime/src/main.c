@@ -147,11 +147,6 @@ int main(int argc, char **argv)
               g_me_snapshot, g_log_prio ? g_log_prio : 0x48);
     }
     logf_("game: %s\n", g_game == GAME_ARC ? "Arcade Mode (SCUS_944.55)" : "Simulation Mode (SCUS_944.88)");
-    if (g_game == GAME_ARC) {   /* the game patches (16:9 view, 60 fps, LOD) exist for the Simulation disc only */
-        extern int g_fps60, g_performance, g_lowlod, g_ws_menus;
-        g_widescreen = g_ws_menus = 0;
-        g_fps60 = g_performance = g_lowlod = 0;
-    }
     {   /* performance mode: 60 fps with the game's own trade-offs (no mirror/tire smoke) and low-detail opponents */
         extern int g_fps60, g_fx60, g_lowlod, g_performance;
         if (g_performance) { g_fps60 = 1; g_fx60 = 0; g_lowlod = 1; if (!g_track_lod) g_track_lod = 2; }

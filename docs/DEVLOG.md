@@ -986,3 +986,9 @@ the Media Engine:
   scripts/build-launcher.sh; `GT2_GAME=arc scripts/build.sh`.
 * With the task-switch fixes the Arcade disc runs into a race in PPSSPP: menus, course selection (Tahiti Road),
   race start (overlays 3 and 0).
+* Simulation patches ported to the Arcade disc: all 45 sites (6 runtime hooks: frame timing and the frame flip for
+  60 fps; 8 near-plane clipper loops for 16:9; 31 instruction patches: 16:9 view windows, 60 fps effects, car and
+  track LOD) found with sigmap.py (unique signature, clipper loops at -0x74 with whole loop windows identical),
+  every original instruction word bit-identical on both discs; table in profiles.py (patch_map). The race frame
+  interval byte moves with the race display struct: 0x801D5864 -> 0x801D52C4 (all 5 struct references -0x5A0).
+  Arcade no longer forces 16:9 / 60 fps / LOD off; the settings menu saves there too.
