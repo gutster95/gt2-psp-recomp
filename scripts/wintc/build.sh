@@ -126,7 +126,20 @@ package() {
         echo "PSP toolchain for Windows, built by scripts/wintc/build.sh (GT2 PSP project) with mingw-w64."
         echo "Sources: https://github.com/pspdev (binutils-gdb, gcc, pspsdk at the commits in build-linux-reference.txt)."
         echo "GCC and binutils are GPL-3.0; target libraries as in pspdev (newlib, pspsdk BSD)."
+        echo "binutils-gdb a8b53fe2b5825fa86337623c743d21a19aeb0daf, gcc 1a33997924916ff5a6f61b64179ff9c8921f46c6,"
+        echo "pspsdk c3da4314d783ac26323e5cdaf8163ac369c2089d, zstd 1.5.6 (https://github.com/facebook/zstd)."
+        echo "Build script: scripts/wintc/build.sh in https://github.com/gutster95/gt2-psp-recomp"
+        echo "Licence texts: licenses/."
     } > "$OUT/README-WINDOWS.txt"
+    mkdir -p "$OUT/licenses"
+    cp "$W/src/gcc/COPYING3" "$OUT/licenses/gcc-COPYING3"
+    cp "$W/src/gcc/COPYING.RUNTIME" "$OUT/licenses/gcc-COPYING.RUNTIME"
+    cp "$W/src/binutils-gdb/COPYING3" "$OUT/licenses/binutils-COPYING3"
+    cp "$W/src/pspsdk/LICENSE" "$OUT/licenses/pspsdk-LICENSE"
+    cp "$W/src/zstd/LICENSE" "$OUT/licenses/zstd-LICENSE"
+    cp "$W/src/gcc/gmp/COPYING.LESSERv3" "$OUT/licenses/gmp-COPYING.LESSERv3" 2>/dev/null || true
+    cp "$W/src/gcc/mpfr/COPYING.LESSER" "$OUT/licenses/mpfr-COPYING.LESSER" 2>/dev/null || true
+    cp "$W/src/gcc/mpc/COPYING.LESSER" "$OUT/licenses/mpc-COPYING.LESSER" 2>/dev/null || true
     rm -f "$PROJ/build/wintc/pspdev-win-x86_64.zip"; mkdir -p "$PROJ/build/wintc"
     zip -qr9 "$PROJ/build/wintc/pspdev-win-x86_64.zip" pspdev
     ls -l "$PROJ/build/wintc/pspdev-win-x86_64.zip"
