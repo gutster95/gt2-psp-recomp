@@ -1,7 +1,7 @@
 # CLAUDE.md
 
 Static recompiler: Gran Turismo 2 (PS1, USA Simulation Mode **Rev 2**) → native PSP homebrew (EBOOT.PBP).
-Repo: https://github.com/gutster95/gt2-psp-recomp (private).
+Repo: https://github.com/gutster95/gt2-psp-recomp (public since 2026-11-26; commits use the GitHub noreply address).
 
 ## Rules
 
