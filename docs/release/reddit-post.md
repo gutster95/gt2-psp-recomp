@@ -35,7 +35,7 @@ game as it is. Widescreen with a wider view, a 60 fps mode with fixed game speed
 loading - that needs the game's code to be something you can change. Also, PS1 and PSP share almost the same CPU
 instruction set, which makes this kind of recompilation possible at all, and I wanted to see how far it goes.
 
-Known issues: the Arcade intro movie plays at about 10 fps, reverb is off by default, and only USA discs work.
+Known issues: the Arcade intro movie plays at about 10 fps, and only USA discs work.
 
 Download and instructions: <link>
 

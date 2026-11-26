@@ -1065,6 +1065,18 @@ the Media Engine:
   (one reverb step per output sample). Voices with their EON bit feed it; CD audio does not (own PSP channel).
 * Cost on the PSP-3000 (attract race, `build/racework.sh`): reverb alone ~3.0% of the main CPU, constant (also in
   menus). Race work 27.98 ms / 389 frames over 33.4 ms without, 29.53 ms / 478 and 32.57 ms / 719 with (two runs).
-  The mixer as a whole is ~11-12% CPU in races without reverb. Default `reverb=0`; `reverb=1` in settings.txt.
-  Not yet checked by ear on hardware. Ideas if it should be on: half rate (11 kHz), wrap-free segments instead of a
-  wrap check per tap access.
+  The mixer as a whole is ~11-12% CPU in races without reverb.
+* Optimised: reverb at 11.025 kHz in a private work buffer at the same time scale (one entry per 4 bytes of sound RAM
+  address - delays unchanged in seconds; input averaged per output pair, output interpolated back), inner loop cut
+  into segments in which no tap wraps (no per-access wrap check). Voice loop: the pitch counter steps over several
+  source samples at once inside an ADPCM block (engines: up to 8 per output sample), ADPCM position kept in a local
+  (with -fno-strict-aliasing every mix-buffer store reloaded v->pos).
+  Result (race, PSP-3000): reverb 3.1% -> 1.35%, voice loop 11.0% -> 10.1%; race work 28.12 ms (reverb on) vs 27.83 /
+  27.93 ms (off), frames over budget 376/378 vs 381/393 - the reverb's real cost is in the noise.
+* The mixer's own "% CPU" overstates its cost: it includes time in which higher-priority threads preempt it. With
+  `audio=0` race work is 26.24 ms, so all audio together really costs ~1.6-1.9 ms per frame. Counters (log line
+  "spu: voice loop"): ~400k voice samples/s, ~13k ADPCM blocks/s of which ~half come from the decode cache - the
+  block decoder is ~1%, not the bottleneck.
+* Default: reverb on in quality mode, off in performance mode (`g_reverb = -1`); `reverb=0/1` forces it.
+  One PSPLink run hung after the memory card load (game thread stopped, audio thread alive); two repeats of the same
+  settings ran normally. Reverb still not checked by ear on hardware.

@@ -50,6 +50,8 @@ won't work - the recompiler is built around the exact code of these two discs.
   of an emulated CD drive. GT mode loads in about a second.
 - **Saves are PSP saves.** The memory card is stored as normal PSP save data, visible in the XMB. Loading a save
   takes a fraction of a second.
+- **Reverb** like on the PS1 in Quality mode (off in Performance mode, where every millisecond goes to the frame
+  rate; `reverb=0`/`reverb=1` in settings.txt overrides it).
 - **Analog controls**, plus optional racing buttons (X gas, square brake, circle handbrake, triangle reverse) and
   L/R shifting.
 - **In-game settings menu** with L + R + SELECT: mirror and tire smoke, opponent detail, FPS counter, button layout.
@@ -84,7 +86,6 @@ instruction set, so a static recompiler is possible, but the hardware around it 
 ## Known issues
 
 - The Arcade Mode intro movie plays at about 10 fps (the PS1 decoded it in hardware; here it's software).
-- Reverb is off by default (it costs about 3% CPU); `reverb=1` in settings.txt turns it on.
 - Performance mode drops below 60 fps in heavy races (see above).
 - Only the USA discs are supported.
 
