@@ -2,8 +2,8 @@
 
 Offsets from the GT2SaveEditor documentation (github.com/zyzalfors/GT2SaveEditor): save data starts 512 bytes into
 the save's first 8 KB block (after the title/icon header); CRC-32 over the block start up to data offset 31900.
-  python scripts/gt2save.py card.mcd                  summary
-  python scripts/gt2save.py card.mcd --max out.mcd    all licenses gold, all events won, money 9,999,999
+  python scripts/dev/gt2save.py card.mcd                  summary
+  python scripts/dev/gt2save.py card.mcd --max out.mcd    all licenses gold, all events won, money 9,999,999
 """
 import collections, sys, zlib
 

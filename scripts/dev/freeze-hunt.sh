@@ -2,8 +2,8 @@
 # Freeze hunt (2026-11-21): runs the Simulation release on the PSP through PSPLink with today's changes switched on
 # one at a time (settings.txt toggles), each config N times (attract demo + GT mode via build/input-gtmode.txt, pack
 # from the memory stick). A run counts as frozen when PSPLink stops answering (checked after the run);
-# the hunt stops there (the PSP then needs a power cycle).   scripts/freeze-hunt.sh [runs per config] [first config]
-cd "$(dirname "$0")/.."
+# the hunt stops there (the PSP then needs a power cycle).   scripts/dev/freeze-hunt.sh [runs per config] [first config]
+cd "$(dirname "$0")/../.."
 N=${1:-3}
 FIRST=${2:-0}
 R=build/psp/PSP/GAME/GT2PSP

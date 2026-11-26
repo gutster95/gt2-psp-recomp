@@ -292,6 +292,8 @@ static void gpu_bench_passes(uint32_t madr, uint32_t prims)
     g_bench_stage = 0;
 }
 
+static int g_walk_pending;           /* diagnostics: an ordering-table walk is posted to the ME and not done */
+static uint32_t g_walk_madr;
 static void dma_run(int ch)
 {
     uint32_t base = 0x1080 + ch * 0x10;
@@ -308,6 +310,13 @@ static void dma_run(int ch)
                 g_pace_hist[d >= 4 ? 4 : d]++;
             }
             if (g_me_active) {                  /* the ME walks it; DMA2 stays busy until then (me_service) */
+                if (g_walk_pending) {
+                    static int told;
+                    if (told++ < 8) logf_("dma2: new list %06x while the ME still walks %06x (vblank %u)\n", (unsigned)madr,
+                                          (unsigned)g_walk_madr, (unsigned)g_vblank_count);
+                }
+                g_walk_pending = 1;
+                g_walk_madr = madr;
                 me_post_walk(madr);
                 PHASE_END();
                 return;
@@ -343,6 +352,13 @@ static void dma_run(int ch)
     case 6: { /* OTC: reverse-clear ordering table */
         uint32_t n = bcr & 0xFFFF ? bcr & 0xFFFF : 0x10000;
         uint32_t a = madr;
+        if (g_walk_pending && g_walk_madr <= madr && g_walk_madr >= ((madr - 4 * (n - 1)) & 0x1FFFFC)) {
+            /* diagnostics: the game clears the very table the ME is still walking */
+            static int told;
+            if (told++ < 8) logf_("dma6: OT clear %06x-%06x while the ME walks %06x (vblank %u)\n",
+                                  (unsigned)((madr - 4 * (n - 1)) & 0x1FFFFC), (unsigned)madr, (unsigned)g_walk_madr,
+                                  (unsigned)g_vblank_count);
+        }
         for (uint32_t i = 0; i < n; i++) {
             *(uint32_t *)(g_ram + a) = (i == n - 1) ? 0x00FFFFFFu : ((a - 4) & 0x1FFFFC);
             a = (a - 4) & 0x1FFFFC;
@@ -359,6 +375,7 @@ static void dma_run(int ch)
 
 void io_dma_done(int ch)
 {
+    if (ch == 2) g_walk_pending = 0;
     IO32(0x1088 + ch * 0x10) &= ~0x11000000u;
     dma_irq(ch);
 }

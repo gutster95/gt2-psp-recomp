@@ -39,6 +39,7 @@ typedef struct {
     uint32_t req_seq, req_start, req_end, req_show, req_fps, req_wait, done_seq;
     uint32_t log_head, log_tail;
     uint32_t alive, exit, ready, started, vshadow;
+    uint32_t cur_cmd, cur_arg, walk_pos, walk_pk;   /* ME progress (diagnostics: a walk that does not finish) */
     uint32_t mprof[16];                  /* ME cycles per profiler phase (GT2_ME_PROF builds) */
     uint32_t spad[1024];                 /* main CPU scratchpad state at the ME start (ge.c / raster.h) */
     uint32_t ring[RING][4];
@@ -106,7 +107,8 @@ int me_ge_done(uint32_t seq) { return (int32_t)(SH->done_seq - seq) >= 0; }
 
 /* GT2_ME_PROF: the ME's current profiler phase, written uncached by the ME (prof.h), sampled by prof.c */
 uint32_t g_me_phase_word[16] __attribute__((aligned(64)));
-void me_prof_log(void) {}
+/* called by gpu_walk on the ME every 1024 packets: where the walk is */
+void me_walk_progress(uint32_t a, uint32_t packets) { SH->walk_pos = a; SH->walk_pk = packets; }
 
 extern void gpu_walk(uint32_t madr);
 extern void gpu_present_core(void);
@@ -165,6 +167,8 @@ __attribute__((noinline, aligned(4))) void meLibOnProcess(void)
         me_exec(SH->ring[t % RING]);
         me_phase_set(12);                      /* waiting for the next command */
 #else
+        SH->cur_cmd = SH->ring[t % RING][0];
+        SH->cur_arg = SH->ring[t % RING][1];
         me_exec(SH->ring[t % RING]);
 #endif
         t++;
@@ -404,3 +408,15 @@ __attribute__((no_instrument_function)) void __cyg_profile_func_exit(void *fn, v
     g_me_phase_uc[1] = d && d <= 100 ? FSTACK[d] : 0;
 }
 #endif
+
+/* every 2 s (gpuvbl.c): an ordering-table walk pending for more than 0.5 s - where the ME is */
+void me_prof_log(void)
+{
+    if (!g_walk_t0) return;
+    uint64_t d = now_us() - g_walk_t0;
+    if (d < 500000) return;
+    logf_("me: walk pending %u ms: ME cmd %u arg %08x, walk at %06x after %u packets, ring tail %u head %u dma_idx %u, "
+          "alive %u, GE req %u done %u\n", (unsigned)(d / 1000), (unsigned)SH->cur_cmd, (unsigned)SH->cur_arg,
+          (unsigned)SH->walk_pos, (unsigned)SH->walk_pk, (unsigned)SH->tail, (unsigned)SH->head, (unsigned)g_dma_idx,
+          (unsigned)SH->alive, (unsigned)SH->req_seq, (unsigned)SH->done_seq);
+}

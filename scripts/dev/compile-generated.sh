@@ -2,7 +2,7 @@
 # Compile-check the recompiled C code with psp-gcc (inside GT2PSPDev). Usage: compile-generated.sh [files...]
 set -euo pipefail
 . /etc/profile.d/pspdev.sh
-PROJ="$(cd "$(dirname "$0")/.." && pwd)"
+PROJ="$(cd "$(dirname "$0")/../.." && pwd)"
 OUT=/tmp/gt2gen   # Linux FS: much faster than /mnt/c
 mkdir -p "$OUT"
 FILES=("$@")

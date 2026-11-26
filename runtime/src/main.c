@@ -91,7 +91,7 @@ void quit_game(const char *why)
     for (int i = 0; i < 100 && g_audio_running > 0; i++) sceKernelDelayThread(5000);
     logf_("audio stopped (%d still running)\n", g_audio_running);
 #ifdef GT2_PGO_GEN
-    {   /* profile-guided optimization, instrumented build: write the .gcda files (host0:/pgo, see scripts/pgo.sh) */
+    {   /* profile-guided optimization, instrumented build: write the .gcda files (host0:/pgo, see scripts/dev/pgo.sh) */
         extern void __gcov_dump(void);
         logf_("writing profile data\n");
         __gcov_dump();

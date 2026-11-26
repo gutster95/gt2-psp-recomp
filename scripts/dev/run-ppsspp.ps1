@@ -1,7 +1,7 @@
 # Stage the EBOOT + converted game data into PPSSPP's portable memstick, run for N seconds, screenshot, show log.
 # Needs build\gt2psp\EBOOT.PBP (scripts/build.sh) and build\GT2.PAK (python -m gt2psp pack <cue>).
 param([int]$Seconds = 15, [string]$Shot = "")
-$proj = Split-Path -Parent $PSScriptRoot
+$proj = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $g = Join-Path $proj "tools\ppsspp\memstick\PSP\GAME\GT2PSP"
 New-Item -ItemType Directory -Force $g | Out-Null
 Copy-Item (Join-Path $proj "build\gt2psp\EBOOT.PBP") $g

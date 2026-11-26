@@ -20,7 +20,7 @@ from pathlib import Path
 
 PROJ = Path(__file__).resolve().parent.parent
 EXE = ".exe" if os.name == "nt" else ""
-RELEASE_GEN = "-O2 -DGT2_NO_TRACE -DGT2_GTE_OUTLINE"     # as scripts/pgo.sh (release), without the profile
+RELEASE_GEN = "-O2 -DGT2_NO_TRACE -DGT2_GTE_OUTLINE"     # as scripts/dev/pgo.sh (release), without the profile
 LIBS = ["-lpspsdk", "-lpspgu", "-lpsputility", "-lpspaudio", "-lpspdebug", "-lpspdisplay", "-lpspge", "-lpsprtc",
         "-lpspctrl", "-lpsppower"]
 

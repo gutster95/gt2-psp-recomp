@@ -1080,3 +1080,23 @@ the Media Engine:
 * Default: reverb on in quality mode, off in performance mode (`g_reverb = -1`); `reverb=0/1` forces it.
   One PSPLink run hung after the memory card load (game thread stopped, audio thread alive); two repeats of the same
   settings ran normally. Reverb still not checked by ear on hardware.
+
+## 2026-11-26 (evening) - looping display lists, release clean-up
+
+* Screenshot session found a GT-mode glitch (car info page: screen full of green blocks, game at ~1 fps). Cause:
+  GT2 sometimes rebuilds primitives right after DrawOTag without DrawSync - harmless on the PS1, whose DMA has read
+  the list by then, but the Media Engine walks the list later and can find it half rebuilt: a packet linked to
+  itself (every boot, vblank ~565, packet 1b15d0, drawn 253625 times = over 1 s) or a cycle through the ordering
+  table (now and then in the garage, vblank ~6685). A PS1 would hang on such a list, so the game never means it:
+  gpu_walk stops at a self-linked packet and after 32768 packets (a heavy frame has ~3700). Counter in the `ot:`
+  log line ("looping lists cut short"). Screenshots were not the trigger (also without them).
+  Diagnostics kept: `me: walk pending` (a walk older than 0.5 s, where the ME is), `dma2:`/`dma6:` lines when the
+  game starts a list or clears the walked table while the ME still walks.
+* Own mistake on the way: a diagnostic line inserted into gpu_walk's if/else chain sent every packet twice (icon
+  and glyph fragments all over the menus) - found by bisecting builds (pre-reverb c512219 and 672862c clean).
+* Rare boot hang (2 of ~20 PSPLink runs): stops inside meLibDefaultInit (no "me: table" line). Suspect: PSPLink's
+  reset ends the game without stopping the ME, the next start finds it still running. Not seen from the XMB yet.
+* `me_gpu=0` hangs on hardware in the intro (vblank ~600) - the main-CPU GPU path is not maintained any more.
+* psp-run.sh deletes the previous log first (a run that did not start used to look like a fresh result).
+* Clean-up for the release: developer tools moved to scripts/dev/, toolchain smoke test (runtime/hello) and
+  build-exp.sh removed.

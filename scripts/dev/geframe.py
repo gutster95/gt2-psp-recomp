@@ -1,6 +1,6 @@
 """List the PS1 GPU primitives of a geframe.bin (runtime io.c gpu_dump: L+R+SELECT or settings.txt gedump=<vblank>).
 
-    python scripts/geframe.py build/psp/PSP/GAME/GT2PSP/geframe.bin [--y0 Y --y1 Y] [--maxh H]
+    python scripts/dev/geframe.py build/psp/PSP/GAME/GT2PSP/geframe.bin [--y0 Y --y1 Y] [--maxh H]
 
 Walks the ordering table like the runtime (gpu_walk) and prints every primitive (with the drawing area and offset
 in effect) whose bounding box touches the PS1 line range y0..y1 and is at most maxh pixels tall.

@@ -30,8 +30,11 @@ runtime/             PSP runtime (C): include/gt2rt.h (interface for generated c
   src/spu.c          SPU + CD-XA decoding, PSP audio output thread
   src/core.c         dispatcher, setjmp/longjmp unwind & resume, overlay hook, IRQ delivery, watchdog
   src/bios.c io.c cdrom.c sio.c gpu.c raster.c gte.c log.c files.c main.c
-scripts/             wsl-setup.sh, build.sh, run-ppsspp.ps1, compile-generated.sh, vram2png.py
-docs/                ARCHITECTURE.md, DEVLOG.md
+scripts/             build_psp.py (release build driver), build.sh / build-launcher.sh (dev builds in WSL), psp-run.sh,
+                     make_linkfile.py, wintc/ (own Windows/Linux toolchain), me/ (ME library), wsl-setup.sh
+scripts/dev/         developer tools: run-ppsspp.ps1, package-psp.ps1, pgo.sh, freeze-hunt.sh, vram2png.py, ...
+converter/           release converter (server.py web UI, toolchain.py); convert.bat/.command/.sh start it
+docs/                ARCHITECTURE.md, DEVLOG.md, RELEASE-PLAN.md, release/reddit-post.md
 ISO/ extracted/ generated/ build/ Recomps/ tools/   (all git-ignored)
 ```
 
@@ -48,9 +51,9 @@ wsl -d GT2PSPDev -u root --cd "<proj>" -- bash scripts/build.sh      # -> build/
   ... -- env GT2_GAME=arc GT2_OUT=build/arc GT2_BUILD_DIR=/root/gt2arcrel bash scripts/build.sh   # Arcade runtime
   ... -- bash scripts/build-launcher.sh                                 # -> build/launcher/EBOOT.PBP (start menu)
 python scripts/make_eboot_images.py                                      # XMB icon/background from Images/
-bash scripts/pgo.sh profile && bash scripts/pgo.sh build             # release: profile-guided (PSP via PSPLink) -> build/gt2psp
-powershell -ExecutionPolicy Bypass -File scripts/run-ppsspp.ps1 -Seconds 40 -Shot <png>   # stages + runs + log
-powershell -ExecutionPolicy Bypass -File scripts/package-psp.ps1   # -> build/psp/PSP/GAME/GT2PSP for a real PSP
+bash scripts/dev/pgo.sh profile && bash scripts/dev/pgo.sh build             # release: profile-guided (PSP via PSPLink) -> build/gt2psp
+powershell -ExecutionPolicy Bypass -File scripts/dev/run-ppsspp.ps1 -Seconds 40 -Shot <png>   # stages + runs + log
+powershell -ExecutionPolicy Bypass -File scripts/dev/package-psp.ps1   # -> build/psp/PSP/GAME/GT2PSP for a real PSP
 ```
 (PYTHONPATH=src for the python calls.) The PSP folder: `EBOOT.PBP` (launcher: Simulation/Arcade menu) +
 `GT2SIM.PRX` + `GT2ARC.PRX` (one runtime build per disc) + `GT2.PAK` + `GT2A.PAK` (the EXEs are read from the packs);
@@ -81,8 +84,7 @@ PowerShell `Set-Content -Encoding utf8` writes a BOM. CMake globs: build.sh re-r
   Test input: input.txt (`<vblank> <button> <len>`), e.g. start/cross reaches the GT mode world map.
 * **Audio**: SPU (24 voices, ADSR, reverb at 11 kHz: on in quality, off in performance mode, `reverb=0/1`) + CD-XA music, PSP audio thread (spu.c).
 * MDEC: software decoder (`mdec.c`); the Simulation disc has no movies (they are on the Arcade disc).
-* Not implemented yet:
-  15-bit textures / texture windows on the GE (software fallback).
+* Not on the GE yet: 15-bit textures / texture windows (software fallback).
 
 ## 2026-11-21
 
@@ -92,7 +94,7 @@ PowerShell `Set-Content -Encoding utf8` writes a BOM. CMake globs: build.sh re-r
 * Loads: CD per-command delays minimal, sectors without clock (held back inside interrupt handlers), memory card
   read fast path (save load 4.2 s -> 0.1 s). Card writes still one sector per frame (`card_fast=2` untested).
 * PSP freezes of the day: the log writer at priority 0x1F (above the game thread) froze the whole PSP. Never give
-  a thread that does file I/O a priority above the game thread. scripts/freeze-hunt.sh switches suspects via
+  a thread that does file I/O a priority above the game thread. scripts/dev/freeze-hunt.sh switches suspects via
   settings.txt (cd_legacy, card_fast, me_snapshot, log_prio).
 * PPSSPP gives homebrew less memory than the PSP-3000.
 
@@ -100,7 +102,7 @@ PowerShell `Set-Content -Encoding utf8` writes a BOM. CMake globs: build.sh re-r
 
 Real PSP-3000, attract race 16:9: pacing ~29.4 fps, `race work` avg ~32.4 ms, ~28% of the frames still over 33.4 ms
 (`build/racework.sh`, same EBOOT +-0.8 ms between runs; the code layout alone moves it +-10% - see ARCHITECTURE
-"Code layout and PGO"). Release = `scripts/pgo.sh build` (profile in build/pgo-data).
+"Code layout and PGO"). Release = `scripts/dev/pgo.sh build` (profile in build/pgo-data).
 
 0. **Done 2026-11-20: races at a locked 30 fps with the GPU path on the Media Engine** (me.c, `me_gpu=1` default).
    Same day: settings menu in game (L+R+SELECT, menu.c), quality (30 fps) / performance mode (`performance=1`: 60 fps,

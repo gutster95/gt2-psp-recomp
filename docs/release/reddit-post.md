@@ -1,8 +1,15 @@
-Draft for r/PSP (also fits r/emulation / r/granturismo). Title + body below.
+Post for r/PSP (also fits r/emulation and r/granturismo). Title, images and body below.
 
 ---
 
 **Title:** I recompiled Gran Turismo 2 into a native PSP game - 16:9, a 60 fps mode, fast loading, PSP saves
+
+**Images** (from build/shots/reddit, in this order):
+1. race-shelby.png
+2. race-michelin.png
+3. race-chase.png
+4. race-3rd.png
+5. gtmode-worldmap.png
 
 **Body:**
 
@@ -37,14 +44,13 @@ instruction set, which makes this kind of recompilation possible at all, and I w
 
 Known issues: the Arcade intro movie plays at about 10 fps, and only USA discs work.
 
-Download and instructions: <link>
+Download and instructions: https://github.com/gutster95/gt2-psp-recomp/releases/latest
 
-Tested on a PSP-3000. Feedback welcome, especially from PSP-1000/2000 owners (less RAM - I'd like to know if
-it holds up).
+Tested on a PSP-3000. Feedback welcome, especially from PSP-1000/2000 owners - I couldn't test those, so I'd like
+to know if it runs.
 
 ---
 
-Notes before posting:
-- Replace <link> with the GitHub release URL (repository must be public by then).
-- Screenshots: race in 16:9 and the start menu, own captures from the PSP (pspsh scrshot).
-- PSP-1000 has 32 MB RAM: untested, the build may not fit - check before promising anything.
+Before posting:
+- The repository must be public and the release published, otherwise the link is dead.
+- PSP-1000 (32 MB RAM): untested - don't promise anything there.

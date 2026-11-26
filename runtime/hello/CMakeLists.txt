@@ -1,5 +1,0 @@
-cmake_minimum_required(VERSION 3.10)
-project(gt2hello C)
-add_executable(gt2hello main.c)
-target_link_libraries(gt2hello PRIVATE pspdebug pspdisplay pspge)
-create_pbp_file(TARGET gt2hello TITLE "GT2 Hello" BUILD_PRX)

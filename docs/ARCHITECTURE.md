@@ -55,6 +55,9 @@ tools/             (ignored) local toolchain (pspdev inside a project-local WSL 
 * Interrupts are delivered at `POLL()` points (every backward branch, budgeted) and run the BIOS chains
   (SysEnqIntRP) and the HookEntryInt hook on a saved copy of the CPU state.
 * GPU (`gpu.c` front end, `ge.c` renderer, `raster.c` software reference):
+  * Ordering-table walks are bounded: a self-linked packet ends the walk, and so do 32768 packets. GT2 may rebuild
+    a list after DrawOTag without DrawSync (the PS1 DMA has read it by then); the Media Engine walks later and can
+    meet the half-rebuilt list. The PS1 would hang on a looping list, so stopping never loses an intended frame.
   * The PS1 VRAM (1024x512x16) lives at the start of PSP eDRAM. PS1 15-bit pixels are bit-identical to GE 5551,
     so the GE renders directly into the PS1 VRAM image and the CPU uses the same memory (uncached mirror) for
     uploads, readback and software fallbacks. Display buffers follow at 0x100000/0x144000.
@@ -150,8 +153,8 @@ tools/             (ignored) local toolchain (pspdev inside a project-local WSL 
   instruction cache; the overlay renderers alone are 27-36 KB each). `data/hot_functions.txt` fixes the order of
   the hot runtime code (incl. library members such as `libpspgu.a:sceGuDrawArray.o`), a measured `pad=` gap, then
   the hottest game functions (scripts/make_linkfile.py). The release EBOOT is built profile-guided:
-  `scripts/pgo.sh profile` (instrumented build, attract race on the PSP, counters to `build/pgo-data/`), then
-  `scripts/pgo.sh build` (generated code -O2 with the profile: hot/cold block splitting, branch layout). Judge
+  `scripts/dev/pgo.sh profile` (instrumented build, attract race on the PSP, counters to `build/pgo-data/`), then
+  `scripts/dev/pgo.sh build` (generated code -O2 with the profile: hot/cold block splitting, branch layout). Judge
   changes with `build/racework.sh` (deterministic `race work` averages, same EBOOT +-0.1 ms) and re-check the gap
   after changes to hot code.
   Since 2026-11-20 the rest of the recompiled code (`generated/*.c`) follows the hot block at a fixed offset within
@@ -174,7 +177,7 @@ tools/             (ignored) local toolchain (pspdev inside a project-local WSL 
 * **16:9 race HUD at PSP resolution**: recorded during the walk, drawn after the presentation blit into the display
   buffer (ge.c hud_record/hud_draw) - squeezed at 320 pixels it lost a quarter of its texel columns.
 * Refreshing the memory profile (after partitioning changes): `recomp --no-memprof`, build with
-  `scripts/build-exp.sh "-Os -DGT2_NO_TRACE -DGT2_MEMPROF"`, run (attract race, menus, license tests), copy
+  `GEN_EXTRA="-Os -DGT2_NO_TRACE -DGT2_MEMPROF" bash scripts/build.sh`, run (attract race, menus, license tests), copy
   `memprof.txt` from the EBOOT folder to `data/memprof/`.
 
 ## Real-hardware rendering decision (2026-11-18)

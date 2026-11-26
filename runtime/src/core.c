@@ -307,8 +307,9 @@ void rt_poll(PsxCpu *c)
         memprof_dump();
         g_cpu_mhz = measure_mhz();
         logf_("cpu: %d MHz measured (power service says %d)\n", g_cpu_mhz, scePowerGetCpuClockFrequencyInt());
-        extern uint32_t g_ot_entries, g_ot_empty;
-        logf_("ot: %u entries (%u empty) in 2 s\n", (unsigned)g_ot_entries, (unsigned)g_ot_empty);
+        extern uint32_t g_ot_entries, g_ot_empty, g_walk_aborts;
+        logf_("ot: %u entries (%u empty) in 2 s, %u looping lists cut short (total)\n", (unsigned)g_ot_entries,
+              (unsigned)g_ot_empty, (unsigned)ME_UC(g_walk_aborts));
         g_ot_entries = g_ot_empty = 0;
         extern void cdrom_stats(void);
         cdrom_stats();

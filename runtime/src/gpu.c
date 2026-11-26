@@ -497,7 +497,8 @@ stats:
 }
 
 /* ---- DMA2 linked list (ordering table) walk, moved from io.c: runs on the ME with me_gpu ---- */
-uint32_t g_ot_entries, g_ot_empty;
+uint32_t g_ot_entries, g_ot_empty, g_walk_aborts;   /* g_walk_aborts: looping lists cut short (gpu_walk) */
+#define MAX_PACKETS 32768
 extern int g_bench_stage;
 extern int g_hud_mode;
 void ge_hud_begin(void);
@@ -511,7 +512,7 @@ int g_walklog;                 /* settings.txt walklog=<vblank>: log every packe
 void gpu_walk(uint32_t madr)
 {
     PHASE_SCOPE(PH_GPU);
-    uint32_t a = madr, guard = 0, prev = 0;
+    uint32_t a = madr, guard = 0, prev = 0, npk = 0;
     uint32_t hud_ot = (g_widescreen && ME_UC(g_cur_overlay) == 0) ? madr - RACE_HUD_OT : 1;
     int wl = g_walklog && ME_UC(g_vblank_count) >= (uint32_t)g_walklog;
     char buf[400];
@@ -546,7 +547,31 @@ void gpu_walk(uint32_t madr)
         else if (g_bench_stage == 1) { volatile uint32_t x = *(uint32_t *)(g_ram + a + 4); (void)x; }
         else if (a + 4 + 4 * n <= PSX_RAM_SIZE) gpu_packet((const uint32_t *)(g_ram + a + 4), n);
         else for (uint32_t i = 0; i < n; i++) gpu_gp0(*(uint32_t *)(g_ram + ((a + 4 + 4 * i) & 0x1FFFFC)));
-        if ((hdr & 0x800000) || ++guard > 0x40000) break;
+        if (n && !(++npk & 1023)) { extern void me_walk_progress(uint32_t, uint32_t); me_walk_progress(a, npk); }
+        /* A list that loops: GT2 sometimes rebuilds its primitives right after DrawOTag without DrawSync - fine on the
+         * PS1, whose DMA has read the list by then, but the ME walks it later and can find a half-rebuilt list (a
+         * packet linked to itself after a second AddPrim, or a cycle). A PS1 would hang on such a list, so the game
+         * never means it: stop at a self-linked packet and after MAX_PACKETS (a heavy frame has ~3700). Without this a
+         * loop drew the same packets ~250000 times (over 1 s per frame, garbage on screen). */
+        if (n && (hdr & 0x1FFFFC) == a && !(hdr & 0x800000)) { g_walk_aborts++; break; }
+        if (npk >= MAX_PACKETS) {
+            static int told;
+            if (told++ < 4) {
+                uint32_t c = a, l[6];
+                for (int i = 0; i < 6; i++) { l[i] = c; c = *(uint32_t *)(g_ram + c) & 0x1FFFFC; }
+                logf_("gpu: OT walk from %06x stopped after %u packets (loop, vblank %u): %06x %06x %06x %06x %06x %06x\n",
+                      (unsigned)madr, (unsigned)npk, (unsigned)ME_UC(g_vblank_count), l[0], l[1], l[2], l[3], l[4], l[5]);
+            }
+            g_walk_aborts++;
+            break;
+        }
+        if (hdr & 0x800000) break;
+        if (++guard > 0x40000) {
+            static int told;
+            if (told++ < 4) logf_("gpu: OT walk from %06x stopped at the link limit (%u packets), at %06x\n",
+                                  (unsigned)madr, (unsigned)npk, (unsigned)a);
+            break;
+        }
         prev = a;
         a = hdr & 0x1FFFFC;
     }
