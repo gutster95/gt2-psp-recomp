@@ -28,8 +28,13 @@ What you get compared to playing it in the PSP's PS1 emulator:
 
 **No game files are shared.** You run a converter on your PC (Windows, macOS, Linux - double-click, it opens in
 your browser), point it at your own .cue/.bin, and it builds the PSP folder from your disc. It only accepts the USA
-discs (Simulation Mode Rev 2 and Arcade Mode) because the recompiler is made for exactly that code. You need a PSP
-with custom firmware.
+discs, because the recompiler is made for exactly that code:
+
+- Simulation Mode: **SCUS-94488**, Rev 2
+- Arcade Mode: **SCUS-94455**
+
+One disc is enough, both together give you the start menu. The converter checks your dump against known checksums
+and tells you if it's a different version. You need a PSP with custom firmware.
 
 **About 60 fps:** it's a target, not a guarantee. The PS1 had a geometry coprocessor that the PSP doesn't have, so
 all of that math runs in software. I moved the graphics conversion to the PSP's second CPU (the Media Engine) and

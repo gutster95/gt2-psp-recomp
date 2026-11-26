@@ -11,8 +11,8 @@ converter turns your discs into a PSP folder on your own computer.
 
 - A PSP with custom firmware (tested on a PSP-3000; PPSSPP works too, with its software renderer)
 - Your own Gran Turismo 2 discs as .cue/.bin, **USA versions**:
-  - Simulation Mode (Disc 2), **Rev 2**
-  - Arcade Mode (Disc 1)
+  - Simulation Mode (Disc 2), **SCUS-94488, Rev 2**
+  - Arcade Mode (Disc 1), **SCUS-94455**
 
   One disc is enough. With both, the PSP shows a small menu where you pick the mode.
 - Python 3 on your computer (Windows: from python.org, tick "Add python.exe to PATH"; Linux and macOS usually
