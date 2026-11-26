@@ -84,7 +84,7 @@ instruction set, so a static recompiler is possible, but the hardware around it 
 ## Known issues
 
 - The Arcade Mode intro movie plays at about 10 fps (the PS1 decoded it in hardware; here it's software).
-- No reverb in the sound.
+- Reverb is off by default (it costs about 3% CPU); `reverb=1` in settings.txt turns it on.
 - Performance mode drops below 60 fps in heavy races (see above).
 - Only the USA discs are supported.
 

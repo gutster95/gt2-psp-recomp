@@ -1057,3 +1057,14 @@ the Media Engine:
 * PGO vs plain -O2 on the PSP (attract race): 26.9 vs 27.9 ms average, 454 vs 380 frames over budget - the release
   build stays without PGO.
 * README rewritten for the release; Reddit draft in docs/release/reddit-post.md.
+
+## 2026-11-26 - SPU reverb
+
+* GT2 enables the reverb (SPUCNT bit 7 set, `c081`). Implemented after psx-spx "SPU Reverb Formula" in spu.c: the
+  mixer already runs at 22.05 kHz, the reverb's own rate, so the hardware's 39-tap resampling filters are skipped
+  (one reverb step per output sample). Voices with their EON bit feed it; CD audio does not (own PSP channel).
+* Cost on the PSP-3000 (attract race, `build/racework.sh`): reverb alone ~3.0% of the main CPU, constant (also in
+  menus). Race work 27.98 ms / 389 frames over 33.4 ms without, 29.53 ms / 478 and 32.57 ms / 719 with (two runs).
+  The mixer as a whole is ~11-12% CPU in races without reverb. Default `reverb=0`; `reverb=1` in settings.txt.
+  Not yet checked by ear on hardware. Ideas if it should be on: half rate (11 kHz), wrap-free segments instead of a
+  wrap check per tap access.

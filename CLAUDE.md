@@ -79,9 +79,9 @@ PowerShell `Set-Content -Encoding utf8` writes a BOM. CMake globs: build.sh re-r
 * **Input + memory card**: DualShock analog emulation (libpad works now - before, all input was ignored and the
   "race replay" was the attract demo); memory card = PSP save data (XMB "Saved Data", savedata.c via sceUtilitySavedata; card.c BIOS events).
   Test input: input.txt (`<vblank> <button> <len>`), e.g. start/cross reaches the GT mode world map.
-* **Audio**: SPU (24 voices, ADSR, no reverb) + CD-XA music, PSP audio thread (spu.c).
+* **Audio**: SPU (24 voices, ADSR, reverb off by default: `reverb=1`) + CD-XA music, PSP audio thread (spu.c).
 * MDEC: software decoder (`mdec.c`); the Simulation disc has no movies (they are on the Arcade disc).
-* Not implemented yet: reverb,
+* Not implemented yet:
   15-bit textures / texture windows on the GE (software fallback).
 
 ## 2026-11-21

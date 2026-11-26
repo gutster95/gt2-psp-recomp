@@ -2,7 +2,7 @@
  *
  * Registers 0x1F801C00-0x1F801FFF (nocash psx-spx "SPU"): 24 voices of 4-bit ADPCM from the 512 KB sound RAM with
  * ADSR envelopes, pitch (incl. pitch modulation), noise and volumes; key on/off, ENDX; sound RAM transfers by DMA4
- * or the data FIFO. Not emulated: reverb (the output is dry), volume sweeps (treated as fixed), SPU interrupts.
+ * or the data FIFO; reverb (on the voices, not on CD audio). Not emulated: volume sweeps (treated as fixed), SPU interrupts.
  * CD-XA: XA-ADPCM sectors (GT2's music in MUSIC.DAT) are decoded by cdrom.c into a ring buffer and mixed in.
  *
  * A PSP thread mixes 1024-sample blocks at 44.1 kHz (the SPU's own rate) and outputs them blocking. The game writes
@@ -193,6 +193,76 @@ static int16_t g_noise[BLOCK];
  * part of the audio (~15-20 voices, many at high pitch). */
 #define SPU_DIV 2
 
+/* ---- reverb (psx-spx "SPU Reverb Formula") -------------------------------------------------------------------
+ * The PS1 runs its reverb at 22.05 kHz - the rate this mixer already works at, so the hardware's 39-tap
+ * down/upsampling filters are not needed: one reverb step per output sample. Work area = sound RAM from mBASE to
+ * the end, all offsets wrap inside it. Input: the voices with their EON bit (after voice volume); CD audio is mixed
+ * on its own channel and does not feed the reverb. Output (after vLOUT/vROUT) is added to the dry mix. */
+int g_reverb = 0;                          /* settings.txt reverb=1: on (costs ~3% CPU, see DEVLOG 2026-11-26) */
+static int32_t g_racc[BLOCK * 2];          /* reverb input, then output (in place) */
+static uint32_t g_rcur;                    /* current buffer position (bytes from mBASE) */
+static uint64_t g_t_reverb;                /* debug: time in reverb() */
+
+static inline int32_t clamp16(int32_t x) { return x > 32767 ? 32767 : x < -32768 ? -32768 : x; }
+
+static void reverb(int32_t *io, int n, int write)
+{
+    uint32_t mbase = (uint32_t)REG(0x1DA2) * 8 & (RAM_SIZE - 1);
+    uint32_t size = RAM_SIZE - mbase;
+    if (size < 4) return;
+#define V(off) ((int32_t)(int16_t)REG(off))
+#define O(off) ((uint32_t)REG(off) * 8 % size)
+#define OM(a, b) (((a) + size - (b)) % size)                        /* (a - b) mod size */
+    int32_t vIIR = V(0x1DC4), vC1 = V(0x1DC6), vC2 = V(0x1DC8), vC3 = V(0x1DCA), vC4 = V(0x1DCC);
+    int32_t vWALL = V(0x1DCE), vAPF1 = V(0x1DD0), vAPF2 = V(0x1DD2), vLIN = V(0x1DFC), vRIN = V(0x1DFE);
+    int32_t vLOUT = V(0x1D84), vROUT = V(0x1D86);
+    uint32_t dAPF1 = O(0x1DC0), dAPF2 = O(0x1DC2);
+    uint32_t mLSAME = O(0x1DD4), mRSAME = O(0x1DD6), mLDIFF = O(0x1DE4), mRDIFF = O(0x1DE6);
+    uint32_t mLSAME2 = OM(mLSAME, 2), mRSAME2 = OM(mRSAME, 2), mLDIFF2 = OM(mLDIFF, 2), mRDIFF2 = OM(mRDIFF, 2);
+    uint32_t dLSAME = O(0x1DE0), dRSAME = O(0x1DE2), dLDIFF = O(0x1DF0), dRDIFF = O(0x1DF2);
+    uint32_t mLC1 = O(0x1DD8), mRC1 = O(0x1DDA), mLC2 = O(0x1DDC), mRC2 = O(0x1DDE);
+    uint32_t mLC3 = O(0x1DE8), mRC3 = O(0x1DEA), mLC4 = O(0x1DEC), mRC4 = O(0x1DEE);
+    uint32_t mLAPF1 = O(0x1DF4), mRAPF1 = O(0x1DF6), mLAPF2 = O(0x1DF8), mRAPF2 = O(0x1DFA);
+    uint32_t mLAPF1d = OM(mLAPF1, dAPF1), mRAPF1d = OM(mRAPF1, dAPF1);
+    uint32_t mLAPF2d = OM(mLAPF2, dAPF2), mRAPF2d = OM(mRAPF2, dAPF2);
+    uint8_t *ram = g_sram + mbase;
+    uint32_t cur = g_rcur % size & ~1u;
+#define AT(o) (*(int16_t *)(ram + ((cur + (o)) >= size ? cur + (o) - size : cur + (o))))
+#define RD(o) ((int32_t)AT(o))
+#define WR(o, x) do { if (write) AT(o) = (int16_t)clamp16(x); } while (0)
+#define MUL(a, b) ((a) * (b) >> 15)
+    for (int s = 0; s < n; s++) {
+        int32_t lin = MUL(clamp16(io[s * 2]), vLIN), rin = MUL(clamp16(io[s * 2 + 1]), vRIN);
+        int32_t ls2 = RD(mLSAME2), rs2 = RD(mRSAME2), ld2 = RD(mLDIFF2), rd2 = RD(mRDIFF2);
+        WR(mLSAME, MUL(clamp16(lin + MUL(RD(dLSAME), vWALL) - ls2), vIIR) + ls2);
+        WR(mRSAME, MUL(clamp16(rin + MUL(RD(dRSAME), vWALL) - rs2), vIIR) + rs2);
+        WR(mLDIFF, MUL(clamp16(lin + MUL(RD(dRDIFF), vWALL) - ld2), vIIR) + ld2);
+        WR(mRDIFF, MUL(clamp16(rin + MUL(RD(dLDIFF), vWALL) - rd2), vIIR) + rd2);
+        int32_t l = clamp16(MUL(vC1, RD(mLC1)) + MUL(vC2, RD(mLC2)) + MUL(vC3, RD(mLC3)) + MUL(vC4, RD(mLC4)));
+        int32_t r = clamp16(MUL(vC1, RD(mRC1)) + MUL(vC2, RD(mRC2)) + MUL(vC3, RD(mRC3)) + MUL(vC4, RD(mRC4)));
+        int32_t t = RD(mLAPF1d);
+        l = clamp16(l - MUL(vAPF1, t)); WR(mLAPF1, l); l = clamp16(MUL(l, vAPF1) + t);
+        t = RD(mRAPF1d);
+        r = clamp16(r - MUL(vAPF1, t)); WR(mRAPF1, r); r = clamp16(MUL(r, vAPF1) + t);
+        t = RD(mLAPF2d);
+        l = clamp16(l - MUL(vAPF2, t)); WR(mLAPF2, l); l = clamp16(MUL(l, vAPF2) + t);
+        t = RD(mRAPF2d);
+        r = clamp16(r - MUL(vAPF2, t)); WR(mRAPF2, r); r = clamp16(MUL(r, vAPF2) + t);
+        io[s * 2] = MUL(l, vLOUT);
+        io[s * 2 + 1] = MUL(r, vROUT);
+        cur += 2;
+        if (cur >= size) cur = 0;
+    }
+    g_rcur = cur;
+#undef V
+#undef O
+#undef OM
+#undef AT
+#undef RD
+#undef WR
+#undef MUL
+}
+
 static void mix_spu(int16_t *out, int n)
 {
     uint32_t kon = g_kon, koff = g_koff;
@@ -207,6 +277,9 @@ static void mix_spu(int16_t *out, int n)
     uint32_t pmon = REG(0x1D90) | ((uint32_t)REG(0x1D92) << 16);
     uint32_t non = REG(0x1D94) | ((uint32_t)REG(0x1D96) << 16);
     memset(g_acc, 0, sizeof(int32_t) * 2 * n);
+    uint32_t eon = REG(0x1D98) | ((uint32_t)REG(0x1D9A) << 16);
+    int rvb = g_reverb && enabled && ((cnt & 0x80) || REG(0x1D84) || REG(0x1D86));
+    if (rvb) memset(g_racc, 0, sizeof(int32_t) * 2 * n);
 
     if (non) {                                  /* noise generator (psx-spx), only when a voice uses it */
         int noise_shift = (cnt >> 10) & 15, noise_step = ((cnt >> 8) & 3) + 4;
@@ -239,6 +312,7 @@ static void mix_spu(int16_t *out, int n)
         int32_t vl = volume(REG(base)), vr = volume(REG(base + 2));
         int pm = i > 0 && (pmon & (1u << i)) && prev_active;
         int nz = (non >> i) & 1;
+        int rv = rvb && ((eon >> i) & 1);           /* voice feeds the reverb */
         int need_out = i < 23 && ((pmon >> (i + 1)) & 1);    /* the next voice is modulated by this one */
         int s = 0;
         while (s < n) {
@@ -249,19 +323,25 @@ static void mix_spu(int16_t *out, int n)
             int16_t prev = v->prev, cur = v->cur;
             if (!nz && !pm && !need_out) {          /* common case: plain voice, no per-sample special cases */
                 uint32_t inc = step0 * SPU_DIV;
-                int32_t *acc = g_acc + s * 2;
-                for (int k = s; k < end; k++, acc += 2) {
-                    int32_t smp = prev + (((int32_t)cur - prev) * (int32_t)(counter & 0xFFF) >> 12);
-                    counter += inc;
-                    while (counter >= 0x1000) {
-                        counter -= 0x1000;
-                        prev = cur;
-                        cur = v->buf[v->pos];
-                        if (++v->pos >= 28) { v->pos = 0; block_end(v, i); }
-                    }
-                    acc[0] += smp * gl >> 15;
-                    acc[1] += smp * gr >> 15;
+                int32_t *acc = g_acc + s * 2, *racc = g_racc + s * 2;
+#define PLAIN_SAMPLE                                                                        \
+                    int32_t smp = prev + (((int32_t)cur - prev) * (int32_t)(counter & 0xFFF) >> 12); \
+                    counter += inc;                                                         \
+                    while (counter >= 0x1000) {                                             \
+                        counter -= 0x1000;                                                  \
+                        prev = cur;                                                         \
+                        cur = v->buf[v->pos];                                               \
+                        if (++v->pos >= 28) { v->pos = 0; block_end(v, i); }                \
+                    }                                                                       \
+                    int32_t sl = smp * gl >> 15, sr = smp * gr >> 15;                       \
+                    acc[0] += sl;                                                           \
+                    acc[1] += sr;
+                if (!rv) {
+                    for (int k = s; k < end; k++, acc += 2) { PLAIN_SAMPLE }
+                } else {
+                    for (int k = s; k < end; k++, acc += 2, racc += 2) { PLAIN_SAMPLE racc[0] += sl; racc[1] += sr; }
                 }
+#undef PLAIN_SAMPLE
             } else
             for (int k = s; k < end; k++) {
                 int32_t smp = nz ? g_noise[k] : prev + (((int32_t)cur - prev) * (int32_t)(counter & 0xFFF) >> 12);
@@ -278,8 +358,10 @@ static void mix_spu(int16_t *out, int n)
                     if (++v->pos >= 28) { v->pos = 0; block_end(v, i); }
                 }
                 if (need_out) vo[k] = (int16_t)(smp * env >> 15);
-                g_acc[k * 2] += smp * gl >> 15;
-                g_acc[k * 2 + 1] += smp * gr >> 15;
+                int32_t sl = smp * gl >> 15, sr = smp * gr >> 15;
+                g_acc[k * 2] += sl;
+                g_acc[k * 2 + 1] += sr;
+                if (rv) { g_racc[k * 2] += sl; g_racc[k * 2 + 1] += sr; }
             }
             v->counter = counter;
             v->prev = prev;
@@ -296,9 +378,15 @@ static void mix_spu(int16_t *out, int n)
     }
     g_t_voices += now_us() - tv0;
 
+    if (rvb) {
+        uint64_t tr0 = now_us();
+        reverb(g_racc, n, cnt & 0x80);
+        g_t_reverb += now_us() - tr0;
+    }
     int32_t mvl = volume(REG(0x1D80)), mvr = volume(REG(0x1D82));
     for (int s = 0; s < n; s++) {
         int32_t l = g_acc[s * 2] * mvl >> 15, r = g_acc[s * 2 + 1] * mvr >> 15;
+        if (rvb) { l += g_racc[s * 2]; r += g_racc[s * 2 + 1]; }
         out[s * 2] = (int16_t)(l > 32767 ? 32767 : l < -32768 ? -32768 : l);
         out[s * 2 + 1] = (int16_t)(r > 32767 ? 32767 : r < -32768 ? -32768 : r);
     }
@@ -358,10 +446,11 @@ static int spu_thread(SceSize args, void *argp)
             for (int i = 0; i < 24; i++) voices += g_v[i].phase != 0;
             blocks++;
             if (t1 >= next) {
-                if (next) logf_("spu: mixer %u%% CPU, %u.%u voices active on average\n",
-                                (unsigned)(acc * 100 / 5000000), (unsigned)(voices / blocks),
-                                (unsigned)(voices * 10 / blocks % 10));
-                acc = 0; voices = 0; blocks = 0; g_t_voices = 0;
+                if (next) logf_("spu: mixer %u.%u%% CPU (reverb %u.%u%%), %u.%u voices active on average\n",
+                                (unsigned)(acc / 50000), (unsigned)(acc / 5000 % 10),
+                                (unsigned)(g_t_reverb / 50000), (unsigned)(g_t_reverb / 5000 % 10),
+                                (unsigned)(voices / blocks), (unsigned)(voices * 10 / blocks % 10));
+                acc = 0; voices = 0; blocks = 0; g_t_voices = 0; g_t_reverb = 0;
                 next = t1 + 5000000;
             }
         }
