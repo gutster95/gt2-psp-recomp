@@ -50,9 +50,32 @@ def find() -> Path | None:
     return None
 
 
+def glibc() -> tuple[int, ...]:
+    lib, ver = platform.libc_ver()
+    try:
+        return tuple(int(x) for x in ver.split(".")) if lib == "glibc" else (0,)
+    except ValueError:
+        return (0,)
+
+
 def package() -> dict | None:
-    data = json.loads((Path(__file__).with_name("toolchains.json")).read_text())
-    return data["packages"].get(platform_key())
+    """The package for this machine; one with min_glibc falls back to its 'fallback' entry on an older system."""
+    packages = json.loads((Path(__file__).with_name("toolchains.json")).read_text())["packages"]
+    pkg = packages.get(platform_key())
+    while pkg and pkg.get("min_glibc") and glibc() < tuple(int(x) for x in pkg["min_glibc"].split(".")):
+        pkg = packages.get(pkg.get("fallback", ""))
+    return pkg
+
+
+def missing_libs(p: Path) -> str:
+    """Linux/macOS: run the compiler proper once; a missing shared library shows up here (official pspdev builds)."""
+    cc1 = p / "libexec" / "gcc" / "psp" / "15.2.0" / f"cc1{EXE}"
+    if os.name == "nt" or not cc1.exists():
+        return ""
+    r = subprocess.run([str(cc1), "--version"], capture_output=True, text=True)
+    if r.returncode == 0:
+        return ""
+    return (r.stderr.strip().splitlines() or ["cc1 does not start"])[-1]
 
 
 def state() -> dict:
@@ -70,6 +93,7 @@ def state() -> dict:
 def ensure(say: Callable[[str], None], progress: Callable[[float], None] | None = None) -> Path:
     p = find()
     if p:
+        check(p)
         return p
     pkg = package()
     if not pkg or not pkg.get("url"):
@@ -111,7 +135,16 @@ def ensure(say: Callable[[str], None], progress: Callable[[float], None] | None 
     p = find()
     if not p:
         raise RuntimeError("the toolchain package did not contain pspdev/bin/psp-gcc")
+    check(p)
     return p
+
+
+def check(p: Path) -> None:
+    err = missing_libs(p)
+    if err:
+        pkg = package() or {}
+        hint = f" Install: {pkg['needs']}." if pkg.get("needs") else ""
+        raise RuntimeError(f"the PSP compiler cannot start: {err}.{hint}")
 
 
 def safe_extract(names: list[str], dst: Path) -> None:

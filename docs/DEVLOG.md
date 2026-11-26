@@ -1047,3 +1047,13 @@ the Media Engine:
 * Converter: `converter/toolchain.py` + `toolchains.json` (pinned packages per platform, SHA-256 checked, unpacked
   into tools/pspdev-<platform>/); compile step = build_psp.py. Release launcher icon: own design
   (`scripts/make_release_icon.py` -> converter/ICON0.PNG).
+* Linux test in a fresh Ubuntu 24.04 WSL distro (tools/wsl-test, "GT2Test": only python3/git/curl): repository
+  cloned, both discs converted through the converter API. The official pspdev tarball failed (`libmpc.so.3`
+  missing) - so Linux x86_64 gets its own toolchain too (`TC_HOST=linux scripts/wintc/build.sh`: only glibc needed,
+  glibc >= 2.38). With it: both discs in 262 s, GT2SIM.PRX / GT2ARC.PRX / GT2.PAK byte-identical to the dev builds.
+  converter/toolchain.py falls back to the official package on older glibc and names the missing packages.
+* Toolchains published as prereleases toolchain-win-v1 / toolchain-linux-v1 (private repo for now; the URLs work
+  once it is public). The zips carry licence texts and source commits (GPL).
+* PGO vs plain -O2 on the PSP (attract race): 26.9 vs 27.9 ms average, 454 vs 380 frames over budget - the release
+  build stays without PGO.
+* README rewritten for the release; Reddit draft in docs/release/reddit-post.md.

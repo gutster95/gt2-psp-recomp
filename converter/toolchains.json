@@ -1,20 +1,29 @@
 {
-  "comment": "Pinned PSP toolchain packages per platform. Linux/macOS: official pspdev release v20261101. Windows: our own mingw-w64 build (scripts/wintc/build.sh), url filled in when it is attached to the GitHub release.",
+  "comment": "Pinned PSP toolchain packages per platform. Windows and Linux x86_64: our own builds (scripts/wintc/build.sh, releases toolchain-win-v1 / toolchain-linux-v1, downloadable once the repository is public). Linux with glibc < 2.38 and arm64, macOS: official pspdev release v20261101. 'needs': shared libraries the package expects to be installed.",
   "packages": {
     "windows-x86_64": {
-      "url": "",
-      "sha256": "",
-      "size_mb": 143
+      "url": "https://github.com/gutster95/gt2-psp-recomp/releases/download/toolchain-win-v1/pspdev-win-x86_64.zip",
+      "sha256": "77f17934c1975a16d0555bdde1daf6d6b476bc17af75c87651fdf9f45a754e69",
+      "size_mb": 145
     },
     "linux-x86_64": {
+      "url": "https://github.com/gutster95/gt2-psp-recomp/releases/download/toolchain-linux-v1/pspdev-linux-x86_64.tar.gz",
+      "sha256": "730b97494d8db0a148a90428ed7aad43ff35d12f37234baa95ca2ee61ce58f01",
+      "size_mb": 125,
+      "min_glibc": "2.38",
+      "fallback": "linux-x86_64-pspdev"
+    },
+    "linux-x86_64-pspdev": {
       "url": "https://github.com/pspdev/pspdev/releases/download/v20261101/pspdev-ubuntu-latest-x86_64.tar.gz",
       "sha256": "5dc9d785a5fd490ee9d5204b90f715efb6c46940ba3944036bbef9c993c17713",
-      "size_mb": 165
+      "size_mb": 165,
+      "needs": "libmpc3 libmpfr6 libgmp10 libisl23 libzstd1 (Debian/Ubuntu package names)"
     },
     "linux-arm64": {
       "url": "https://github.com/pspdev/pspdev/releases/download/v20261101/pspdev-ubuntu-24.04-arm-arm64.tar.gz",
       "sha256": "91d15c68b121ee23545ad5e7f3c72364c0ed4389ab937b9da8bb47dab606eafa",
-      "size_mb": 164
+      "size_mb": 164,
+      "needs": "libmpc3 libmpfr6 libgmp10 libisl23 libzstd1 (Debian/Ubuntu package names)"
     },
     "macos-arm64": {
       "url": "https://github.com/pspdev/pspdev/releases/download/v20261101/pspdev-macos-latest-arm64.tar.gz",

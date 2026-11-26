@@ -47,19 +47,21 @@ WSL/Docker (too much for normal users).
 6. **Tests per platform**: Windows 11 (no WSL), macOS (Apple Silicon), Ubuntu 24.04 - fresh user account, only
    Python 3 installed; full conversion of both discs; result runs on the PSP-3000 (attract race, GT mode with
    save, Arcade race, movie). macOS: Gatekeeper quarantine on the downloaded toolchain (`xattr -rd`).
-7. **Release texts**: README for the GitHub release and the Reddit post (drafts: `docs/release/`), screenshots
+7. **Drafts done 2026-11-26** (README.md, docs/release/reddit-post.md). **Release texts**: README for the GitHub release and the Reddit post (drafts: `docs/release/`), screenshots
    from our own captures. Repository public only after a last check that no game-derived file is tracked
    (`git ls-files` against generated/, extracted*/, build/, *.PAK, *.PRX, Images/).
 
 ## Open questions
 
-* Linux: the official pspdev tarball needs some shared libraries at run time (libmpc, libmpfr, libgmp, libisl, zstd -
+* **Resolved 2026-11-26** (own Linux build, `TC_HOST=linux`, release toolchain-linux-v1; glibc >= 2.38, older
+  systems fall back to the official tarball with an install hint). Was: Linux: the official pspdev tarball needs some shared libraries at run time (libmpc, libmpfr, libgmp, libisl, zstd -
   see scripts/wsl-setup.sh). Desktop distros usually have them; otherwise the converter must say which package to
   install - or we build the Linux toolchain statically like the Windows one.
 
 * Python on Windows: require python.org Python (the .bat explains it), or ship the embeddable Python (~10 MB, PSF
   licence allows it). Shipping it is friendlier.
-* PGO: the release build is plain -O2 (the profile data contains absolute paths). Measure the difference on the PSP;
+* **Measured 2026-11-26:** PGO vs plain -O2 on the PSP-3000, attract race frames 300-2999: 26.9 vs 27.9 ms average,
+  but 454 vs 380 frames over 33.4 ms - no clear gain, the release stays plain -O2. Was: PGO: the release build is plain -O2 (the profile data contains absolute paths). Measure the difference on the PSP;
   if it matters, rebuild the profile with `-fprofile-prefix-map` so it is portable.
 * Simulation output stays bit-identical to the tested build? The release recompiles with the same tool versions, so
   yes - keep a hash list of the generated files from our build to compare against a user's run (debugging aid).
