@@ -1,0 +1,30 @@
+{
+  "comment": "Pinned PSP toolchain packages per platform. Linux/macOS: official pspdev release v20261101. Windows: our own mingw-w64 build (scripts/wintc/build.sh), url filled in when it is attached to the GitHub release.",
+  "packages": {
+    "windows-x86_64": {
+      "url": "",
+      "sha256": "",
+      "size_mb": 143
+    },
+    "linux-x86_64": {
+      "url": "https://github.com/pspdev/pspdev/releases/download/v20261101/pspdev-ubuntu-latest-x86_64.tar.gz",
+      "sha256": "5dc9d785a5fd490ee9d5204b90f715efb6c46940ba3944036bbef9c993c17713",
+      "size_mb": 165
+    },
+    "linux-arm64": {
+      "url": "https://github.com/pspdev/pspdev/releases/download/v20261101/pspdev-ubuntu-24.04-arm-arm64.tar.gz",
+      "sha256": "91d15c68b121ee23545ad5e7f3c72364c0ed4389ab937b9da8bb47dab606eafa",
+      "size_mb": 164
+    },
+    "macos-arm64": {
+      "url": "https://github.com/pspdev/pspdev/releases/download/v20261101/pspdev-macos-latest-arm64.tar.gz",
+      "sha256": "066a20cf743bcf9ff948cc8c2f1204ad705ad018e9f80ccd444e488f44bc22c8",
+      "size_mb": 147
+    },
+    "macos-x86_64": {
+      "url": "https://github.com/pspdev/pspdev/releases/download/v20261101/pspdev-macos-15-intel-x86_64.tar.gz",
+      "sha256": "bbe5d94b99c6baa6880a603d937caaa29b6544eee2b596c991ce911517db621a",
+      "size_mb": 155
+    }
+  }
+}

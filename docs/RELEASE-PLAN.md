@@ -23,20 +23,22 @@ WSL/Docker (too much for normal users).
 
 ## Steps
 
-1. **Python build driver instead of bash/cmake/make** (`scripts/build_psp.py`). Windows has none of those. The driver
+1. **Done 2026-11-21.** Python build driver instead of bash/cmake/make (`scripts/build_psp.py`); its Simulation PRX
+   and launcher are byte-identical to the CMake build (same objects, same link order - object names matter: the
+   linker script places `*generated/*.c.obj`). Was: Windows has none of those. The driver
    calls psp-gcc / psp-ld / psp-fixup-imports / psp-prxgen / mksfoex / pack-pbp directly, with the flags the CMake
    files use today (runtime: `-O2 -G0 -ffunction-sections -fno-strict-aliasing`, generated: `GEN_EXTRA`, the linker
    script from `scripts/make_linkfile.py`, the libraries of runtime/CMakeLists.txt). Parallel compile with a process
    pool (the generated code is ~90 files). Also builds the ME library and the launcher. Check: the PRX it produces
    for the Simulation disc behaves like the CMake one (same tests on the PSP; the binary differs only in link order).
-2. **pspdev for Windows**: cross-build the pspdev toolchain (binutils, gcc, newlib, pspsdk, psp-pacman not needed)
+2. **Built 2026-11-21** (`scripts/wintc/build.sh`, needs the LTO plugin DLL - see DEVLOG). **pspdev for Windows**: cross-build the pspdev toolchain (binutils, gcc, newlib, pspsdk, psp-pacman not needed)
    with mingw-w64 on Linux (GitHub Actions or the dev WSL distro), using pspdev's own build scripts with
    `--host=x86_64-w64-mingw32`. Only what the build needs: psp-gcc, psp-as, psp-ld, psp-ar, psp-fixup-imports,
    psp-prxgen, psp-build-exports, mksfoex, pack-pbp, the PSPSDK libs/headers. Zip it (~150 MB), attach to our release,
    publish its SHA-256 in `converter/toolchains.json`. GPL: link the exact sources/scripts in the release notes.
    Check: compile the runtime on Windows with it and compare with the Linux build.
-3. **Converter backend** (`converter/server.py`, started on 2026-11-21): replace the Docker step by
-   `toolchain.ensure()` (download, verify, unpack into `tools/pspdev-<platform>/`) and `build_psp.py`. Disc checks
+3. **Mostly done 2026-11-21** (`converter/toolchain.py`, `converter/toolchains.json`; the Windows url is filled in
+   once the zip is attached to a release). **Converter backend**: `toolchain.ensure()` (download, verify, unpack into `tools/pspdev-<platform>/`) and `build_psp.py`. Disc checks
    (SHA-1 of the .bin, see `KNOWN`), extract, recompile both discs, packs, output folder - already written.
    Add: free disk space check (~3 GB while converting), cancel button, "convert again" cleanup.
 4. **Web UI** (`converter/web/index.html`): disc slots, verification, toolchain status, progress, log, result -
@@ -50,6 +52,10 @@ WSL/Docker (too much for normal users).
    (`git ls-files` against generated/, extracted*/, build/, *.PAK, *.PRX, Images/).
 
 ## Open questions
+
+* Linux: the official pspdev tarball needs some shared libraries at run time (libmpc, libmpfr, libgmp, libisl, zstd -
+  see scripts/wsl-setup.sh). Desktop distros usually have them; otherwise the converter must say which package to
+  install - or we build the Linux toolchain statically like the Windows one.
 
 * Python on Windows: require python.org Python (the .bat explains it), or ship the embeddable Python (~10 MB, PSF
   licence allows it). Shipping it is friendlier.

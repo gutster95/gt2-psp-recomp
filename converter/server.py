@@ -5,7 +5,7 @@ discs into a ready-to-copy PSP folder.
 
 Steps: verify the .bin images (SHA-1 of the known good dumps) -> extract the file system -> recompile the game code
 (python -m gt2psp recomp) -> convert the data (python -m gt2psp pack) -> compile for the PSP with the pspdev toolchain
-(scripts/converter-build.sh; release: scripts/build_psp.py, no bash) -> output/PSP/GAME/GT2PSP. Nothing of the game is contained in this project: every
+(scripts/build_psp.py) -> output/PSP/GAME/GT2PSP. Nothing of the game is contained in this project: every
 game-derived file is produced here, on the user's machine, from the user's discs.
 """
 
@@ -22,6 +22,9 @@ import time
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import toolchain  # noqa: E402  (converter/toolchain.py)
 
 ROOT = Path(__file__).resolve().parent.parent
 WEB = Path(__file__).resolve().parent / "web"
@@ -125,15 +128,6 @@ def scan() -> list[dict]:
     return out
 
 
-def toolchain_state() -> dict:
-    """PSP toolchain for the compile step. Release plan (docs/RELEASE-PLAN.md) step 2/3: pinned pspdev downloads
-    (Linux/macOS) and our own Windows build; until then only an existing local toolchain is detected."""
-    for p in (ROOT / "tools" / "pspdev", Path(os.environ.get("PSPDEV", "/nonexistent"))):
-        if (p / "bin").exists():
-            return {"ok": True, "path": str(p), "message": f"PSP toolchain found ({p})"}
-    return {"ok": False, "message": "The PSP toolchain is downloaded on first use (coming with the release build)."}
-
-
 def run(cmd: list[str], env: dict | None = None, cwd: Path = ROOT) -> None:
     JOB.say("$ " + " ".join(cmd))
     p = subprocess.Popen(cmd, cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
@@ -197,12 +191,21 @@ def convert(sim: str | None, arc: str | None) -> None:
         run(py + ["pack", str(cue), "--out", str(ROOT / "build" / ("GT2.PAK" if d == "sim" else "GT2A.PAK"))], env)
         finished(f"pack-{d}")
     step("toolchain", i); i += 1
-    tc = toolchain_state()
-    if not tc["ok"]:          # release plan step 2/3: download of the pinned toolchain goes here
-        raise RuntimeError(tc["message"])
+    def dl(f: float) -> None:
+        with JOB.lock:
+            JOB.progress = (i - 1 + f) / len(plan)
+    tc = toolchain.ensure(JOB.say, dl)
+    JOB.say(f"PSP toolchain: {tc}")
     finished("toolchain")
     step("compile", i); i += 1
-    run(["bash", "scripts/converter-build.sh"], dict(os.environ, PSPDEV=tc["path"]))   # -> build_psp.py (plan step 1)
+    build = [sys.executable, str(ROOT / "scripts" / "build_psp.py"), "--pspdev", str(tc), "--launcher",
+             "--out", str(ROOT / "build" / "release")]
+    for d, _ in discs:
+        build += ["--game", d]
+    icon = ROOT / "converter" / "ICON0.PNG"
+    if icon.exists():
+        build += ["--icon", str(icon)]
+    run(build, env)
     finished("compile")
     step("folder", i); i += 1
     dst = OUTPUT / "PSP" / "GAME" / "GT2PSP"
@@ -260,7 +263,7 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/" or self.path == "/index.html":
             self.send(200, (WEB / "index.html").read_bytes(), "text/html; charset=utf-8")
         elif self.path == "/api/scan":
-            self.js({"discs": scan(), "input": str(INPUT), "toolchain": toolchain_state()})
+            self.js({"discs": scan(), "input": str(INPUT), "toolchain": toolchain.state()})
         elif self.path == "/api/status":
             self.js(JOB.state())
         else:

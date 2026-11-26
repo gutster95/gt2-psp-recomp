@@ -127,14 +127,14 @@ static int menu(const int have[2])
             for (int i = 0; i < 2; i++) {
                 pspDebugScreenSetXY(19, 12 + 2 * i);
                 pspDebugScreenSetTextColor(!have[i] ? 0xFF404040 : i == sel ? 0xFF40FFFF : 0xFFA0A0A0);
-                pspDebugScreenPrintf("%c %s", i == sel ? '>' : ' ', NAMES[i]);
+                pspDebugScreenPrintf("%c %s%s", i == sel ? '>' : ' ', NAMES[i], have[i] ? "" : "  (not converted)");
             }
             pspDebugScreenSetXY(19, 18);
             pspDebugScreenSetTextColor(0xFF40FFFF);
             pspDebugScreenPrintf("< %s >", MODES[perf]);
             pspDebugScreenSetXY(19, 23);
             pspDebugScreenSetTextColor(0xFF808080);
-            pspDebugScreenPrintf("Up/Down: game   Left/Right: mode");
+            pspDebugScreenPrintf(have[0] && have[1] ? "Up/Down: game   Left/Right: mode" : "Left/Right: mode");
             pspDebugScreenSetXY(19, 24);
             pspDebugScreenPrintf("X: start");
         }

@@ -1030,3 +1030,20 @@ the Media Engine:
   step, writes `output/PSP/GAME/GT2PSP`. Missing: toolchain download and the bash-free build driver (plan steps 1-3).
 * Media Engine library vendored as `third_party/me-custom-core` (MIT); build scripts take `GT2_WORK` (scratch dir,
   default /root) and `PSPDEV`, so they also run outside the dev WSL distro.
+
+## 2026-11-26 - Windows toolchain and bash-free build (release plan steps 1-3)
+
+* `scripts/build_psp.py`: the CMake builds as plain compiler calls from Python (parallel, incremental). Simulation PRX
+  and launcher are byte-identical to the CMake output. Pitfall: `runtime/ld/linkfile.prx` places
+  `*generated/*.c.obj` as one block, so the object files must keep CMake's names (`generated/<file>.c.obj`) and be
+  passed relative with "/" (Windows paths with "\" do not match the pattern).
+* `scripts/wintc/build.sh`: PSP toolchain for Windows, cross-built with mingw-w64 in WSL from the same pspdev commits
+  as our Linux toolchain (binutils 2.44 Allegrex, gcc 15.2.0 Allegrex, pspsdk tools); the PSP-side files (newlib,
+  libgcc, pspsdk libs, headers) are copied from the Linux toolchain. Native .exe files, only Windows system DLLs.
+  Two traps on the way to identical output: (1) pspdev's libraries (libpthread etc.) contain LTO objects - without
+  the LTO plugin ld silently links their fallback code (launcher +864 bytes); the plugin DLL is only built without
+  `-static` in LDFLAGS (libtool builds no shared library otherwise). (2) The LTO data is zstd-compressed: lto1 needs
+  zstd (`compiler does not support ZSTD LTO compression`) - static libzstd 1.5.6 built for the host.
+* Converter: `converter/toolchain.py` + `toolchains.json` (pinned packages per platform, SHA-256 checked, unpacked
+  into tools/pspdev-<platform>/); compile step = build_psp.py. Release launcher icon: own design
+  (`scripts/make_release_icon.py` -> converter/ICON0.PNG).
