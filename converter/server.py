@@ -220,10 +220,11 @@ class Dialogs:
                 p = filedialog.askdirectory(parent=root, title="Your PSP's memory stick (the drive with the PSP folder)",
                                             initialdir=initial or None, mustexist=True)
                 return [p] if p else []
-            ps = filedialog.askopenfilenames(
-                parent=root, title="Your Gran Turismo 2 disc images", initialdir=initial or None,
+            mode = {"sim": "Simulation Mode", "arc": "Arcade Mode"}.get(kind.partition(":")[2], "")
+            p = filedialog.askopenfilename(
+                parent=root, title=f"Gran Turismo 2 {mode} disc image".replace("  ", " "), initialdir=initial or None,
                 filetypes=[("Disc images", "*.cue *.bin *.ecm *.img"), ("All files", "*.*")])
-            return list(ps)
+            return [p] if p else []
         finally:
             root.destroy()
 
@@ -565,10 +566,10 @@ class Handler(BaseHTTPRequestHandler):
         except ValueError:
             req = {}
         if self.path == "/api/pick":
-            kind = "folder" if req.get("kind") == "folder" else "files"
+            kind = "folder" if req.get("kind") == "folder" else f"file:{req.get('which', '')}"
             initial = load_settings().get("psp" if kind == "folder" else "discdir", "")
             picked = DIALOGS.ask(kind, initial)
-            if picked and kind == "files":
+            if picked and kind != "folder":
                 save_settings(discdir=str(Path(picked[0]).parent))
             self.js({"paths": picked, "available": DIALOGS.available})
         elif self.path == "/api/add":

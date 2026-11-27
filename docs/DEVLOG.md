@@ -1246,3 +1246,5 @@ Fan mod discs (ISO/, zips from the user). Compared EXE + GT2.OVL code word by wo
   in the folder (settings.txt, the other disc's runtime) and the save data stay. Test on a stick copy: first install
   5 files, second run nothing, after an EBOOT change only EBOOT.PBP.
 * The old `input/` folder stays git-ignored (it may still hold disc images).
+* Same day: one path per disc - the Simulation and the Arcade card each have a path field and their own
+  "Choose..." (single-file dialog titled with the mode); a disc of the other kind is flagged in the card.

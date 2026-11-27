@@ -92,6 +92,8 @@
   }
   .x { background: none; border: 0; color: var(--muted); cursor: pointer; font-size: 16px; float: right; }
   .x:hover { color: var(--bad); }
+  .pathrow { display: flex; gap: 8px; align-items: center; margin-top: 4px; }
+  .pathrow input { min-width: 0; }
   .found { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
 
   /* buttons: slanted like menu buttons */
@@ -156,32 +158,30 @@
   </header>
 
   <div class="sec"><span class="num"><b>1</b></span>Your discs</div>
-  <p class="note">Pick your disc images: <code>.cue</code>, <code>.bin</code> or <code>.bin.ecm</code> (the files you
-    pick are only read, never changed). Each disc is checked at once and lands in its slot. Supported: GT2 USA
-    (Simulation Mode Rev 2, Arcade Mode), GT2 Europe and Japan (both discs) and the fan mod GT2 Plus Beta v6.1.
-    One disc is enough; with both discs of a version you get a start menu to pick the mode. Each version gets its own
-    PSP folder and save data (<code>GT2PSP</code>, <code>GT2PSPEU</code>, <code>GT2PSPJP</code>, <code>GT2PLUS</code>,
-    <code>GT2PLUSEU</code>).</p>
-  <div class="row">
-    <button class="btn" id="pick">Choose disc files...</button>
-  </div>
-  <div class="row" style="margin-top:10px">
-    <input type="text" id="path" placeholder="...or paste the path of a .cue / .bin / .bin.ecm file">
-    <button class="btn small" id="add">Add</button>
-  </div>
+  <p class="note">Pick the disc image for each mode: <code>.cue</code>, <code>.bin</code> or <code>.bin.ecm</code>
+    (the files are only read, never changed). Each disc is checked at once. Supported: GT2 USA (Simulation Mode Rev 2,
+    Arcade Mode), GT2 Europe and Japan (both discs) and the fan mod GT2 Plus Beta v6.1. One disc is enough; with both
+    discs of a version you get a start menu to pick the mode. Each version gets its own PSP folder and save data
+    (<code>GT2PSP</code>, <code>GT2PSPEU</code>, <code>GT2PSPJP</code>, <code>GT2PLUS</code>, <code>GT2PLUSEU</code>).</p>
   <p class="note" id="pickMsg"></p>
-  <div class="cards" style="margin-top:10px">
+  <div class="cards">
     <div class="card" id="card-sim">
       <button class="x" data-w="sim" title="Remove">&#x2715;</button>
       <h3>Simulation Mode</h3><div class="tag">GT mode, licenses, career - the main disc</div>
-      <div class="file"></div>
+      <div class="pathrow">
+        <input type="text" id="path-sim" placeholder="Path of the .cue / .bin / .bin.ecm">
+        <button class="btn small" id="pick-sim">Choose...</button>
+      </div>
       <div class="state"><span class="dot"></span><span class="txt">No disc chosen</span></div>
       <div class="bar"><i></i></div>
     </div>
     <div class="card" id="card-arc">
       <button class="x" data-w="arc" title="Remove">&#x2715;</button>
       <h3>Arcade Mode</h3><div class="tag">Road race, rally, time trial - and the intro movie</div>
-      <div class="file"></div>
+      <div class="pathrow">
+        <input type="text" id="path-arc" placeholder="Path of the .cue / .bin / .bin.ecm">
+        <button class="btn small" id="pick-arc">Choose...</button>
+      </div>
       <div class="state"><span class="dot"></span><span class="txt">No disc chosen</span></div>
       <div class="bar"><i></i></div>
     </div>
@@ -233,7 +233,8 @@ const STEP_NAMES = {
   "pack-sim": "Pack Simulation data", "pack-arc": "Pack Arcade data",
   "toolchain": "PSP toolchain", "compile": "Compile for PSP", "folder": "Build PSP folder", "install": "Install on PSP",
 };
-let picked = [], verified = {}, slot = { sim: null, arc: null }, toolOk = false, built = [], polling = null, last = {};
+let verified = {}, slot = { sim: null, arc: null }, toolOk = false, built = [], polling = null, last = {};
+const KIND = { sim: "Simulation", arc: "Arcade" };
 
 for (let i = 0; i < 24; i++) { const t = document.createElement("i"); if (i >= 18) t.className = "hot"; $("tacho").appendChild(t); }
 
@@ -242,58 +243,53 @@ async function api(path, body) {
   return r.json();
 }
 
-async function add(path) {
+// check the path of one slot
+async function setPath(which, path) {
   path = (path || "").trim().replace(/^"|"$/g, "");
-  if (!path) return;
+  $("path-" + which).value = path;
+  if (!path) { slot[which] = null; render(last); return; }
   const r = await api("/api/add", { path });
-  if (!r.key) return;
-  if (!picked.includes(r.key)) picked.push(r.key);
-  verified[r.key] = { progress: 0 };
+  slot[which] = r.key;
+  if (r.key) verified[r.key] = { progress: 0 };
   render(last);
   poll();
 }
 
-// a checked disc goes into its slot (the newest pick wins)
-function place() {
-  for (const k of picked) {
-    const v = verified[k];
-    if (v && v.ok && (v.disc === "sim" || v.disc === "arc")) slot[v.disc] = k;
-  }
+// a disc is usable in its slot when it is checked and of that kind
+function good(which) {
+  const v = verified[slot[which]];
+  return !!(slot[which] && v && v.ok && v.disc === which);
 }
 
 function card(which) {
-  const c = $("card-" + which), k = slot[which];
+  const c = $("card-" + which), k = slot[which], v = k ? verified[k] : null;
   c.className = "card";
-  let txt = "No disc chosen", pct = 0, file = "";
-  const busy = picked.filter((p) => verified[p] && verified[p].ok === undefined);
-  if (k) {
-    const v = verified[k];
-    file = k; c.classList.add("ok"); pct = 1;
-    txt = "Verified: " + v.name + "  → PSP/GAME/" + v.folder;
-  } else if (busy.length) {
-    const v = verified[busy[0]];
+  let txt = "No disc chosen", pct = 0;
+  if (v && v.ok === undefined) {
     c.classList.add("busy"); pct = v.progress || 0;
-    txt = (v.step || "Checking") + "... " + Math.round(pct * 100) + "%"; file = busy[0];
+    txt = (v.step || "Checking") + "... " + Math.round(pct * 100) + "%";
+  } else if (v && v.ok && v.disc === which) {
+    c.classList.add("ok"); pct = 1; txt = "Verified: " + v.name + "  \u2192 PSP/GAME/" + v.folder;
+  } else if (v && v.ok) {
+    c.classList.add("bad"); pct = 1; txt = "That is the " + KIND[v.disc] + " disc - choose it in the " + KIND[v.disc] + " slot";
+  } else if (v) {
+    c.classList.add("bad"); pct = 1; txt = v.message || "Unknown disc";
   }
-  c.querySelector(".file").textContent = file;
   c.querySelector(".txt").textContent = txt;
   c.querySelector(".bar i").style.width = (pct * 100) + "%";
 }
 
-function messages() {
-  const bad = picked.filter((p) => verified[p] && verified[p].ok === false)
-    .map((p) => (verified[p].file || p) + ": " + verified[p].message);
-  if (bad.length) { $("pickMsg").textContent = bad.join("  |  "); $("pickMsg").style.color = "var(--bad)"; }
-}
+function messages() {}
 
 function folders() {
   const f = [];
-  for (const w of ["sim", "arc"]) if (slot[w]) { const v = verified[slot[w]]; if (!f.includes(v.folder)) f.push(v.folder); }
+  for (const w of ["sim", "arc"]) if (good(w)) { const v = verified[slot[w]]; if (!f.includes(v.folder)) f.push(v.folder); }
   return f;
 }
 
 function ready(running) {
-  $("go").disabled = running || !(slot.sim || slot.arc) || !toolOk;
+  const chosen = ["sim", "arc"].filter((w) => slot[w]);
+  $("go").disabled = running || !chosen.length || !chosen.every(good) || !toolOk;
   const f = folders().length ? folders() : built;
   $("installOnly").disabled = running || !$("psp").value.trim() || !f.length || !f.every((x) => built.includes(x));
 }
@@ -305,7 +301,7 @@ async function info() {
   $("tool").querySelector(".txt").textContent = r.toolchain.message;
   if (!$("psp").value) $("psp").value = r.psp || "";
   if (!r.dialogs) {
-    $("pick").disabled = true; $("pickPsp").disabled = true;
+    $("pick-sim").disabled = true; $("pick-arc").disabled = true; $("pickPsp").disabled = true;
     $("pickMsg").textContent = "No file dialog available here (Python without tkinter): paste the paths instead.";
   }
   ready(false);
@@ -314,7 +310,7 @@ async function info() {
 function render(s) {
   last = s || {};
   for (const [k, h] of Object.entries(last.hashes || {})) verified[k] = h;
-  place(); card("sim"); card("arc"); messages();
+  card("sim"); card("arc");
   const lit = Math.round((last.progress || 0) * 24);
   [...$("tacho").children].forEach((t, i) => t.classList.toggle("on", i < lit));
   const inst = last.install || {};
@@ -354,19 +350,15 @@ async function poll() {
   }, 500);
 }
 
-$("pick").onclick = async () => {
-  $("pick").disabled = true;
-  try { const r = await api("/api/pick", { kind: "files" }); for (const p of r.paths || []) await add(p); }
-  finally { $("pick").disabled = false; }
-};
-$("add").onclick = () => { add($("path").value); $("path").value = ""; };
-$("path").onkeydown = (e) => { if (e.key === "Enter") $("add").onclick(); };
-for (const b of document.querySelectorAll(".x")) b.onclick = () => {
-  const k = slot[b.dataset.w];
-  slot[b.dataset.w] = null;
-  picked = picked.filter((p) => p !== k);
-  render(last);
-};
+for (const w of ["sim", "arc"]) {
+  $("pick-" + w).onclick = async () => {
+    $("pick-" + w).disabled = true;
+    try { const r = await api("/api/pick", { kind: "files", which: w }); if (r.paths && r.paths[0]) await setPath(w, r.paths[0]); }
+    finally { $("pick-" + w).disabled = false; }
+  };
+  $("path-" + w).onchange = () => setPath(w, $("path-" + w).value);
+}
+for (const b of document.querySelectorAll(".x")) b.onclick = () => setPath(b.dataset.w, "");
 $("pickPsp").onclick = async () => {
   const r = await api("/api/pick", { kind: "folder" });
   if (r.paths && r.paths[0]) { $("psp").value = r.paths[0]; ready(false); }
@@ -388,7 +380,8 @@ $("findPsp").onclick = async () => {
 };
 $("psp").oninput = () => ready(false);
 $("go").onclick = async () => {
-  await api("/api/convert", { sim: slot.sim, arc: slot.arc, psp: $("psp").value.trim() || null });
+  await api("/api/convert", { sim: good("sim") ? slot.sim : null, arc: good("arc") ? slot.arc : null,
+                              psp: $("psp").value.trim() || null });
   poll();
 };
 $("installOnly").onclick = async () => {

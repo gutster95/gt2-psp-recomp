@@ -32,8 +32,8 @@ converter turns your discs into a PSP folder on your own computer.
    - Windows: double-click `convert.bat`
    - macOS: double-click `convert.command`
    - Linux: run `./convert.sh`
-3. Your browser opens. Click **Choose disc files...** and pick your `.cue`, `.bin` or `.bin.ecm` files (one or
-   both discs of a version). Each disc is checked at once.
+3. Your browser opens. Under **Simulation Mode** and **Arcade Mode**, click **Choose...** and pick the disc image
+   (`.cue`, `.bin` or `.bin.ecm`), or paste its path. One disc is enough. Each disc is checked at once.
 4. To install straight onto your PSP: connect it by USB, start **USB Connection** on the PSP and pick its memory
    stick under **Your PSP** (or click **Find PSP**). If the game is already on the PSP, only the files that changed
    are copied - an update usually replaces just the start file and the game program, not the big data pack. Your
