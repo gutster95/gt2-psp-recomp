@@ -479,10 +479,25 @@ static int spu_thread(SceSize args, void *argp)
     int r = sceAudioSRCChReserve(SPU_BLOCK, 44100 / SPU_DIV, 2);
     if (r < 0) { logf_("spu: no SRC channel (%08x)\n", (unsigned)r); return 0; }
     g_audio_running++;
+    /* debug: spudump.txt next to the EBOOT -> 3 minutes of the SPU output as raw 22.05 kHz stereo spu.raw */
+    char path[300];
+    snprintf(path, sizeof path, "%sspudump.txt", g_basedir);
+    FILE *dump = fopen(path, "r");
+    int dump_blocks = 0;
+    if (dump) {
+        fclose(dump);
+        snprintf(path, sizeof path, "%sspu.raw", g_basedir);
+        dump = fopen(path, "wb");
+        dump_blocks = 44100 / SPU_DIV * 180 / SPU_BLOCK;
+    }
     for (int k = 0; !g_quit; k ^= 1) {
         uint64_t t0 = now_us();
         if (g_spu_paused) memset(buf[k], 0, sizeof buf[k]);   /* settings menu open (menu.c) */
         else mix_spu(buf[k], SPU_BLOCK);
+        if (dump && dump_blocks > 0) {
+            fwrite(buf[k], 4, SPU_BLOCK, dump);
+            if (--dump_blocks == 0) { fclose(dump); dump = 0; }
+        }
         {   /* statistics: mixer CPU time per ~5 s and number of active voices */
             static uint64_t acc, next;
             static uint32_t voices, blocks;

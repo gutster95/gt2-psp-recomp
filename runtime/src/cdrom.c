@@ -202,9 +202,14 @@ static int pak_read(uint32_t off, uint8_t *dst, uint32_t n)
     return 1;
 }
 
+static uint32_t g_xa_all, g_xa_play;   /* XA-mode stream: sectors read / audio sectors played, per 2 s */
+
 void cdrom_stats(void)
 {
     logf_("cd: %u synchronous pack reads, %u prefetch waits in 2 s\n", (unsigned)g_pf_sync, (unsigned)g_pf_waits);
+    if (g_xa_all) logf_("cd: XA stream %u sectors, %u audio played in 2 s (filter %u/%u)\n", (unsigned)g_xa_all,
+                        (unsigned)g_xa_play, g_filter_file, g_filter_chan);
+    g_xa_all = g_xa_play = 0;
     g_pf_sync = g_pf_waits = 0;
     if (g_ld_first && now_us() - g_ld_last > 1500000) load_span_end();
 }
@@ -384,10 +389,13 @@ static void deliver_at(uint64_t t)
          * buffer runs dry. Data reads: g_period_us (0 = as soon as the game is out of the interrupt handler). */
         if (g_mode & 0x40) {
             uint64_t period = (g_mode & 0x80) ? 6667 : 13333;
-            g_next_sector_at = (t - g_next_sector_at < 4 * period) ? g_next_sector_at + period : t + period;
+            /* catch up after long stretches without a poll: a movie frame's MDEC decode runs the game for up to
+             * ~70 ms without one, a 4-period window lost that time and the movie's XA audio ran slow with gaps */
+            g_next_sector_at = (t - g_next_sector_at < 40 * period) ? g_next_sector_at + period : t + period;
         } else {
             g_next_sector_at = t + g_period_us;
         }
+        if (g_mode & 0x40) g_xa_all++;
         uint64_t tr = now_us();
         int ok = read_sector(g_pos);
         tr = now_us() - tr;
@@ -403,8 +411,12 @@ static void deliver_at(uint64_t t)
         if ((g_mode & 0x40) && (submode & 0x04)) {
             /* XA-ADPCM audio sector (music): goes to the SPU, no data interrupt. With the filter (mode bit 3)
              * only the selected file/channel of the interleaved stream plays. */
-            if ((g_mode & 0x08) && (g_sector[16] != g_filter_file || g_sector[17] != g_filter_chan)) return;
-            if (!g_muted) spu_xa_sector(g_sector);
+            /* audio sectors need nothing from the game: the ones already due follow at once (catch-up) */
+            if (!((g_mode & 0x08) && (g_sector[16] != g_filter_file || g_sector[17] != g_filter_chan))) {
+                g_xa_play++;
+                if (!g_muted) spu_xa_sector(g_sector);
+            }
+            if (t >= g_next_sector_at) deliver_at(t);
             return;
         }
         /* into the sector buffer; the data FIFO is only (re)loaded by the request register */

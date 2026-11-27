@@ -1190,3 +1190,15 @@ Fan mod discs (ISO/, zips from the user). Compared EXE + GT2.OVL code word by wo
 * PPSSPP: JP Simulation title + attract race, JP Arcade intro + menu + attract race (16:9).
 * Sound: the user hears broken sound on EU and JP runs. XA filter is applied (one channel per disc: USA 2, EU 4,
   JP 5/6), XA dumps are clean - so it is the SPU voices (open).
+
+## 2026-11-27 - Movie audio ran slow and broken (XA stream catch-up)
+
+* EU Arcade intro in PPSSPP: music slow and distorted. Dump of the XA output (audiodump.txt): 55 % silence while the
+  music plays. New `cd: XA stream` log line: only ~63 sectors/s instead of 150, of them 8 audio sectors/s for the
+  played channel (needs 18.75). The stream is the intro movie (LBA ~206400, STR video sectors with interleaved XA),
+  not MUSIC.DAT - both discs' MUSIC.DAT have the same layout.
+* Cause: the game decodes a movie frame (MDEC) for up to ~70 ms without an rt_poll; the XA clock caught up at most
+  4 periods (27 ms) after such a gap and the rest of the time was lost. Fix (cdrom.c): catch-up window 40 periods,
+  and due audio sectors are delivered at once in the same poll (they need nothing from the game). Result: 151
+  sectors/s, 19 audio/s, gap-free audio, the movie now plays its full length (before: cut off after 16 s).
+  Applies to every disc with movies (Arcade discs of all versions).
