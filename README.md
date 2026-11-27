@@ -46,21 +46,24 @@ converter turns your discs into a PSP folder on your own computer.
 5. Click **Start conversion**. Without a PSP selected, the result is in `output/PSP/GAME` (e.g. `GT2PSP`): copy it
    to your memory stick under `PSP/GAME`, or press **Install on PSP only** later. Start the game from the XMB.
 
-The first run downloads a PSP compiler (about 150 MB, checked against a fixed checksum). After that a conversion
-takes a few minutes. Everything happens locally; nothing is uploaded anywhere.
+The first run downloads a PSP compiler (about 150 MB, checked against a fixed checksum); the Japanese version
+also downloads a free 1 MB kanji bitmap font (see Features). After that a conversion takes a few minutes per disc.
+Everything happens locally; nothing is uploaded anywhere.
 
 The converter recognises a disc by its game code (the executable and GT2.OVL), not by the whole image: a GT2 Plus
 disc you patched yourself, or another dump of a supported version, works as long as its game code is one the
-converter knows. Builds with other code (Rev 0/1, other mods) need their own conversion profile.
+converter knows. Builds with other code (USA Simulation Rev 0/1, other mods or versions) need their own conversion
+profile and are rejected with "Unknown game code".
 
 ## Features
 
 - **16:9.** The 3D view is really wider, not stretched. The race HUD stays at its original proportions.
   On by default; `widescreen=0` in a settings.txt next to the EBOOT gives the original 4:3.
 - **Two picture modes**, picked in the start menu:
-  - Quality: a locked 30 fps, everything on.
-  - Performance: aims for 60 fps. Mirror and tire smoke are off by default and opponent cars use their low-detail
-    models (both can be switched back on).
+  - Quality: a locked 30 fps (European versions: 25 fps), everything on.
+  - Performance: aims for 60 fps (European versions: 50 fps). Mirror and tire smoke are off by default and opponent
+    cars use their low-detail models (both can be switched back on).
+- **European versions run at 50 Hz** like on a PAL PlayStation, so the game speed and lap times are right.
 - **Game speed stays right at any frame rate.** If a frame takes longer, the game time catches up instead of the
   game slowing down.
 - **Short loading times.** The game reads its files from a pre-converted data pack on the memory stick instead
@@ -69,10 +72,14 @@ converter knows. Builds with other code (Rev 0/1, other mods) need their own con
   takes a fraction of a second.
 - **Reverb** like on the PS1 in Quality mode (off in Performance mode, where every millisecond goes to the frame
   rate; `reverb=0`/`reverb=1` in settings.txt overrides it).
-- **Analog controls**, plus optional racing buttons (X gas, square brake, circle handbrake, triangle reverse) and
-  L/R shifting.
+- **Analog controls**, L/R shifting, and on the USA versions optional racing buttons (X gas, square brake, circle
+  handbrake, triangle reverse). The European and Japanese versions have gas and brake on X and square already.
 - **In-game settings menu** with L + R + SELECT: mirror and tire smoke, opponent detail, FPS counter, button layout.
-- **Arcade Mode** including its intro movie.
+- **Arcade Mode** including its intro movie (with sound in sync).
+- **Japanese kanji.** The Japanese versions draw some texts with the PS1 BIOS's kanji font, which the PSP does not
+  have. The converter fills it in from the free X.Org JIS bitmap font, so those texts look slightly different from
+  the original.
+- **Several versions side by side**: USA, Europe, Japan and GT2 Plus each get their own PSP folder and save data.
 
 ## Why 60 fps is a target and not a promise
 
@@ -102,9 +109,11 @@ instruction set, so a static recompiler is possible, but the hardware around it 
 
 ## Known issues
 
-- The Arcade Mode intro movie plays at about 10 fps (the PS1 decoded it in hardware; here it's software).
+- The Arcade Mode intro movie plays at a lower frame rate (the PS1 decoded it in hardware; here it's software).
 - Performance mode drops below 60 fps in heavy races (see above).
-- Only the USA discs are supported.
+- GT2 Plus is a beta fan mod: Simulation Mode is supported for its USA disc only; there is no European Plus
+  Simulation profile yet.
+- The Japanese versions are tested less than the USA and European ones.
 
 ## How it works
 
@@ -121,7 +130,10 @@ your .bin/.cue -> extract -> recompile (MIPS -> C) -> pack the data -> psp-gcc +
 | MDEC (movies)        | software decoder                                                       |
 | CD-ROM               | reads from the data pack                                               |
 | Memory card          | PSP save data                                                          |
-| BIOS                 | the calls the game uses, reimplemented                                 |
+| BIOS                 | the calls the game uses, reimplemented (kanji font from a free font)   |
+
+Every supported disc has a conversion profile (`src/gt2psp/profiles.py`): where its code, overlays and patch
+sites are. New versions are derived from a known one by code signatures (`python -m gt2psp derive`).
 
 More in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and the development log in [docs/DEVLOG.md](docs/DEVLOG.md).
 
@@ -146,7 +158,9 @@ else installed. Their output is byte-identical to the official Linux toolchain. 
 - [pspdev](https://github.com/pspdev) for the PSP toolchain and SDK
 - [psp-media-engine-custom-core](https://github.com/mcidclan) (MIT) for running code on the Media Engine
 - Silent's GT2 widescreen cheat, which the 16:9 patch is based on
-- PCSX-Redux, used as the reference for how the game should look
+- PCSX-Redux, used as the reference for how the game should look and behave
+- [X.Org jis-misc](https://gitlab.freedesktop.org/xorg/font/jis-misc) JIS 16-dot bitmap font for the Japanese kanji
+  (downloaded by the converter, not part of this repository)
 
 ## Legal
 
