@@ -10,17 +10,22 @@ converter turns your discs into a PSP folder on your own computer.
 ## What you need
 
 - A PSP with custom firmware (tested on a PSP-3000; PPSSPP works too, with its software renderer)
-- Your own Gran Turismo 2 discs as .cue/.bin, **USA versions**:
-  - Simulation Mode (Disc 2), **SCUS-94488, Rev 2**
-  - Arcade Mode (Disc 1), **SCUS-94455**
+- Your own Gran Turismo 2 discs as .cue/.bin
 
-  One disc is enough. With both, the PSP shows a small menu where you pick the mode.
-- Or the **European** discs (Disc 1 Arcade SCES-02380, Disc 2 Gran Turismo Mode SCES-12380; `.bin.ecm` images
-  are unpacked automatically). They run at 50 Hz like on a PAL PlayStation (races at 25 fps).
-- Or the fan mod **GT2 Plus (Beta v6.1)**: USA Simulation and Arcade disc, European Arcade disc.
+  Supported versions:
+  - USA Simulation Mode (Disc 2), **SCUS-94488 Rev 2**
+  - USA Arcade Mode (Disc 1), **SCUS-94455**
+  - Europe Gran Turismo Mode (Disc 2), **SCES-12380**
+  - Europe Arcade Mode (Disc 1), **SCES-02380**
+  - Japan Gran Turismo (Disc 2), **SCPS-10117 Rev 1**
+  - Japan Arcade Mode (Disc 1), **SCPS-10116**
+  - GT2 Plus Beta v6.1 (fan mod) Simulation Mode, USA (**SCUS-94488**)
+  - GT2 Plus Beta v6.1 (fan mod) Arcade Mode, USA (**SCUS-94455**) and Europe (**SCES-02380**)
 
-  Every version gets its own PSP folder (`GT2PSP`, `GT2PSPEU`, `GT2PLUS`, `GT2PLUSEU`) and its own save data, so
-  they can sit side by side.
+  One disc is enough. With both discs of a version, the PSP shows a small menu where you pick the mode. European
+  `.bin.ecm` images are unpacked automatically; the European discs run at 50 Hz like on a PAL PlayStation (races at
+  25 fps). Every version gets its own PSP folder (`GT2PSP`, `GT2PSPEU`, `GT2PSPJP`, `GT2PLUS`, `GT2PLUSEU`) and its
+  own save data, so they can sit side by side.
 - Python 3 on your computer (Windows: from python.org, tick "Add python.exe to PATH"; Linux and macOS usually
   have it)
 - About 3 GB of free disk space while converting
