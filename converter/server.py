@@ -255,6 +255,8 @@ def convert(sim: str | None, arc: str | None) -> None:
             build += ["--game", f"{d}={paths(r)['gen']}"]
         if icon.exists():
             build += ["--icon", str(icon)]
+        if any(PROFILES[r["profile"]].pal for _d, r in members):
+            build.append("--pal")
         run(build, env)
     finished("compile")
     step("folder", i); i += 1

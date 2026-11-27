@@ -1173,3 +1173,7 @@ Fan mod discs (ISO/, zips from the user). Compared EXE + GT2.OVL code word by wo
 * gpuvbl.c timed snapshots: due at s0 + n*d (>=) instead of an exact vblank match (the check does not run every
   vblank in races, only the first snapshot was taken).
 * EU Simulation: language selection, attract race in 16:9 (25 fps); EU Arcade: intro, menu, attract race.
+* PAL performance mode: the "fast enough for full rate" threshold of fps60_auto is the vblank period - 1.18 ms
+  (15.5 ms NTSC, 18.8 ms PAL); launcher (`build_psp.py --pal`, set by the converter for PAL editions) and the in-game
+  menu say 25 / 50 fps. EU Simulation in performance mode (PPSSPP): 50 fps (120 of 120 frames step 1), lap clock
+  4.99 s per 5.00 s, 16:9.

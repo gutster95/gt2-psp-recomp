@@ -108,7 +108,7 @@ void rt_frame_step(uint32_t disp, int after_wait)
             if (g_fps60_auto && t_aw) {
                 uint64_t work = now_us() - t_aw;
                 win_n++;
-                win_slow += work > 15500;
+                win_slow += work > GT2_VBLANK_US - 1183;   /* 15.5 ms at 59.94 Hz, 18.8 ms at PAL 50 Hz */
                 if (g_lock30 && win_n >= 60) {        /* ~2 s at 30 fps: all frames fast enough for 60? */
                     ok_windows = win_slow ? 0 : ok_windows + 1;
                     if (ok_windows >= 1) { g_lock30 = 0; g_lock_switches++; miss_hist = 0; ok_windows = 0; }

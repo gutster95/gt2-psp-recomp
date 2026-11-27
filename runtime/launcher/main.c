@@ -105,7 +105,11 @@ static void message(const char *text)
 static int menu(const int have[2])
 {
     static const char *const NAMES[2] = {"Simulation Mode", "Arcade Mode"};
+#ifdef GT2_LAUNCHER_PAL   /* scripts/build_psp.py --pal: a PAL edition (50 Hz) */
+    static const char *const MODES[2] = {"Quality      (25 fps)", "Performance  (50 fps)"};
+#else
     static const char *const MODES[2] = {"Quality      (30 fps)", "Performance  (60 fps)"};
+#endif
     pspDebugScreenInit();
     pspDebugScreenClearLineDisable();
     sceCtrlSetSamplingCycle(0);

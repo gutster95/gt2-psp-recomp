@@ -151,12 +151,14 @@ def runtime(tc: Toolchain, game: str, gen: Path, work: Path, me: Path, gen_flags
     return w / "gt2psp.prx"
 
 
-def launcher(tc: Toolchain, work: Path, out: Path, icon: Path | None, pic: Path | None, title: str) -> Path:
+def launcher(tc: Toolchain, work: Path, out: Path, icon: Path | None, pic: Path | None, title: str,
+             pal: bool = False) -> Path:
     """runtime/launcher/CMakeLists.txt -> EBOOT.PBP (start menu)."""
     print("== launcher")
     w = work / "launcher"
     w.mkdir(parents=True, exist_ok=True)
-    flags = [*tc.defs, *tc.inc, "-DPSP", "-O2", "-Wall", f'-DGT2_LAUNCHER_TITLE="{title.upper()}"']
+    flags = [*tc.defs, *tc.inc, "-DPSP", "-O2", "-Wall", f'-DGT2_LAUNCHER_TITLE="{title.upper()}"',
+             *(["-DGT2_LAUNCHER_PAL"] if pal else [])]
     compile_all(tc, [(PROJ / "runtime" / "launcher" / "main.c", w / "main.o", flags)], 1)
     elf = w / "gt2launcher"
     run([tc.tool("psp-gcc"), *tc.inc, "-DPSP", *tc.libdirs, "-Wl,-zmax-page-size=128",
@@ -178,6 +180,7 @@ def main() -> None:
                     help="runtime(s) to build: sim or arc, optionally =<generated dir> (default: generated/, "
                          "generated/arcade/)")
     ap.add_argument("--title", default="Gran Turismo 2", help="XMB title of the launcher")
+    ap.add_argument("--pal", action="store_true", help="PAL edition: the launcher shows 25 / 50 fps")
     ap.add_argument("--launcher", action="store_true", help="also build the launcher EBOOT.PBP")
     ap.add_argument("--out", default=str(PROJ / "build" / "release"))
     ap.add_argument("--work", default=str(PROJ / "build" / "psp-work"))
@@ -205,7 +208,8 @@ def main() -> None:
             dst.write_bytes(prx.read_bytes())
             print(f"  -> {dst} ({dst.stat().st_size} bytes)")
     if a.launcher:
-        e = launcher(tc, work, out, Path(a.icon) if a.icon else None, Path(a.pic) if a.pic else None, a.title)
+        e = launcher(tc, work, out, Path(a.icon) if a.icon else None, Path(a.pic) if a.pic else None, a.title,
+                     a.pal)
         print(f"  -> {e} ({e.stat().st_size} bytes)")
     print(f"== done in {time.time() - t0:.0f} s")
 

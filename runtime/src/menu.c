@@ -10,6 +10,7 @@
 #include <pspdebug.h>
 #include <pspkernel.h>
 #include "rt.h"
+#include "game.h"
 
 extern int g_fps60, g_fx60, g_lowlod, g_show_fps, g_lr_shift, g_race_buttons;
 extern volatile int g_spu_paused;
@@ -84,7 +85,8 @@ static void draw(uint32_t *base, int sel)
     pspDebugScreenPrintf("GT2 PSP - Settings");
     pspDebugScreenSetXY(x0, y0 + 1);
     pspDebugScreenSetTextColor(0xFFA0A0A0);
-    pspDebugScreenPrintf("Mode: %s", g_fps60 ? "Performance (60 fps)" : "Quality (30 fps)");
+    pspDebugScreenPrintf("Mode: %s", g_fps60 ? (GT2_PAL ? "Performance (50 fps)" : "Performance (60 fps)")
+                                            : (GT2_PAL ? "Quality (25 fps)" : "Quality (30 fps)"));
     for (int i = 0; i < M_COUNT; i++) {
         pspDebugScreenSetXY(x0, y0 + 3 + i);
         pspDebugScreenSetTextColor(i == sel ? 0xFF40FFFF : 0xFFFFFFFF);
