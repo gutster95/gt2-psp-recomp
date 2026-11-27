@@ -28,14 +28,18 @@ converter turns your discs into a PSP folder on your own computer.
 ## Converting
 
 1. Download this repository (green "Code" button, "Download ZIP") and unpack it.
-2. Put your .cue and .bin files into the `input` folder.
-3. Start the converter:
+2. Start the converter:
    - Windows: double-click `convert.bat`
    - macOS: double-click `convert.command`
    - Linux: run `./convert.sh`
-4. Your browser opens. Click **Check discs**, then **Start conversion**.
-5. When it's done, copy the folder(s) in `output/PSP/GAME` (e.g. `GT2PSP`) to your memory stick under `PSP/GAME`
-   and start it from the XMB.
+3. Your browser opens. Click **Choose disc files...** and pick your `.cue`, `.bin` or `.bin.ecm` files (one or
+   both discs of a version). Each disc is checked at once.
+4. To install straight onto your PSP: connect it by USB, start **USB Connection** on the PSP and pick its memory
+   stick under **Your PSP** (or click **Find PSP**). If the game is already on the PSP, only the files that changed
+   are copied - an update usually replaces just the start file and the game program, not the big data pack. Your
+   save data and settings stay.
+5. Click **Start conversion**. Without a PSP selected, the result is in `output/PSP/GAME` (e.g. `GT2PSP`): copy it
+   to your memory stick under `PSP/GAME`, or press **Install on PSP only** later. Start the game from the XMB.
 
 The first run downloads a PSP compiler (about 150 MB, checked against a fixed checksum). After that a conversion
 takes a few minutes. Everything happens locally; nothing is uploaded anywhere.

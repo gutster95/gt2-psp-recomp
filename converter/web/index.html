@@ -86,6 +86,14 @@
     border: 1px solid var(--line); border-radius: 3px; font-family: var(--mono); font-size: 12px;
   }
 
+  input[type=text] {
+    flex: 1; min-width: 220px; padding: 9px 10px; background: var(--panel-hi); color: var(--text);
+    border: 1px solid var(--line); border-radius: 3px; font-family: var(--mono); font-size: 12px;
+  }
+  .x { background: none; border: 0; color: var(--muted); cursor: pointer; font-size: 16px; float: right; }
+  .x:hover { color: var(--bad); }
+  .found { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+
   /* buttons: slanted like menu buttons */
   .btn {
     display: inline-flex; align-items: center; justify-content: center; gap: 10px;
@@ -148,45 +156,65 @@
   </header>
 
   <div class="sec"><span class="num"><b>1</b></span>Your discs</div>
-  <p class="note">Put the <code>.cue</code> and <code>.bin</code> files into <span class="path" id="inputDir">input/</span>
-    and press <b>Search again</b>. Supported: GT2 USA (Simulation Mode Rev 2, Arcade Mode), GT2 Europe (both discs,
-    also as <code>.bin.ecm</code>) and the fan mod GT2 Plus Beta v6.1 (USA; Arcade disc Europe). One disc is enough;
-    with both discs of a version you get a start menu to pick the mode. Each version gets its own PSP folder and save
-    data (<code>GT2PSP</code>, <code>GT2PSPEU</code>, <code>GT2PLUS</code>, <code>GT2PLUSEU</code>).</p>
-  <div class="cards">
+  <p class="note">Pick your disc images: <code>.cue</code>, <code>.bin</code> or <code>.bin.ecm</code> (the files you
+    pick are only read, never changed). Each disc is checked at once and lands in its slot. Supported: GT2 USA
+    (Simulation Mode Rev 2, Arcade Mode), GT2 Europe and Japan (both discs) and the fan mod GT2 Plus Beta v6.1.
+    One disc is enough; with both discs of a version you get a start menu to pick the mode. Each version gets its own
+    PSP folder and save data (<code>GT2PSP</code>, <code>GT2PSPEU</code>, <code>GT2PSPJP</code>, <code>GT2PLUS</code>,
+    <code>GT2PLUSEU</code>).</p>
+  <div class="row">
+    <button class="btn" id="pick">Choose disc files...</button>
+  </div>
+  <div class="row" style="margin-top:10px">
+    <input type="text" id="path" placeholder="...or paste the path of a .cue / .bin / .bin.ecm file">
+    <button class="btn small" id="add">Add</button>
+  </div>
+  <p class="note" id="pickMsg"></p>
+  <div class="cards" style="margin-top:10px">
     <div class="card" id="card-sim">
+      <button class="x" data-w="sim" title="Remove">&#x2715;</button>
       <h3>Simulation Mode</h3><div class="tag">GT mode, licenses, career - the main disc</div>
-      <select id="sel-sim"></select>
-      <div class="state"><span class="dot"></span><span class="txt">No disc selected</span></div>
+      <div class="file"></div>
+      <div class="state"><span class="dot"></span><span class="txt">No disc chosen</span></div>
       <div class="bar"><i></i></div>
     </div>
     <div class="card" id="card-arc">
+      <button class="x" data-w="arc" title="Remove">&#x2715;</button>
       <h3>Arcade Mode</h3><div class="tag">Road race, rally, time trial - and the intro movie</div>
-      <select id="sel-arc"></select>
-      <div class="state"><span class="dot"></span><span class="txt">No disc selected</span></div>
+      <div class="file"></div>
+      <div class="state"><span class="dot"></span><span class="txt">No disc chosen</span></div>
       <div class="bar"><i></i></div>
     </div>
   </div>
-  <div class="row" style="margin-top:14px">
-    <button class="btn small" id="rescan">Search again</button>
-    <button class="btn small" id="verify">Check discs</button>
-  </div>
 
-  <div class="sec"><span class="num"><b>2</b></span>PSP toolchain</div>
+  <div class="sec"><span class="num"><b>2</b></span>Your PSP</div>
+  <p class="note">Connect the PSP by USB and start <b>USB Connection</b> in its settings menu, then pick the memory
+    stick. The converter installs the game there right after converting. If the game is already on the PSP, only the
+    files that changed are copied - usually the start file and the game program, not the 600 MB data pack. Your save
+    data and settings stay. Leave this empty to just build the folder on your computer.</p>
+  <div class="row">
+    <input type="text" id="psp" placeholder="Memory stick, e.g. E:\ or /Volumes/Untitled">
+    <button class="btn small" id="pickPsp">Choose...</button>
+    <button class="btn small" id="findPsp">Find PSP</button>
+  </div>
+  <div class="found" id="found"></div>
+
+  <div class="sec"><span class="num"><b>3</b></span>PSP toolchain</div>
   <div class="status" id="tool"><span class="dot"></span><span class="txt">Checking...</span></div>
 
-  <div class="sec"><span class="num"><b>3</b></span>Convert</div>
-  <p class="note">Takes about 10-20 minutes and needs ~3 GB of free space while it runs. The result is a folder you
-    copy to your memory stick.</p>
-  <div class="row"><button class="btn big red" id="go" disabled>Start conversion</button></div>
+  <div class="sec"><span class="num"><b>4</b></span>Convert</div>
+  <p class="note">Takes a few minutes per disc and needs ~3 GB of free space while it runs.</p>
+  <div class="row">
+    <button class="btn big red" id="go" disabled>Start conversion</button>
+    <button class="btn small" id="installOnly" disabled title="Copy the last conversion onto the PSP">Install on PSP only</button>
+  </div>
   <div class="tacho" id="tacho"></div>
   <div class="steps" id="steps"></div>
   <pre class="log" id="log"></pre>
   <div class="error" id="error"></div>
   <div class="done" id="done">
     <h3>Finished</h3>
-    <p class="note">Copy <span class="path" id="outDir"></span> to your memory stick so that it ends up as
-      <code id="outPsp">PSP/GAME/GT2PSP</code>, then start it from the XMB (custom firmware needed).</p>
+    <p class="note" id="doneText"></p>
     <button class="btn small" id="open">Open folder</button>
   </div>
 
@@ -203,9 +231,9 @@ const STEP_NAMES = {
   "extract-sim": "Read Simulation", "extract-arc": "Read Arcade",
   "recomp-sim": "Recompile Simulation", "recomp-arc": "Recompile Arcade",
   "pack-sim": "Pack Simulation data", "pack-arc": "Pack Arcade data",
-  "toolchain": "PSP toolchain", "compile": "Compile for PSP", "folder": "Build PSP folder",
+  "toolchain": "PSP toolchain", "compile": "Compile for PSP", "folder": "Build PSP folder", "install": "Install on PSP",
 };
-let discs = [], verified = {}, toolOk = false, polling = null;
+let picked = [], verified = {}, slot = { sim: null, arc: null }, toolOk = false, built = [], polling = null, last = {};
 
 for (let i = 0; i < 24; i++) { const t = document.createElement("i"); if (i >= 18) t.className = "hot"; $("tacho").appendChild(t); }
 
@@ -214,84 +242,106 @@ async function api(path, body) {
   return r.json();
 }
 
-function fill(sel, which) {
-  const el = $("sel-" + which);
-  const prev = el.value;
-  el.innerHTML = "";
-  const none = document.createElement("option"); none.value = ""; none.textContent = "- none -"; el.appendChild(none);
-  for (const d of discs) {
-    const o = document.createElement("option");
-    o.value = d.cue; o.textContent = d.name + (d.bin ? "" : "  (bin missing)");
-    el.appendChild(o);
+async function add(path) {
+  path = (path || "").trim().replace(/^"|"$/g, "");
+  if (!path) return;
+  const r = await api("/api/add", { path });
+  if (!r.key) return;
+  if (!picked.includes(r.key)) picked.push(r.key);
+  verified[r.key] = { progress: 0 };
+  render(last);
+  poll();
+}
+
+// a checked disc goes into its slot (the newest pick wins)
+function place() {
+  for (const k of picked) {
+    const v = verified[k];
+    if (v && v.ok && (v.disc === "sim" || v.disc === "arc")) slot[v.disc] = k;
   }
-  const guess = discs.find((d) => d.guess === which);
-  el.value = prev && discs.some((d) => d.cue === prev) ? prev : (guess ? guess.cue : "");
 }
 
 function card(which) {
-  const c = $("card-" + which), cue = $("sel-" + which).value, v = verified[cue];
+  const c = $("card-" + which), k = slot[which];
   c.className = "card";
-  let txt = "No disc selected", pct = 0;
-  if (cue) {
-    const d = discs.find((x) => x.cue === cue);
-    txt = d && !d.bin ? "The .bin next to this .cue is missing" : "Not checked yet";
-    if (d && !d.bin) c.classList.add("bad");
+  let txt = "No disc chosen", pct = 0, file = "";
+  const busy = picked.filter((p) => verified[p] && verified[p].ok === undefined);
+  if (k) {
+    const v = verified[k];
+    file = k; c.classList.add("ok"); pct = 1;
+    txt = "Verified: " + v.name + "  → PSP/GAME/" + v.folder;
+  } else if (busy.length) {
+    const v = verified[busy[0]];
+    c.classList.add("busy"); pct = v.progress || 0;
+    txt = (v.step || "Checking") + "... " + Math.round(pct * 100) + "%"; file = busy[0];
   }
-  if (cue && v) {
-    if (v.progress < 1 && v.ok === undefined) { c.classList.add("busy"); txt = "Checking... " + Math.round(v.progress * 100) + "%"; pct = v.progress; }
-    else if (v.ok && v.disc === which) { c.classList.add("ok"); txt = "Verified: " + v.name + "  \u2192 PSP/GAME/" + v.folder; pct = 1; }
-    else if (v.ok) { c.classList.add("bad"); txt = "That is the " + (v.disc === "sim" ? "Simulation" : "Arcade") + " disc"; pct = 1; }
-    else { c.classList.add("bad"); txt = v.message || "Unknown dump"; pct = 1; }
-  }
+  c.querySelector(".file").textContent = file;
   c.querySelector(".txt").textContent = txt;
   c.querySelector(".bar i").style.width = (pct * 100) + "%";
 }
 
-function ready() {
-  const ok = (w) => { const cue = $("sel-" + w).value, v = verified[cue]; return cue && v && v.ok && v.disc === w; };
-  const sel = (w) => $("sel-" + w).value;
-  const any = (sel("sim") || sel("arc")) && (!sel("sim") || ok("sim")) && (!sel("arc") || ok("arc"));
-  $("go").disabled = !any || !toolOk;
+function messages() {
+  const bad = picked.filter((p) => verified[p] && verified[p].ok === false)
+    .map((p) => (verified[p].file || p) + ": " + verified[p].message);
+  if (bad.length) { $("pickMsg").textContent = bad.join("  |  "); $("pickMsg").style.color = "var(--bad)"; }
 }
 
-async function scan() {
-  const r = await api("/api/scan");
-  discs = r.discs; $("inputDir").textContent = r.input;
-  fill(null, "sim"); fill(null, "arc");
-  toolOk = r.toolchain.ok;
+function folders() {
+  const f = [];
+  for (const w of ["sim", "arc"]) if (slot[w]) { const v = verified[slot[w]]; if (!f.includes(v.folder)) f.push(v.folder); }
+  return f;
+}
+
+function ready(running) {
+  $("go").disabled = running || !(slot.sim || slot.arc) || !toolOk;
+  const f = folders().length ? folders() : built;
+  $("installOnly").disabled = running || !$("psp").value.trim() || !f.length || !f.every((x) => built.includes(x));
+}
+
+async function info() {
+  const r = await api("/api/info");
+  toolOk = r.toolchain.ok; built = r.built || [];
   $("tool").className = "status " + (r.toolchain.ok ? "ok" : "bad");
   $("tool").querySelector(".txt").textContent = r.toolchain.message;
-  card("sim"); card("arc"); ready();
-}
-
-async function verify() {
-  for (const w of ["sim", "arc"]) {
-    const cue = $("sel-" + w).value;
-    if (cue && !(verified[cue] && verified[cue].ok !== undefined)) {
-      verified[cue] = { progress: 0 };
-      await api("/api/verify", { cue });
-    }
+  if (!$("psp").value) $("psp").value = r.psp || "";
+  if (!r.dialogs) {
+    $("pick").disabled = true; $("pickPsp").disabled = true;
+    $("pickMsg").textContent = "No file dialog available here (Python without tkinter): paste the paths instead.";
   }
-  poll();
+  ready(false);
 }
 
 function render(s) {
-  for (const [cue, h] of Object.entries(s.hashes || {})) verified[cue] = h;
-  card("sim"); card("arc"); ready();
-  const lit = Math.round((s.progress || 0) * 24);
+  last = s || {};
+  for (const [k, h] of Object.entries(last.hashes || {})) verified[k] = h;
+  place(); card("sim"); card("arc"); messages();
+  const lit = Math.round((last.progress || 0) * 24);
   [...$("tacho").children].forEach((t, i) => t.classList.toggle("on", i < lit));
-  $("steps").innerHTML = (s.steps || []).map((st) =>
-    `<div class="step ${st.state}"><span class="dot"></span>${STEP_NAMES[st.id] || st.id}</div>`).join("");
+  const inst = last.install || {};
+  $("steps").innerHTML = (last.steps || []).map((st) =>
+    `<div class="step ${st.state}"><span class="dot"></span>${STEP_NAMES[st.id] || st.id}` +
+    (st.id === "install" && inst.running ? " " + Math.round(inst.progress * 100) + "%" : "") + `</div>`).join("");
   const log = $("log"), atEnd = log.scrollTop + log.clientHeight >= log.scrollHeight - 20;
-  log.textContent = (s.log || []).join("\n");
+  log.textContent = (last.log || []).join("\n");
   if (atEnd) log.scrollTop = log.scrollHeight;
-  $("error").style.display = s.error ? "block" : "none";
-  $("error").textContent = s.error ? "Conversion stopped: " + s.error : "";
-  $("done").style.display = s.done ? "block" : "none";
-  $("outDir").textContent = s.output;
-  $("outPsp").textContent = (s.folders || []).map((f) => "PSP/GAME/" + f).join(" and ") || "PSP/GAME/GT2PSP";
-  $("go").textContent = s.running ? "Converting..." : "Start conversion";
-  if (s.running) $("go").disabled = true;
+  $("error").style.display = last.error ? "block" : "none";
+  $("error").textContent = last.error ? "Stopped: " + last.error : "";
+  $("done").style.display = last.done ? "block" : "none";
+  const fl = (last.folders || []).map((f) => "PSP/GAME/" + f).join(" and ");
+  const t = $("doneText");
+  t.textContent = "";
+  if (inst.done) {
+    t.textContent = "Installed on your PSP (" + inst.target + "). " +
+      (inst.copied && inst.copied.length ? "Copied: " + inst.copied.join(", ") + ". " : "Everything was already up to date. ") +
+      "Stop USB Connection on the PSP and start the game from the XMB (custom firmware needed).";
+  } else {
+    t.append("Copy ");
+    const p = document.createElement("span"); p.className = "path"; p.textContent = last.output || ""; t.append(p);
+    t.append(" to your memory stick so that it ends up as " + (fl || "PSP/GAME/...") +
+      ", or pick your PSP above and press Install on PSP only.");
+  }
+  $("go").textContent = last.running ? "Working..." : "Start conversion";
+  ready(!!last.running);
 }
 
 async function poll() {
@@ -299,21 +349,55 @@ async function poll() {
   polling = setInterval(async () => {
     const s = await api("/api/status");
     render(s);
-    const hashing = Object.values(s.hashes || {}).some((h) => h.ok === undefined && h.progress < 1);
-    if (!s.running && !hashing) { clearInterval(polling); polling = null; }
+    const checking = Object.values(s.hashes || {}).some((h) => h.ok === undefined);
+    if (!s.running && !checking) { clearInterval(polling); polling = null; if (s.done) info(); }
   }, 500);
 }
 
-$("rescan").onclick = scan;
-$("verify").onclick = verify;
-$("sel-sim").onchange = () => { card("sim"); ready(); };
-$("sel-arc").onchange = () => { card("arc"); ready(); };
+$("pick").onclick = async () => {
+  $("pick").disabled = true;
+  try { const r = await api("/api/pick", { kind: "files" }); for (const p of r.paths || []) await add(p); }
+  finally { $("pick").disabled = false; }
+};
+$("add").onclick = () => { add($("path").value); $("path").value = ""; };
+$("path").onkeydown = (e) => { if (e.key === "Enter") $("add").onclick(); };
+for (const b of document.querySelectorAll(".x")) b.onclick = () => {
+  const k = slot[b.dataset.w];
+  slot[b.dataset.w] = null;
+  picked = picked.filter((p) => p !== k);
+  render(last);
+};
+$("pickPsp").onclick = async () => {
+  const r = await api("/api/pick", { kind: "folder" });
+  if (r.paths && r.paths[0]) { $("psp").value = r.paths[0]; ready(false); }
+};
+$("findPsp").onclick = async () => {
+  const r = await api("/api/psp-detect", {});
+  const box = $("found");
+  box.textContent = "";
+  if (!r.found.length) {
+    const n = document.createElement("span"); n.className = "note";
+    n.textContent = "No PSP found - is it connected and in USB mode?"; box.appendChild(n); return;
+  }
+  if (r.found.length === 1) $("psp").value = r.found[0];
+  for (const f of r.found) {
+    const b = document.createElement("button"); b.className = "btn small"; b.textContent = f;
+    b.onclick = () => { $("psp").value = f; ready(false); }; box.appendChild(b);
+  }
+  ready(false);
+};
+$("psp").oninput = () => ready(false);
 $("go").onclick = async () => {
-  await api("/api/convert", { sim: $("sel-sim").value || null, arc: $("sel-arc").value || null });
+  await api("/api/convert", { sim: slot.sim, arc: slot.arc, psp: $("psp").value.trim() || null });
+  poll();
+};
+$("installOnly").onclick = async () => {
+  const f = folders().length ? folders() : built;
+  await api("/api/install", { psp: $("psp").value.trim(), folders: f });
   poll();
 };
 $("open").onclick = () => api("/api/open-output", {});
-scan().then(() => api("/api/status").then(render));
+info().then(() => api("/api/status").then(render));
 </script>
 </body>
 </html>

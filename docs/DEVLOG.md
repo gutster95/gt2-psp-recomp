@@ -1231,3 +1231,18 @@ Fan mod discs (ISO/, zips from the user). Compared EXE + GT2.OVL code word by wo
 * Result: Plus Arcade races start on the PSP (overlay 3, overlay 0, Tahiti Road at 30 fps, 16:9).
 * Not the cause (checked on the way): XA catch-up, GetlocL timing, first-sector delay, pack contents, ovl2 patch
   sites, the kernel-RAM widescreen ring, the race interval byte.
+
+## 2026-11-27 - Converter: pick the discs, install onto the PSP
+
+* No `input` folder any more: "Choose disc files..." opens the system's file dialog (tkinter, on the main thread -
+  macOS needs that; the HTTP server moved to a background thread), several files at once; a path field is the
+  fallback without tkinter. `.cue` as it is, a bare `.bin` gets a `.cue` in build/discs, a `.bin.ecm` is restored to
+  build/discs - the user's folder is never written to. Each pick is identified at once (game code) and placed into
+  the Simulation or Arcade slot.
+* "Your PSP": memory stick path (folder dialog, "Find PSP" lists drives / volumes with a PSP folder; remembered in
+  build/converter.json). After the conversion (or "Install on PSP only") output/PSP/GAME/<folder> is installed:
+  files equal to the ones already on the stick are skipped (small files compared byte by byte, the packs by size +
+  65 samples of 64 KB), the rest is written as <name>.part and renamed; the free space is checked first; other files
+  in the folder (settings.txt, the other disc's runtime) and the save data stay. Test on a stick copy: first install
+  5 files, second run nothing, after an EBOOT change only EBOOT.PBP.
+* The old `input/` folder stays git-ignored (it may still hold disc images).

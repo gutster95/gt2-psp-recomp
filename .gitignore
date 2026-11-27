@@ -8,6 +8,8 @@ ISO/
 extracted/
 extracted-arcade/
 extracted-*/
+# old converter input folder (disc images) - the converter now picks the files with a dialog
+input/
 build/
 generated/
 # User's artwork for the XMB images (scripts/make_eboot_images.py)
@@ -33,8 +35,6 @@ Thumbs.db
 .DS_Store
 .vscode/
 .idea/
-input/*
-!input/README.txt
 output/
 
 # local assistant instructions, not part of the project

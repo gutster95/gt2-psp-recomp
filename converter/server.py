@@ -1,20 +1,25 @@
 """GT2 PSP converter: a small local web app (Python standard library only) that turns the user's own Gran Turismo 2
-discs into a ready-to-copy PSP folder.
+discs into a native PSP version and can install it straight onto the PSP's memory stick.
 
     python converter/server.py          (or the start scripts convert.sh / convert.command / convert.bat)
 
-Steps: identify the .bin images by their game code (SHA-1 of EXE + GT2.OVL, profiles.identify) -> extract the file system -> recompile the game code
+Steps: the user picks the disc images (.cue, .bin or .bin.ecm) with the system's file dialog -> identify them by their
+game code (SHA-1 of EXE + GT2.OVL, profiles.identify) -> extract the file system -> recompile the game code
 (python -m gt2psp recomp) -> convert the data (python -m gt2psp pack) -> compile for the PSP with the pspdev toolchain
-(scripts/build_psp.py) -> output/PSP/GAME/<folder of the edition>. Each supported dump has a disc profile and belongs to an
-edition (src/gt2psp/profiles.py DISCS / EDITIONS): GT2 (USA) -> GT2PSP, GT2 Plus (USA) -> GT2PLUS, each folder with its
-own launcher and save data. Discs of two editions give two folders. Nothing of the game is contained in this project: every
-game-derived file is produced here, on the user's machine, from the user's discs.
+(scripts/build_psp.py) -> output/PSP/GAME/<folder of the edition> -> optionally install onto the PSP (only files that
+differ from the folder already there are copied: an update usually replaces just EBOOT.PBP and the PRX, not the
+600 MB data pack). Each supported dump has a disc profile and belongs to an edition (src/gt2psp/profiles.py DISCS /
+EDITIONS): GT2 (USA) -> GT2PSP, GT2 Plus (USA) -> GT2PLUS, each folder with its own launcher and save data. Discs of
+two editions give two folders. Nothing of the game is contained in this project: every game-derived file is produced
+here, on the user's machine, from the user's discs.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import queue
 import shutil
 import subprocess
 import sys
@@ -33,17 +38,14 @@ from gt2psp.disc import Disc  # noqa: E402
 from gt2psp.profiles import EDITIONS, PROFILES, code_id, identify  # noqa: E402  (editions, disc profiles)
 
 WEB = Path(__file__).resolve().parent / "web"
-INPUT = ROOT / "input"
 OUTPUT = ROOT / "output"
+DISCS = ROOT / "build" / "discs"        # .cue sheets written for a bare .bin, images restored from .bin.ecm
+SETTINGS = ROOT / "build" / "converter.json"   # remembered PSP path
 PORT = int(os.environ.get("GT2PSP_PORT", "8642"))
-
-# .bin sizes of the supported dumps: which card a disc goes to before it is hashed
-SIZES = {691850208: "sim", 729423408: "arc", 639694608: "sim", 739809840: "arc", 710226384: "sim", 667965648: "arc",
-         669522672: "arc", 698057136: "sim", 725234496: "arc"}
 
 
 def bin_of(cue: Path) -> Path | None:
-    """The data track file named in a .cue sheet."""
+    """The data track file named in a .cue sheet (relative to the sheet, or absolute)."""
     try:
         for line in cue.read_text(errors="replace").splitlines():
             line = line.strip()
@@ -60,8 +62,16 @@ def bin_of(cue: Path) -> Path | None:
     return None
 
 
+def write_cue(bin_path: Path) -> Path:
+    """A .cue for a bare .bin (single MODE2/2352 track) in build/discs - the user's folder is never written to."""
+    DISCS.mkdir(parents=True, exist_ok=True)
+    cue = DISCS / (bin_path.name.rsplit(".", 1)[0] + ".cue")
+    cue.write_text(f'FILE "{bin_path.resolve()}" BINARY\n  TRACK 01 MODE2/2352\n    INDEX 01 00:00:00\n')
+    return cue
+
+
 class Job:
-    """One conversion at a time; the web page polls its state."""
+    """One conversion or installation at a time; the web page polls its state."""
 
     def __init__(self) -> None:
         self.lock = threading.Lock()
@@ -72,8 +82,9 @@ class Job:
         self.done = False
         self.error = ""
         self.progress = 0.0
-        self.hashes: dict[str, dict] = {}
+        self.hashes: dict[str, dict] = {}   # picked file -> check progress / result
         self.folders: list[str] = []     # PSP/GAME folders written by the last conversion
+        self.install: dict = {}          # state of the last installation onto the PSP
 
     def say(self, line: str) -> None:
         with self.lock:
@@ -85,81 +96,156 @@ class Job:
             return {"running": self.running, "step": self.step, "steps": self.steps, "log": self.log[-120:],
                     "done": self.done, "error": self.error, "progress": self.progress, "hashes": self.hashes,
                     "output": ", ".join(str(OUTPUT / "PSP" / "GAME" / f) for f in self.folders),
-                    "folders": self.folders}
+                    "folders": self.folders, "install": self.install}
 
 
 JOB = Job()
 
 
-def verify(cue: Path) -> dict:
-    b = bin_of(cue)
-    if not b and ecm_for(cue):
-        # an ECM-compressed image (.bin.ecm, common for European dumps): restore the .bin and write a .cue first
+# ---- picking and checking discs --------------------------------------------------------------------------------
+
+def prepare(src: Path, key: str) -> Path:
+    """The .cue to work with for a picked file: a .cue as it is, a .bin with the .cue next to it (or one written to
+    build/discs), a .bin.ecm restored to build/discs first (ECM is common for European dumps)."""
+    name = src.name.lower()
+    if name.endswith(".cue"):
+        if bin_of(src):
+            return src
+        ecm = src.with_suffix(".bin.ecm")
+        if not ecm.exists():
+            raise ValueError("The .bin file named in this .cue was not found next to it.")
+        src, name = ecm, ecm.name.lower()
+    if name.endswith(".ecm"):
         from gt2psp.ecm import decode
-        src = ecm_for(cue)
-        dst = src.with_suffix("")
-        def prog(f: float) -> None:
-            with JOB.lock:
-                JOB.hashes[str(cue)] = {"progress": f * 0.5}
-        try:
-            decode(src, dst, prog)
-        except (ValueError, OSError) as e:
-            dst.unlink(missing_ok=True)
-            r = {"ok": False, "message": f"Could not unpack {src.name}: {e}"}
-            with JOB.lock:
-                JOB.hashes[str(cue)] = {"progress": 1.0, **r}
-            return r
-        if not cue.exists():
-            cue.write_text(f'FILE "{dst.name}" BINARY\n  TRACK 01 MODE2/2352\n    INDEX 01 00:00:00\n')
-        b = bin_of(cue)
-    if not b:
-        return {"ok": False, "message": "The .bin file named in this .cue was not found next to it."}
-    # by the game code (EXE + GT2.OVL), not the whole image: self-patched GT2 Plus discs and other dumps of a
-    # supported version differ in data, padding or EDC/ECC but run the same code
+        DISCS.mkdir(parents=True, exist_ok=True)
+        dst = DISCS / src.name[:-4]
+        if not dst.exists():
+            def prog(f: float) -> None:
+                with JOB.lock:
+                    JOB.hashes[key] = {"progress": f * 0.9, "step": "Unpacking ECM"}
+            tmp = dst.with_name(dst.name + ".part")
+            try:
+                decode(src, tmp, prog)
+            except (ValueError, OSError):
+                tmp.unlink(missing_ok=True)
+                raise
+            os.replace(tmp, dst)
+        return write_cue(dst)
+    if name.endswith(".bin") or name.endswith(".img"):
+        for cue in src.parent.glob("*.cue"):
+            b = bin_of(cue)
+            if b and b.resolve() == src.resolve():
+                return cue
+        return write_cue(src)
+    raise ValueError("Pick a .cue, .bin or .bin.ecm file.")
+
+
+def verify(key: str) -> dict:
+    """Check one picked file; the result (with the .cue to convert from) goes to JOB.hashes[key]."""
     with JOB.lock:
-        JOB.hashes[str(cue)] = {"progress": 0.5}
+        JOB.hashes[key] = {"progress": 0.05}
+    src = Path(key)
     try:
+        if not src.exists():
+            raise ValueError("File not found.")
+        cue = prepare(src, key)
+        b = bin_of(cue)
+        with JOB.lock:
+            JOB.hashes[key] = {"progress": 0.95}
+        # by the game code (EXE + GT2.OVL), not the whole image: self-patched GT2 Plus discs and other dumps of a
+        # supported version differ in data, padding or EDC/ECC but run the same code
         disc = Disc(b)
-        d = identify(disc)
-        code = d.code if d else code_id(disc)[0]
-        disc.close()
+        try:
+            d = identify(disc)
+            code = d.code if d else code_id(disc)[0]
+        finally:
+            disc.close()
+        if d:
+            ed = EDITIONS[d.edition]
+            r = {"ok": True, "disc": PROFILES[d.profile].kind, "profile": d.profile, "edition": d.edition,
+                 "folder": ed.folder, "name": d.title, "code": code, "cue": str(cue), "file": src.name}
+        else:
+            r = {"ok": False, "code": code, "file": src.name,
+                 "message": "Unknown game code. Supported: GT2 USA (Simulation Mode Rev 2, Arcade Mode), GT2 Europe "
+                            "and Japan (both discs), GT2 Plus Beta v6.1 (USA; Europe on an original European disc's "
+                            "code) - one .bin per disc."}
     except (ValueError, OSError) as e:
-        d, code = None, f"unreadable ({e})"
-    if d:
-        ed = EDITIONS[d.edition]
-        r = {"ok": True, "disc": PROFILES[d.profile].kind, "profile": d.profile, "edition": d.edition,
-             "folder": ed.folder, "name": d.title, "code": code}
-    else:
-        r = {"ok": False, "code": code,
-             "message": "Unknown game code. Supported: GT2 USA (Simulation Mode Rev 2, Arcade Mode), GT2 Europe and "
-                        "Japan (both discs), GT2 Plus Beta v6.1 (USA; Europe on an original European disc's code) - "
-                        "one .bin per disc."}
+        r = {"ok": False, "file": src.name, "message": str(e)}
     with JOB.lock:
-        JOB.hashes[str(cue)] = {"progress": 1.0, **r}
+        JOB.hashes[key] = {"progress": 1.0, **r}
     return r
 
 
-def ecm_for(cue: Path) -> Path | None:
-    """The .bin.ecm a not yet existing .cue stands for (scan lists ECM images under the .cue they will get)."""
-    e = cue.with_suffix(".bin.ecm")
-    return e if e.exists() else None
+class Dialogs:
+    """Native file dialogs (tkinter). They run on the main thread (macOS requires it); the HTTP server runs in a
+    background thread and hands requests over. Without tkinter the page falls back to a path field."""
+
+    def __init__(self) -> None:
+        self.q: queue.Queue = queue.Queue()
+        try:
+            import tkinter  # noqa: F401
+            self.available = True
+        except ImportError:
+            self.available = False
+
+    def ask(self, kind: str, initial: str = "") -> list[str]:
+        if not self.available:
+            return []
+        done: queue.Queue = queue.Queue()
+        self.q.put((kind, initial, done))
+        return done.get()
+
+    def serve(self) -> None:
+        """Main thread: show the dialogs that are asked for (Ctrl+C still works)."""
+        while True:
+            try:
+                kind, initial, done = self.q.get(timeout=0.5)
+            except queue.Empty:
+                continue
+            try:
+                done.put(self._show(kind, initial))
+            except Exception:          # a broken Tk install must not kill the converter
+                done.put([])
+
+    @staticmethod
+    def _show(kind: str, initial: str) -> list[str]:
+        import tkinter
+        from tkinter import filedialog
+        root = tkinter.Tk()
+        root.withdraw()
+        root.attributes("-topmost", True)    # in front of the browser
+        root.update()
+        try:
+            if kind == "folder":
+                p = filedialog.askdirectory(parent=root, title="Your PSP's memory stick (the drive with the PSP folder)",
+                                            initialdir=initial or None, mustexist=True)
+                return [p] if p else []
+            ps = filedialog.askopenfilenames(
+                parent=root, title="Your Gran Turismo 2 disc images", initialdir=initial or None,
+                filetypes=[("Disc images", "*.cue *.bin *.ecm *.img"), ("All files", "*.*")])
+            return list(ps)
+        finally:
+            root.destroy()
 
 
-def scan() -> list[dict]:
-    INPUT.mkdir(exist_ok=True)
-    out = []
-    for cue in sorted(INPUT.rglob("*.cue")):
-        b = bin_of(cue)
-        size = b.stat().st_size if b else 0
-        e = None if b else ecm_for(cue)          # .cue next to a .bin.ecm: unpacked when it is checked
-        out.append({"cue": str(cue), "name": cue.stem + (" (ECM)" if e else ""), "bin": str(b or e) if b or e else None,
-                    "size": size, "guess": SIZES.get(size)})
-    for e in sorted(INPUT.rglob("*.bin.ecm")):
-        cue = e.with_suffix("").with_suffix(".cue")
-        if not cue.exists():       # unpacked when it is checked
-            out.append({"cue": str(cue), "name": cue.stem + " (ECM)", "bin": str(e), "size": 0, "guess": None})
-    return out
+DIALOGS = Dialogs()
 
+
+def load_settings() -> dict:
+    try:
+        return json.loads(SETTINGS.read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def save_settings(**kw) -> None:
+    s = load_settings()
+    s.update(kw)
+    SETTINGS.parent.mkdir(parents=True, exist_ok=True)
+    SETTINGS.write_text(json.dumps(s, indent=1))
+
+
+# ---- conversion ----------------------------------------------------------------------------------------------------
 
 def run(cmd: list[str], env: dict | None = None, cwd: Path = ROOT) -> None:
     JOB.say("$ " + " ".join(cmd))
@@ -183,14 +269,15 @@ def paths(r: dict) -> dict[str, Path]:
     return {"ext": ROOT / ext, "gen": ROOT / gen, "pak": ROOT / "build" / pak}
 
 
-def convert(sim: str | None, arc: str | None) -> None:
+def convert(sim: str | None, arc: str | None, psp: str | None = None) -> None:
+    """sim / arc: picked files (keys of JOB.hashes). psp: memory stick to install onto afterwards (None: don't)."""
     py = [sys.executable, "-m", "gt2psp"]
     env = dict(os.environ, PYTHONPATH=str(ROOT / "src"))
-    discs = [(d, Path(c)) for d, c in (("sim", sim), ("arc", arc)) if c]
+    discs = [(d, k) for d, k in (("sim", sim), ("arc", arc)) if k]
     plan = [f"verify-{d}" for d, _ in discs]
     for d, _ in discs:
         plan += [f"extract-{d}", f"recomp-{d}", f"pack-{d}"]
-    plan += ["toolchain", "compile", "folder"]
+    plan += ["toolchain", "compile", "folder"] + (["install"] if psp else [])
     with JOB.lock:
         JOB.steps = [{"id": s, "state": "wait"} for s in plan]
         JOB.folders = []
@@ -211,13 +298,13 @@ def convert(sim: str | None, arc: str | None) -> None:
 
     i = 0
     found: list[tuple[str, Path, dict]] = []     # (sim/arc, cue, verify result)
-    for d, cue in discs:
+    for d, key in discs:
         step(f"verify-{d}", i)
-        r = verify(cue)
+        r = verify(key)
         if not r["ok"] or r["disc"] != d:
-            raise RuntimeError(r.get("message") or f"{cue.name} is the other disc")
-        JOB.say(f"{cue.name}: {r['name']} (code {r['code'][:12]}, profile {r['profile']})")
-        found.append((d, cue, r))
+            raise RuntimeError(r.get("message") or f"{r.get('file', key)} is the other disc")
+        JOB.say(f"{r['file']}: {r['name']} (code {r['code'][:12]}, profile {r['profile']})")
+        found.append((d, Path(r["cue"]), r))
         finished(f"verify-{d}")
         i += 1
     for d, cue, r in found:
@@ -282,20 +369,141 @@ def convert(sim: str | None, arc: str | None) -> None:
         with JOB.lock:
             JOB.folders.append(ed.folder)
     finished("folder")
+    if psp:
+        step("install", i); i += 1
+        install(psp, list(JOB.folders))
+        finished("install")
     with JOB.lock:
         JOB.progress = 1.0
 
 
-def start(sim: str | None, arc: str | None) -> None:
+# ---- installing onto the PSP --------------------------------------------------------------------------------------
+
+def psp_root(p: str) -> Path:
+    """The memory stick root for a path the user gave: the drive itself, its PSP folder or PSP/GAME."""
+    r = Path(p).expanduser()
+    if r.name.upper() == "GAME" and r.parent.name.upper() == "PSP":
+        return r.parent.parent
+    if r.name.upper() == "PSP":
+        return r.parent
+    return r
+
+
+def detect_psp() -> list[str]:
+    """Mounted memory sticks: drives / volumes with a PSP folder."""
+    cands: list[Path] = []
+    if os.name == "nt":
+        import string
+        cands = [Path(f"{c}:\\") for c in string.ascii_uppercase[3:]]
+    else:
+        user = os.environ.get("USER", "")
+        for base in ("/Volumes", f"/media/{user}", "/media", f"/run/media/{user}", "/mnt"):
+            try:
+                cands += [p for p in Path(base).iterdir() if p.is_dir()]
+            except OSError:
+                pass
+    out = []
+    for c in cands:
+        try:
+            if (c / "PSP").is_dir():
+                out.append(str(c))
+        except OSError:
+            pass
+    return out
+
+
+def same_file(a: Path, b: Path) -> bool:
+    """b (on the PSP) already holds a's content: equal size, and equal bytes for small files / equal samples spread
+    over the whole file for the data packs (reading 700 MB back from a memory stick would take minutes)."""
+    try:
+        if not b.is_file() or a.stat().st_size != b.stat().st_size:
+            return False
+        size = a.stat().st_size
+        with open(a, "rb") as fa, open(b, "rb") as fb:
+            if size <= 32 << 20:
+                while True:
+                    x, y = fa.read(1 << 20), fb.read(1 << 20)
+                    if x != y:
+                        return False
+                    if not x:
+                        return True
+            for k in range(65):           # 65 x 64 KB from the start to the end
+                off = min(size - (64 << 10), (size - (64 << 10)) * k // 64)
+                fa.seek(off)
+                fb.seek(off)
+                if hashlib.sha1(fa.read(64 << 10)).digest() != hashlib.sha1(fb.read(64 << 10)).digest():
+                    return False
+        return True
+    except OSError:
+        return False
+
+
+def install(psp: str, folders: list[str]) -> None:
+    """Copy output/PSP/GAME/<folder> onto the memory stick. Only files that differ are written (a new runtime build:
+    EBOOT.PBP and the PRX; the data pack only when it changed); everything else in the PSP folder (the other disc's
+    files, settings.txt) and the save data stay untouched. Files are written under a temporary name first."""
+    root = psp_root(psp)
+    if not root.is_dir():
+        raise RuntimeError(f"PSP not found at {root} - is it connected in USB mode?")
+    if not (root / "PSP").is_dir():
+        raise RuntimeError(f"{root} has no PSP folder - pick the memory stick's drive.")
+    work: list[tuple[Path, Path]] = []
+    for folder in folders:
+        src = OUTPUT / "PSP" / "GAME" / folder
+        if not src.is_dir():
+            raise RuntimeError(f"Nothing to install for {folder} - convert first.")
+        dst = root / "PSP" / "GAME" / folder
+        new = not dst.exists()
+        JOB.say(f"== {folder}: {'new folder' if new else 'updating the folder already on the PSP'} ({dst})")
+        for f in sorted(src.iterdir()):
+            if not f.is_file():
+                continue
+            t = dst / f.name
+            if same_file(f, t):
+                JOB.say(f"   {f.name}: unchanged")
+            else:
+                work.append((f, t))
+    need = sum(f.stat().st_size - (t.stat().st_size if t.exists() else 0) for f, t in work)
+    free = shutil.disk_usage(root).free
+    if need > free - (8 << 20):
+        raise RuntimeError(f"Not enough space on the memory stick: {need / 2**20:.0f} MB more needed, "
+                           f"{free / 2**20:.0f} MB free.")
+    total = sum(f.stat().st_size for f, _ in work) or 1
+    done = 0
+    t0 = time.time()
+    for f, t in work:
+        t.parent.mkdir(parents=True, exist_ok=True)
+        tmp = t.with_name(t.name + ".part")
+        JOB.say(f"   {f.name}: copying {f.stat().st_size / 2**20:.1f} MB")
+        with open(f, "rb") as fi, open(tmp, "wb") as fo:
+            while chunk := fi.read(4 << 20):
+                fo.write(chunk)
+                done += len(chunk)
+                with JOB.lock:
+                    JOB.install = {"running": True, "progress": done / total, "file": f.name}
+            fo.flush()
+            os.fsync(fo.fileno())
+        os.replace(tmp, t)
+    secs = time.time() - t0
+    JOB.say(f"Installed: {len(work)} file(s), {total / 2**20:.0f} MB in {secs:.0f} s" if work
+            else "Installed: everything was already up to date.")
+    with JOB.lock:
+        JOB.install = {"running": False, "progress": 1.0, "done": True, "copied": [f.name for f, _ in work],
+                       "target": str(root / "PSP" / "GAME")}
+
+
+def start(fn, *args) -> bool:
     def work():
         try:
-            convert(sim, arc)
+            fn(*args)
             with JOB.lock:
                 JOB.done = True
         except Exception as e:       # reported to the page
             JOB.say(f"ERROR: {e}")
             with JOB.lock:
                 JOB.error = str(e)
+                if JOB.install.get("running"):
+                    JOB.install = {"running": False, "error": str(e)}
         finally:
             with JOB.lock:
                 JOB.running = False
@@ -303,10 +511,25 @@ def start(sim: str | None, arc: str | None) -> None:
 
     with JOB.lock:
         if JOB.running:
-            return
+            return False
         JOB.running, JOB.done, JOB.error, JOB.log, JOB.progress = True, False, "", [], 0.0
+        JOB.install = {}
     threading.Thread(target=work, daemon=True).start()
+    return True
 
+
+def install_only(psp: str, folders: list[str]) -> None:
+    with JOB.lock:
+        JOB.steps = [{"id": "install", "state": "run"}]
+        JOB.step = "install"
+        JOB.install = {"running": True, "progress": 0.0}
+    install(psp, folders)
+    with JOB.lock:
+        JOB.steps = [{"id": "install", "state": "done"}]
+        JOB.progress = 1.0
+
+
+# ---- web page ------------------------------------------------------------------------------------------------------
 
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *a) -> None:      # quiet console
@@ -325,8 +548,11 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         if self.path == "/" or self.path == "/index.html":
             self.send(200, (WEB / "index.html").read_bytes(), "text/html; charset=utf-8")
-        elif self.path == "/api/scan":
-            self.js({"discs": scan(), "input": str(INPUT), "toolchain": toolchain.state()})
+        elif self.path == "/api/info":
+            out = OUTPUT / "PSP" / "GAME"
+            built = sorted(p.name for p in out.iterdir() if p.is_dir()) if out.is_dir() else []
+            self.js({"toolchain": toolchain.state(), "dialogs": DIALOGS.available, "psp": load_settings().get("psp", ""),
+                     "built": built})
         elif self.path == "/api/status":
             self.js(JOB.state())
         else:
@@ -338,15 +564,34 @@ class Handler(BaseHTTPRequestHandler):
             req = json.loads(self.rfile.read(n) or b"{}")
         except ValueError:
             req = {}
-        if self.path == "/api/verify":
-            cue = Path(req.get("cue", ""))
-            if cue.suffix.lower() != ".cue" or not (cue.exists() or ecm_for(cue)):
-                return self.js({"ok": False, "message": "no such .cue file"})
-            threading.Thread(target=verify, args=(cue,), daemon=True).start()
-            self.js({"started": True})
+        if self.path == "/api/pick":
+            kind = "folder" if req.get("kind") == "folder" else "files"
+            initial = load_settings().get("psp" if kind == "folder" else "discdir", "")
+            picked = DIALOGS.ask(kind, initial)
+            if picked and kind == "files":
+                save_settings(discdir=str(Path(picked[0]).parent))
+            self.js({"paths": picked, "available": DIALOGS.available})
+        elif self.path == "/api/add":
+            raw = str(req.get("path", "")).strip().strip('"')
+            if not raw:
+                return self.js({"key": None})
+            key = str(Path(raw))
+            threading.Thread(target=verify, args=(key,), daemon=True).start()
+            self.js({"key": key})
+        elif self.path == "/api/psp-detect":
+            self.js({"found": detect_psp()})
         elif self.path == "/api/convert":
-            start(req.get("sim"), req.get("arc"))
-            self.js({"started": True})
+            psp = req.get("psp") or None
+            if psp:
+                save_settings(psp=psp)
+            ok = start(convert, req.get("sim"), req.get("arc"), psp)
+            self.js({"started": ok})
+        elif self.path == "/api/install":
+            psp = req.get("psp", "")
+            save_settings(psp=psp)
+            folders = req.get("folders") or []
+            ok = start(install_only, psp, folders)
+            self.js({"started": ok})
         elif self.path == "/api/open-output":
             p = OUTPUT / "PSP" / "GAME" / JOB.folders[0] if len(JOB.folders) == 1 else OUTPUT / "PSP" / "GAME"
             try:
@@ -364,7 +609,6 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
-    INPUT.mkdir(exist_ok=True)
     if os.name == "nt":
         # no modal Windows error dialogs (e.g. "bad image") from the toolchain: they would stall the conversion.
         # Child processes inherit the error mode. SEM_FAILCRITICALERRORS | SEM_NOOPENFILEERRORBOX
@@ -373,10 +617,10 @@ def main() -> None:
     srv = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
     url = f"http://127.0.0.1:{PORT}/"
     print(f"GT2 PSP converter running at {url}  (Ctrl+C to stop)")
-    print(f"Put your .cue/.bin files into: {INPUT}")
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
     threading.Timer(0.8, lambda: webbrowser.open(url)).start()
     try:
-        srv.serve_forever()
+        DIALOGS.serve()              # file dialogs on the main thread
     except KeyboardInterrupt:
         pass
 
