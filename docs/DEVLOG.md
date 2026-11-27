@@ -1254,5 +1254,5 @@ Fan mod discs (ISO/, zips from the user). Compared EXE + GT2.OVL code word by wo
 * After the intro the JP game draws kanji with its own glyph code; its font base is Krom2RawAdd(0x8140). The HLE
   BIOS answered -1 (no kanji ROM), the game read halfwords at odd addresses (-1 + offset) - an address error that
   powers off a real PSP (PSPLink caught it: exprint, EPC in af_8007ee18, BadVAddr g_ram + 0x29B7; PPSSPP ignores it).
-* bios.c: Krom2RawAdd returns the real ROM address (0xBFC66000 / 0xBFC7F8DE blocks, 30 bytes per glyph). ROM reads
+* bios.c: Krom2RawAdd returns the real ROM address (non-kanji block from 0xBFC66000, 30 bytes per glyph). ROM reads
   give 0: kanji stay blank. JP Arcade now reaches the race on the PSP (overlays 1, 2, 3, 0).
