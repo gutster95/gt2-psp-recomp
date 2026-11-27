@@ -1112,3 +1112,7 @@ the Media Engine:
   scripts/wintc/build.sh leaves them out of future packages, and server.py sets SetErrorMode
   (FAILCRITICALERRORS | NOOPENFILEERRORBOX), inherited by the toolchain processes, so no Windows dialog can block
   a conversion. Checked: psp-gcc/psp-ar/psp-nm work without the file.
+* "No 16:9" report: not the disc (the converter only accepts the two known dumps, an unknown one never gets
+  converted). g_widescreen defaulted to 0 and since 9aed1c0 neither the launcher nor the in-game menu sets it - the
+  release has no settings.txt, so every fresh install ran 4:3 (the developer PSP still had `widescreen=1` from the
+  old menu). Default is now 1; `widescreen=0` in settings.txt gives 4:3 (README).

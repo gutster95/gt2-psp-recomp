@@ -1,8 +1,8 @@
 /* In-game settings menu: L + R + SELECT opens it anywhere (title, menus, race). The game thread stops inside rt_poll
  * while the menu is open (the game is paused, SPU output muted); the menu is drawn with pspdebug's 8x8 font into the
  * picture on screen. Every option takes effect at once; closing writes them to settings.txt.
- * The picture mode (30 / 60 fps) and 16:9 are chosen in the launcher before the game starts and only shown here:
- * switching 30 -> 60 fps during a race ran the game at double speed. */
+ * The picture mode (30 / 60 fps) is chosen in the launcher before the game starts and only shown here; 16:9 is on by
+ * default (settings.txt widescreen=0 for 4:3). Switching 30 -> 60 fps during a race ran the game at double speed. */
 #include <stdio.h>
 #include <string.h>
 #include <pspctrl.h>

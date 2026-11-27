@@ -40,6 +40,7 @@ won't work - the recompiler is built around the exact code of these two discs.
 ## Features
 
 - **16:9.** The 3D view is really wider, not stretched. The race HUD stays at its original proportions.
+  On by default; `widescreen=0` in a settings.txt next to the EBOOT gives the original 4:3.
 - **Two picture modes**, picked in the start menu:
   - Quality: a locked 30 fps, everything on.
   - Performance: aims for 60 fps. Mirror and tire smoke are off by default and opponent cars use their low-detail

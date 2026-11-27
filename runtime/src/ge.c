@@ -749,8 +749,9 @@ static void setup_texture_full(int depth, int page, uint32_t clut)
 
 /* Hi-res and the perspective-correct 3D pass are off by default: on the real PSP the GE's transform mode drops
  * or distorts parts of the 3D scene (fine in PPSSPP); everything is drawn in through mode then (settings.txt can
- * enable them for experiments). Widescreen (16:9 HUD + view window patches) works at 1x. */
-int g_hires = 0, g_widescreen = 0;
+ * enable them for experiments). Widescreen (16:9 HUD + view window patches) works at 1x and is on by default (the
+ * release has no settings.txt; `widescreen=0` there gives 4:3). */
+int g_hires = 0, g_widescreen = 1;
 int g_disp24;                    /* the display area is in 24-bit mode (gpu.c, GP1(08) bit 4) */
 static uint16_t *g_conv24;       /* 512x512 15-bit texture for the 24-bit display mode (present_scaled) */
 static int g_conv_rect[4] = {-1, -1, 0, 0}, g_conv_dirty = 1;   /* area converted into g_conv24, new data in it */
