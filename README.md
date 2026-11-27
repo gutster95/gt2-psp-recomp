@@ -9,7 +9,7 @@ converter turns your discs into a PSP folder on your own computer.
 
 ## What you need
 
-- A PSP with custom firmware (tested on a PSP-3000; PPSSPP works too, with its software renderer)
+- A PSP with custom firmware
 - Your own Gran Turismo 2 discs as .cue/.bin
 
   Supported versions:
@@ -35,7 +35,7 @@ converter turns your discs into a PSP folder on your own computer.
 
 ## Converting
 
-1. Download this repository (green "Code" button, "Download ZIP") and unpack it.
+1. Download this repository and unpack it.
 2. Start the converter:
    - Windows: double-click `convert.bat`
    - macOS: double-click `convert.command`
