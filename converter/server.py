@@ -367,6 +367,9 @@ def convert(sim: str | None, arc: str | None, psp: str | None = None) -> None:
         for f, name in files:
             JOB.say(f"copy {f.name} -> {ed.folder}/{name}")
             shutil.copyfile(f, dst / name)
+        if ed_name == "jpn":
+            d, r = members[0]
+            kanji(paths(r)["ext"] / "files" / PROFILES[r["profile"]].exe, dst / "KANJI.BIN", env)
         with JOB.lock:
             JOB.folders.append(ed.folder)
     finished("folder")
@@ -376,6 +379,32 @@ def convert(sim: str | None, arc: str | None, psp: str | None = None) -> None:
         finished("install")
     with JOB.lock:
         JOB.progress = 1.0
+
+
+# The Japanese GT2 draws texts with the PS1 BIOS ROM's kanji font, which the PSP does not have: KANJI.BIN stands in
+# for it, built from the free X.Org JIS bitmap font (jis-misc jiskan16.bdf, "from JIS X 9051-1984, by permission to
+# use"), downloaded once and checked against a fixed checksum. Without it the kanji stay blank (scripts/make_kanji.py).
+KANJI_FONT = ("https://gitlab.freedesktop.org/xorg/font/jis-misc/-/raw/5b54b1798ba76092850fe947d4958409ca61e86d/"
+              "jiskan16.bdf", "e9ee1273ce9d6675e8f4a24e49e0d89ec49f003f464d22828af48915dd8f6dbf")
+
+
+def kanji(exe: Path, out: Path, env: dict) -> None:
+    font = ROOT / "tools" / "fonts" / "jiskan16.bdf"
+    try:
+        if not (font.exists() and toolchain.sha256(font) == KANJI_FONT[1]):
+            JOB.say("downloading the JIS kanji bitmap font (1 MB)")
+            font.parent.mkdir(parents=True, exist_ok=True)
+            import urllib.request
+            tmp = font.with_suffix(".part")
+            with urllib.request.urlopen(KANJI_FONT[0], timeout=60) as r, open(tmp, "wb") as f:
+                shutil.copyfileobj(r, f)
+            if toolchain.sha256(tmp) != KANJI_FONT[1]:
+                tmp.unlink(missing_ok=True)
+                raise RuntimeError("font download damaged")
+            os.replace(tmp, font)
+        run([sys.executable, str(ROOT / "scripts" / "make_kanji.py"), str(exe), str(font), str(out)], env)
+    except Exception as e:      # optional: the game runs without it, the kanji are blank
+        JOB.say(f"kanji font skipped ({e}) - Japanese kanji texts will be blank")
 
 
 # ---- installing onto the PSP --------------------------------------------------------------------------------------

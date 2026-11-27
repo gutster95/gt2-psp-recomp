@@ -2,6 +2,7 @@
  * Unhandled registers behave like plain memory and are logged on first access. */
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 #include "rt.h"
 #include "gpu.h"
 #include "cdrom.h"
@@ -394,11 +395,37 @@ static uint32_t timer_count(int t)
 
 /* ---- register access ---------------------------------------------------------------------------------- */
 
+/* The BIOS ROM's kanji font (Japanese GT2 draws its texts with it): there is no ROM here, KANJI.BIN next to the
+ * EBOOT stands in for 0x1FC64000-0x1FC7FFFF (scripts/make_kanji.py: a free JIS bitmap font at the addresses the
+ * game computes). Without the file the glyphs read as 0 (blank). Loaded on the first read. */
+#define KANJI_LO 0x1FC64000u
+#define KANJI_HI 0x1FC80000u
+static uint32_t kanji_rom(uint32_t p, int size)
+{
+    static uint8_t *rom;
+    static int tried;
+    if (!tried) {
+        tried = 1;
+        char path[300];
+        snprintf(path, sizeof path, "%sKANJI.BIN", g_basedir);
+        FILE *f = fopen(path, "rb");
+        if (f) {
+            rom = malloc(KANJI_HI - KANJI_LO);
+            if (rom && fread(rom, 1, KANJI_HI - KANJI_LO, f) != KANJI_HI - KANJI_LO) { free(rom); rom = 0; }
+            fclose(f);
+        }
+        logf_("kanji: %s\n", rom ? "KANJI.BIN loaded" : "no KANJI.BIN - kanji stay blank");
+    }
+    if (!rom || p < KANJI_LO || p + size > KANJI_HI) return 0;
+    const uint8_t *b = rom + (p - KANJI_LO);
+    return size == 1 ? b[0] : size == 2 ? (uint32_t)(b[0] | b[1] << 8) : (uint32_t)(b[0] | b[1] << 8 | b[2] << 16 | b[3] << 24);
+}
+
 static uint32_t io_read(uint32_t a, int size)
 {
     uint32_t p = a & 0x1FFFFFFFu;
     if (p < 0x1F801000u || p >= 0x1F803000u) {
-        if (p >= 0x1FC00000u && p < 0x1FC80000u) return 0;   /* BIOS ROM */
+        if (p >= 0x1FC00000u && p < 0x1FC80000u) return kanji_rom(p, size);   /* BIOS ROM */
         logf_("read%d from unmapped %08x\n", size * 8, (unsigned)a);
         return 0;
     }

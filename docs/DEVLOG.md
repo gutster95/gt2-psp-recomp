@@ -1256,3 +1256,10 @@ Fan mod discs (ISO/, zips from the user). Compared EXE + GT2.OVL code word by wo
   powers off a real PSP (PSPLink caught it: exprint, EPC in af_8007ee18, BadVAddr g_ram + 0x29B7; PPSSPP ignores it).
 * bios.c: Krom2RawAdd returns the real ROM address (non-kanji block from 0xBFC66000, 30 bytes per glyph). ROM reads
   give 0: kanji stay blank. JP Arcade now reaches the race on the PSP (overlays 1, 2, 3, 0).
+* Kanji font: the game's own JIS -> ROM address code (found by signature: 0x80080024 Arcade, 0x8008040C Gran
+  Turismo disc) runs in a small MIPS interpreter (scripts/kanji_map.py) for all 8836 JIS codes -> 3733 glyph slots
+  at 0xBFC64000-0xBFC7F8DE; both discs give the same layout (= the BIOS ROM's). scripts/make_kanji.py fills them from
+  the X.Org JIS bitmap font (jis-misc jiskan16.bdf, 16x16 -> 16x15, first byte = left 8 pixels, MSB leftmost - read
+  off the game's nibble table) -> KANJI.BIN (112 KB, 3489 glyphs). io.c answers BIOS ROM reads from KANJI.BIN next to
+  the EBOOT (no file: 0 = blank glyphs). The converter downloads the font (pinned commit + SHA-256) and writes
+  KANJI.BIN into the Japanese folder. Release JP Arcade on the PSP: intro, menus, race; "kanji: KANJI.BIN loaded".
