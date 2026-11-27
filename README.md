@@ -144,3 +144,9 @@ else installed. Their output is byte-identical to the official Linux toolchain. 
 Unofficial fan project, not affiliated with or endorsed by Sony Interactive Entertainment or Polyphony Digital.
 Gran Turismo is a trademark of Sony Interactive Entertainment. This project contains no code or data from the
 game. You need your own original discs.
+
+## License
+
+The code in this repository (recompiler, runtime, converter, scripts) is released under the [MIT License](LICENSE).
+`third_party/me-custom-core` keeps its own MIT license. The license covers only this code - not Gran Turismo 2,
+its code or data, and not the files the converter generates from your discs.
