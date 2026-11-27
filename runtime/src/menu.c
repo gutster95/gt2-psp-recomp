@@ -11,6 +11,9 @@
 #include <pspkernel.h>
 #include "rt.h"
 #include "game.h"
+#ifndef GT2_RACE_BUTTONS   /* game.h of builds generated before 2026-11-27 */
+#define GT2_RACE_BUTTONS 1
+#endif
 
 extern int g_fps60, g_fx60, g_lowlod, g_show_fps, g_lr_shift, g_race_buttons;
 extern volatile int g_spu_paused;
@@ -51,6 +54,9 @@ static void save_settings(void)
           g_show_fps, g_lr_shift, g_race_buttons);
 }
 
+/* EU / JP builds: gas and brake are on X / square already - no "Race buttons" item (game.h GT2_RACE_BUTTONS) */
+static int shown(int item) { return item != M_RB || GT2_RACE_BUTTONS; }
+
 static void toggle(int item)
 {
     switch (item) {
@@ -87,8 +93,9 @@ static void draw(uint32_t *base, int sel)
     pspDebugScreenSetTextColor(0xFFA0A0A0);
     pspDebugScreenPrintf("Mode: %s", g_fps60 ? (GT2_PAL ? "Performance (50 fps)" : "Performance (60 fps)")
                                             : (GT2_PAL ? "Quality (25 fps)" : "Quality (30 fps)"));
-    for (int i = 0; i < M_COUNT; i++) {
-        pspDebugScreenSetXY(x0, y0 + 3 + i);
+    for (int i = 0, row = 0; i < M_COUNT; i++) {
+        if (!shown(i)) continue;
+        pspDebugScreenSetXY(x0, y0 + 3 + row++);
         pspDebugScreenSetTextColor(i == sel ? 0xFF40FFFF : 0xFFFFFFFF);
         pspDebugScreenPrintf("%c %-22s %s", i == sel ? '>' : ' ', NAMES[i], v[i]);
     }
@@ -124,8 +131,8 @@ static void run(void)
         uint32_t b = buttons(), e = b & ~prev;
         prev = b;
         if ((b & COMBO) == COMBO || (e & (PSP_CTRL_CIRCLE | PSP_CTRL_START))) break;
-        if (e & PSP_CTRL_UP) sel = (sel + M_COUNT - 1) % M_COUNT;
-        if (e & PSP_CTRL_DOWN) sel = (sel + 1) % M_COUNT;
+        if (e & PSP_CTRL_UP) do sel = (sel + M_COUNT - 1) % M_COUNT; while (!shown(sel));
+        if (e & PSP_CTRL_DOWN) do sel = (sel + 1) % M_COUNT; while (!shown(sel));
         if (e & (PSP_CTRL_CROSS | PSP_CTRL_LEFT | PSP_CTRL_RIGHT)) {
             if (sel == M_CLOSE) { if (e & PSP_CTRL_CROSS) break; }
             else toggle(sel);

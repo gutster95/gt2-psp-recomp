@@ -826,6 +826,8 @@ def game_header() -> str:
         f"#define GT2_CARD_TASK_W1 0x{0x24840000 | lo:08X}u   /* addiu a0, a0, lo(context) */",
         f"#define GT2_INTERVAL 0x{p.interval:06X}u",
         f"#define GT2_PAL {1 if p.pal else 0}",
+        # European and Japanese builds already have gas / brake on X / square: no race_buttons remap there
+        f"#define GT2_RACE_BUTTONS {0 if p.pal or p.name.startswith('jp') else 1}",
         f"#define GT2_VBLANK_US {20000 if p.pal else 16683}   /* {'PAL 50' if p.pal else 'NTSC 59.94'} Hz */",
         f"#define GT2_HBLANK_US {64 if p.pal else 63}   /* timer 1 hblank clock: {'15625' if p.pal else '15734'} Hz */",
         f'#define GT2_SAVE_GAME "{ed.save_game}"',

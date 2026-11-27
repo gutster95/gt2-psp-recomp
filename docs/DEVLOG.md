@@ -1263,3 +1263,9 @@ Fan mod discs (ISO/, zips from the user). Compared EXE + GT2.OVL code word by wo
   off the game's nibble table) -> KANJI.BIN (112 KB, 3489 glyphs). io.c answers BIOS ROM reads from KANJI.BIN next to
   the EBOOT (no file: 0 = blank glyphs). The converter downloads the font (pinned commit + SHA-256) and writes
   KANJI.BIN into the Japanese folder. Release JP Arcade on the PSP: intro, menus, race; "kanji: KANJI.BIN loaded".
+
+## 2026-11-27 - Race buttons option only on the USA builds
+
+* The European and Japanese builds already put gas / brake on X / square; race_buttons (on by default) swapped them
+  onto triangle / circle there. game.h GT2_RACE_BUTTONS (recomp.py: 0 for PAL and jp profiles): sio.c never remaps
+  and menu.c hides the "Race buttons" item on those builds (also when an old settings.txt says race_buttons=1).

@@ -9,6 +9,10 @@
 #include <pspctrl.h>
 #include "rt.h"
 #include "sio.h"
+#include "game.h"
+#ifndef GT2_RACE_BUTTONS   /* game.h of builds generated before 2026-11-27 */
+#define GT2_RACE_BUTTONS 1
+#endif
 
 static uint16_t g_ctrl, g_mode, g_baud;
 static uint8_t g_rx;
@@ -27,7 +31,7 @@ int g_dpad_shift = 1;          /* settings.txt dpad_shift: d-pad up/down shift g
 /* settings.txt race_buttons (default on): in races the face buttons are turned so that X accelerates, square brakes,
  * circle is the handbrake and triangle reverse (GT2's manual layout). The game's own button setup on the port
  * (DualShock analog mode with the user's save) is circle gas, triangle brake, X handbrake, square reverse. */
-int g_race_buttons = 1;
+int g_race_buttons = GT2_RACE_BUTTONS;   /* game.h: off (and not offered) on the EU / JP builds */
 static int g_config;           /* DualShock config mode */
 static uint8_t g_cmd;          /* command byte of the current transfer */
 static uint8_t g_resp[10];     /* response bytes from index 2 on */
@@ -99,7 +103,7 @@ static void sample_buttons(void)
         }
     }
     extern int ge_in_race(void);
-    if (g_race_buttons && ge_in_race()) {          /* PSP X -> PS circle, square -> triangle, circle -> X, triangle -> square */
+    if (GT2_RACE_BUTTONS && g_race_buttons && ge_in_race()) {          /* PSP X -> PS circle, square -> triangle, circle -> X, triangle -> square */
         if (b & PSP_CTRL_TRIANGLE) hi |= 0x80;
         if (b & PSP_CTRL_CIRCLE) hi |= 0x40;
         if (b & PSP_CTRL_CROSS) hi |= 0x20;
