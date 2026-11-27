@@ -193,7 +193,20 @@ static void bios_b0(PsxCpu *c, uint32_t n)
     case 0x4E: c->r[2] = card_write(a0, a1, a2); return;             /* _card_write(port, sector, src) */
     case 0x4F: c->r[2] = card_read(a0, a1, a2); return;              /* _card_read(port, sector, dst) */
     case 0x50: return;                                              /* allow_new_card */
-    case 0x51: c->r[2] = 0xFFFFFFFFu; return;                       /* Krom2RawAdd: no kanji ROM */
+    case 0x51: {                                                    /* Krom2RawAdd(Shift-JIS) */
+        /* The address of the 16x15 glyph (30 bytes) in the BIOS ROM's kanji font (psx-spx). There is no ROM here -
+         * reads of it give 0, so the glyphs stay blank - but the address must be a real, even ROM address: the
+         * Japanese GT2 takes Krom2RawAdd(0x8140) as its font base and computes all other glyphs from it; the old
+         * answer -1 ("no ROM") made it read halfwords at odd addresses = an address error that powered off the PSP. */
+        uint32_t s = a0 & 0xFFFF, hi = s >> 8, lo = s & 0xFF, r = 0xBFC66000u;
+        if (lo >= 0x40 && lo <= 0xFC && lo != 0x7F) {
+            uint32_t col = lo - 0x40 - (lo > 0x7F);
+            if (s >= 0x8140 && s <= 0x84BE) r = 0xBFC66000u + ((hi - 0x81) * 0xBC + col) * 0x1E;
+            else if (s >= 0x889F && s <= 0x9872) r = 0xBFC7F8DEu + ((hi - 0x88) * 0xBC + col - 0x5E) * 0x1E;
+        }
+        c->r[2] = r;
+        return;
+    }
     case 0x56: c->r[2] = 0x00000674u; return;                       /* GetC0Table */
     case 0x57: c->r[2] = 0x00000874u; return;                       /* GetB0Table */
     case 0x5B: return;                                              /* ChangeClearPad */

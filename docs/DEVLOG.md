@@ -1248,3 +1248,11 @@ Fan mod discs (ISO/, zips from the user). Compared EXE + GT2.OVL code word by wo
 * The old `input/` folder stays git-ignored (it may still hold disc images).
 * Same day: one path per disc - the Simulation and the Arcade card each have a path field and their own
   "Choose..." (single-file dialog titled with the mode); a disc of the other kind is flagged in the card.
+
+## 2026-11-27 - Japan Arcade powered off the PSP: Krom2RawAdd
+
+* After the intro the JP game draws kanji with its own glyph code; its font base is Krom2RawAdd(0x8140). The HLE
+  BIOS answered -1 (no kanji ROM), the game read halfwords at odd addresses (-1 + offset) - an address error that
+  powers off a real PSP (PSPLink caught it: exprint, EPC in af_8007ee18, BadVAddr g_ram + 0x29B7; PPSSPP ignores it).
+* bios.c: Krom2RawAdd returns the real ROM address (0xBFC66000 / 0xBFC7F8DE blocks, 30 bytes per glyph). ROM reads
+  give 0: kanji stay blank. JP Arcade now reaches the race on the PSP (overlays 1, 2, 3, 0).
