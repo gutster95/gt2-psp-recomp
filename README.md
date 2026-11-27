@@ -19,8 +19,11 @@ converter turns your discs into a PSP folder on your own computer.
   - Europe Arcade Mode (Disc 1), **SCES-02380**
   - Japan Gran Turismo (Disc 2), **SCPS-10117 Rev 1**
   - Japan Arcade Mode (Disc 1), **SCPS-10116**
-  - GT2 Plus Beta v6.1 (fan mod) Simulation Mode, USA (**SCUS-94488**)
-  - GT2 Plus Beta v6.1 (fan mod) Arcade Mode, USA (**SCUS-94455**) and Europe (**SCES-02380**)
+  - GT2 Plus Beta v6.1 (fan mod), USA Simulation Mode (**SCUS-94488**)
+  - GT2 Plus Beta v6.1 (fan mod), USA Arcade Mode (**SCUS-94455**)
+  - GT2 Plus Beta v6.1 (fan mod), Europe Arcade Mode (**SCES-02380**)
+  - GT2 Plus Beta v6.1 (fan mod), Europe Gran Turismo Mode (**SCES-12380**) - recognised by its game code
+    (the Plus mod keeps the original European program), not tested on a real dump yet
 
   One disc is enough. With both discs of a version, the PSP shows a small menu where you pick the mode. European
   `.bin.ecm` images are unpacked automatically; the European discs run at 50 Hz like on a PAL PlayStation (races at
@@ -111,8 +114,6 @@ instruction set, so a static recompiler is possible, but the hardware around it 
 
 - The Arcade Mode intro movie plays at a lower frame rate (the PS1 decoded it in hardware; here it's software).
 - Performance mode drops below 60 fps in heavy races (see above).
-- GT2 Plus is a beta fan mod: Simulation Mode is supported for its USA disc only; there is no European Plus
-  Simulation profile yet.
 - The Japanese versions are tested less than the USA and European ones.
 
 ## How it works
