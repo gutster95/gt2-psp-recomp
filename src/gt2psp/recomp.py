@@ -685,15 +685,18 @@ def tables(mods: list[Module]) -> str:
     out.append("};")
     out.append(f"const int {pre}g_num_modules = {len(mods)};")
     if RESUME_INSIDE:   # resume points inside functions -> the function with the entry switch (core.c run_program)
+        # overlays share addresses: the same return address can be a resume point in two overlays (GT2 Plus Arcade:
+        # 0x80011780 in ovl1 and ovl2), so every entry carries its module index (g_modules) for run_program
         out.append(f"const FuncEntry {pre}g_resume_inside[] = {{")
-        n = 0
-        for m in mods:
+        mod_of = []
+        for i, m in enumerate(mods):
             for a in sorted(RESUME_INSIDE.get(m.name, ())):
                 f = next(f for f in m.funcs if f.start < a < f.end)
                 out.append(f"    {{0x{a:08x}u, {sym(m.name, f.start)}}},")
-                n += 1
+                mod_of.append(i)
         out.append("};")
-        out.append(f"const int {pre}g_num_resume_inside = {n};")
+        out.append(f"const int {pre}g_num_resume_inside = {len(mod_of)};")
+        out.append(f"const unsigned char {pre}g_resume_inside_mod[] = {{{', '.join(map(str, mod_of)) or '0'}}};")
     return "\n".join(out) + "\n"
 
 
@@ -817,6 +820,7 @@ def game_header() -> str:
         f"#define GT2_HAS_RESUME_INSIDE {1 if RESUME_INSIDE else 0}",
         f"#define GT2_RESUME_INSIDE {pre}g_resume_inside",
         f"#define GT2_NUM_RESUME_INSIDE {pre}g_num_resume_inside",
+        f"#define GT2_RESUME_INSIDE_MOD {pre}g_resume_inside_mod",
         f"#define GT2_CARD_TASK 0x{p.card_task:08X}u",
         f"#define GT2_CARD_TASK_W0 0x{0x3C040000 | hi:08X}u   /* lui a0, hi(context) */",
         f"#define GT2_CARD_TASK_W1 0x{0x24840000 | lo:08X}u   /* addiu a0, a0, lo(context) */",

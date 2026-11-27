@@ -36,15 +36,17 @@ typedef struct {
     void (*entry)(PsxCpu *c);
     const FuncEntry *resume_inside;        /* return addresses inside functions that a longjmp resumes */
     const int *num_resume_inside;
+    const unsigned char *resume_inside_mod;   /* module (mods index) of each resume point: overlays share addresses */
 } Game;
 extern const ModuleTable GT2_MODULES[];
 #if GT2_HAS_RESUME_INSIDE
 extern const FuncEntry GT2_RESUME_INSIDE[];
 extern const int GT2_NUM_RESUME_INSIDE;
+extern const unsigned char GT2_RESUME_INSIDE_MOD[];
 static const Game G_[1] = {{GT2_MODULES, GT2_OVL_HI, GT2_OVL_TABLE, GT2_ENTRY, GT2_RESUME_INSIDE,
-                            &GT2_NUM_RESUME_INSIDE}};
+                            &GT2_NUM_RESUME_INSIDE, GT2_RESUME_INSIDE_MOD}};
 #else
-static const Game G_[1] = {{GT2_MODULES, GT2_OVL_HI, GT2_OVL_TABLE, GT2_ENTRY, 0, 0}};
+static const Game G_[1] = {{GT2_MODULES, GT2_OVL_HI, GT2_OVL_TABLE, GT2_ENTRY, 0, 0, 0}};
 #endif
 int g_game = GT2_KIND_ARC ? GAME_ARC : GAME_SIM;
 
@@ -61,12 +63,17 @@ static RecompFunc find_in(int mod, uint32_t addr)
     return 0;
 }
 
-RecompFunc lookup(uint32_t addr)
+/* the module an address belongs to right now: the loaded overlay (boot code before the first one) or resident */
+static int module_of(uint32_t addr)
 {
     addr = (addr & 0x1FFFFFFFu) | 0x80000000u;
-    if (addr >= OVL_LO && addr < G_->ovl_hi)
-        return find_in(g_cur_overlay < 0 ? 1 : 2 + g_cur_overlay, addr);
-    return find_in(0, addr);
+    if (addr >= OVL_LO && addr < G_->ovl_hi) return g_cur_overlay < 0 ? 1 : 2 + g_cur_overlay;
+    return 0;
+}
+
+RecompFunc lookup(uint32_t addr)
+{
+    return find_in(module_of(addr), (addr & 0x1FFFFFFFu) | 0x80000000u);
 }
 
 static void dispatch(PsxCpu *c, uint32_t addr, const char *what)
@@ -148,7 +155,9 @@ void run_program(PsxCpu *c)
         RecompFunc f = lookup(ra);
         if (!f && G_->resume_inside)          /* a return address inside a function: its entry switch jumps there */
             for (int i = 0; i < *G_->num_resume_inside; i++)
-                if (G_->resume_inside[i].addr == ra) { c->resume_pc = ra; f = G_->resume_inside[i].fn; break; }
+                if (G_->resume_inside[i].addr == ra && G_->resume_inside_mod[i] == module_of(ra)) {
+                    c->resume_pc = ra; f = G_->resume_inside[i].fn; break;
+                }
         if (!f) fatal(c, "resume at %08x: not a function start", (unsigned)ra);
         f(c);
         if (c->r[31] == ra) fatal(c, "resume at %08x returned without changing ra", (unsigned)ra);

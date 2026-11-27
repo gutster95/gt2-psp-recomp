@@ -1214,3 +1214,20 @@ Fan mod discs (ISO/, zips from the user). Compared EXE + GT2.OVL code word by wo
   Simulation code + Plus volume id -> eu_sim / plus_eur ("GT2 Plus (Europe) Simulation Mode"); JP code + Plus ->
   rejected (no Plus Japan edition).
 * Converter shows "Unknown game code" for anything else.
+
+## 2026-11-27 - GT2 Plus Arcade hung at the race start: resume points of different overlays shared an address
+
+* Symptom (PSP): starting a race in GT2 Plus Arcade (USA) hung - the game re-read one CD sector ~450 times a
+  second (Setloc 24:13:19 = GT2.VOL entry 11296, size 0). PCSX-Redux (same disc, same input via Lua) starts the race.
+* Hunt: CD event ring + function trace on the PSP (PSPLink), request-struct watch (0x801F02D0) on the PSP and in
+  PCSX-Redux (Lua, breakpoints). The empty entry came from the replay demo of overlay 1 (0x8001174C, random VOL
+  entry of an empty replay block in Plus); it ran while overlay 2 was loaded: after a task switch (longjmp) the
+  runtime resumed return address 0x80011780 - a resume point in BOTH ovl1 (ao1_80011384) and ovl2 (ao2_80011750).
+  run_program took the first entry of the shared g_resume_inside table, i.e. the ovl1 code.
+* Fix: recomp.py writes the module of every resume point (g_resume_inside_mod, game.h GT2_RESUME_INSIDE_MOD);
+  core.c run_program only accepts the entry of the module the address belongs to now (module_of: loaded overlay /
+  boot / resident). Every Arcade build had such collisions (USA 8, Plus 10, EU 4, JP 8) - the USA paths tested so
+  far just never hit one. Simulation builds have no resume-inside points.
+* Result: Plus Arcade races start on the PSP (overlay 3, overlay 0, Tahiti Road at 30 fps, 16:9).
+* Not the cause (checked on the way): XA catch-up, GetlocL timing, first-sector delay, pack contents, ovl2 patch
+  sites, the kernel-RAM widescreen ring, the race interval byte.
