@@ -28,6 +28,18 @@ def _clipper_sites() -> set[tuple[str, int]]:
 CLIPPER_SITES = _clipper_sites()
 
 
+def reads_registers(key: tuple[str, int]) -> bool:
+    """Does the Simulation patch code at this site read a CPU register (beyond the one an override assigns)?"""
+    import re
+    from . import recomp
+    if key in recomp.SIM_HOOKS:
+        return True
+    code = recomp.SIM_OVERRIDE.get(key, "")
+    m = re.match(r"\s*c->r\[(\d+)\]\s*=", code)
+    rest = code[m.end():] if m else code
+    return "c->r[" in rest
+
+
 class Code:
     """The code images of one disc: EXE (boot + resident) and the six overlays."""
 
@@ -110,8 +122,13 @@ def derive(ref: Profile, src_files: Path, files: Path, name: str, prefix: str) -
         m.problems.append(f"reference entry {entry_src:08x} is not the resident start {ref.resident_text[0]:08x}")
     m.delta["resident"] = entry_dst - entry_src
     res_end = m.map("resident", ref.resident_text[1] - 4, "resident text end")
-    boot_end = m.map("boot", ref.boot_text[1] - 4, "boot text end")
-    out["boot_text"] = (ref.boot_text[0], boot_end + 4 if boot_end else None)
+    # the boot code (and its strings) ends where the embedded notice.tim.gz starts, on every known disc
+    def gzip_at(e: Image) -> int | None:
+        i = e.data.find(b"\x1f\x8b\x08", 0, 0x4000)
+        return e.base + i if i >= 0 else None
+    if gzip_at(src.exe) != ref.boot_text[1]:
+        m.problems.append("boot text end: the reference's does not end at its gzip image")
+    out["boot_text"] = (ref.boot_text[0], gzip_at(dst.exe))
     out["resident_text"] = (entry_dst, res_end + 4 if res_end else None)
     out["setjmp"] = m.map("resident", ref.setjmp, "setjmp")
     out["longjmp"] = m.map("resident", ref.longjmp, "longjmp")
@@ -146,11 +163,14 @@ def derive(ref: Profile, src_files: Path, files: Path, name: str, prefix: str) -
         a = sites[key]
         r = m.map(mod, a, f"patch site {mod}", exact=True)
         if r is not None:
-            # the patch code uses the surrounding registers: the code around it must match too (the near-plane
-            # clipper loops start 0x74 before their branch)
+            # a patch that reads registers relies on the code around it: that must match too (the near-plane
+            # clipper loops start 0x74 before their branch). An override that only sets the register its
+            # instruction sets (`c->r[2] = g_ws_menus ? ...`) needs just the identical instruction.
             lo = 0x74 if (mod, key[1]) in CLIPPER_SITES else 32
             si, di = src.image(mod), dst.image(mod)
-            if any(sigmap._mask(si.word(a + o)) != sigmap._mask(di.word(r + o)) for o in range(-lo, 36, 4)):
+            if not reads_registers(key):
+                pm[key] = r
+            elif any(sigmap._mask(si.word(a + o)) != sigmap._mask(di.word(r + o)) for o in range(-lo, 36, 4)):
                 m.problems.append(f"patch site {mod} {a:08x} -> {r:08x}: surrounding code differs")
             else:
                 pm[key] = r

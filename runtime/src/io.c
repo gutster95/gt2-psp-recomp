@@ -384,7 +384,7 @@ static uint32_t timer_count(int t)
     uint64_t us = now_us();
     uint32_t mode = IO32(0x1104 + t * 0x10);
     uint32_t v;
-    if (t == 1 && (mode & 0x100)) v = (uint32_t)(us / 63);           /* hblank: ~15734 Hz */
+    if (t == 1 && (mode & 0x100)) v = (uint32_t)(us / GT2_HBLANK_US); /* hblank: ~15734 Hz, PAL 15625 Hz */
     else if (t == 2 && (mode & 0x200)) v = (uint32_t)(us * 33869 / 8000); /* sysclk/8 */
     else v = (uint32_t)(us * 33869 / 1000);                           /* sysclk 33.8688 MHz */
     uint32_t target = IO32(0x1108 + t * 0x10) & 0xFFFF;

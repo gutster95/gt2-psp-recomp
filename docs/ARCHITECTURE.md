@@ -48,6 +48,15 @@ does not know.
   Simulation one exactly (validation); GT2 Plus Arcade came out with 0 problems.
 * Mods that leave the EXE alone (GT2 Plus Simulation) reuse a profile under a new name: the code is recompiled from
   their own files anyway, only the edition differs.
+* PAL (EU profiles, `pal=True`): the game counts 20 ms per vblank (lap clock: 6.0 s per 300 vblanks, USA 5.0 s),
+  so the runtime delivers 50 Hz vblanks (game.h `GT2_VBLANK_US` 20000, hblank clock 15625 Hz) and does not re-phase
+  them to the PSP's 59.94 Hz display. Races run at 25 fps as on a PAL PS1; the presentation shows each frame on the
+  next display vblank (uneven 2/3-vblank cadence).
+* A profile can serve several editions (EU Arcade and GT2 Plus Arcade Europe have the same code): `recomp
+  --edition`, and the converter keeps work files per edition + profile.
+* `.bin.ecm` images (ecm.py, `gt2psp unecm`) are restored bit-exactly (ECM's own checksum) before hashing.
+* Memory profiles (data/memprof) only for profiles with the Simulation Rev 2 code (`memprof=True`); other builds
+  check every memory access (bigger, somewhat slower code until they get their own profile).
 * Converter: per edition one `build_psp.py --title ... --game sim=<generated dir> --game arc=<generated dir>` and one
   `output/PSP/GAME/<folder>`. The USA discs keep the developer paths (generated/, generated/arcade/, build/GT2.PAK).
 

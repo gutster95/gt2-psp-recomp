@@ -38,7 +38,8 @@ OUTPUT = ROOT / "output"
 PORT = int(os.environ.get("GT2PSP_PORT", "8642"))
 
 # .bin sizes of the supported dumps: which card a disc goes to before it is hashed
-SIZES = {691850208: "sim", 729423408: "arc", 639694608: "sim", 739809840: "arc"}
+SIZES = {691850208: "sim", 729423408: "arc", 639694608: "sim", 739809840: "arc", 710226384: "sim", 667965648: "arc",
+         669522672: "arc"}
 
 
 def bin_of(cue: Path) -> Path | None:
@@ -105,6 +106,24 @@ def sha1_with_progress(path: Path, key: str) -> str:
 
 def verify(cue: Path) -> dict:
     b = bin_of(cue)
+    if not b and ecm_for(cue):
+        # an ECM-compressed image (.bin.ecm, common for European dumps): restore the .bin and write a .cue first
+        from gt2psp.ecm import decode
+        src = ecm_for(cue)
+        dst = src.with_suffix("")
+        def prog(f: float) -> None:
+            with JOB.lock:
+                JOB.hashes[str(cue)] = {"progress": f * 0.5}
+        try:
+            decode(src, dst, prog)
+        except (ValueError, OSError) as e:
+            dst.unlink(missing_ok=True)
+            r = {"ok": False, "message": f"Could not unpack {src.name}: {e}"}
+            with JOB.lock:
+                JOB.hashes[str(cue)] = {"progress": 1.0, **r}
+            return r
+        cue.write_text(f'FILE "{dst.name}" BINARY\n  TRACK 01 MODE2/2352\n    INDEX 01 00:00:00\n')
+        b = bin_of(cue)
     if not b:
         return {"ok": False, "message": "The .bin file named in this .cue was not found next to it."}
     digest = sha1_with_progress(b, str(cue))
@@ -115,11 +134,17 @@ def verify(cue: Path) -> dict:
              "folder": ed.folder, "name": d.title, "sha1": digest}
     else:
         r = {"ok": False, "sha1": digest,
-             "message": "Unknown dump. Supported: GT2 (USA) Simulation Mode Rev 2 and Arcade Mode, GT2 Plus Beta v6.1 "
-                        "(USA) - single .bin per disc, Redump-style."}
+             "message": "Unknown dump. Supported: GT2 USA (Simulation Mode Rev 2, Arcade Mode), GT2 Europe (both "
+                        "discs), GT2 Plus Beta v6.1 (USA, Arcade Europe) - one .bin per disc."}
     with JOB.lock:
         JOB.hashes[str(cue)] = {"progress": 1.0, **r}
     return r
+
+
+def ecm_for(cue: Path) -> Path | None:
+    """The .bin.ecm a not yet existing .cue stands for (scan lists ECM images under the .cue they will get)."""
+    e = cue.with_suffix(".bin.ecm")
+    return e if e.exists() else None
 
 
 def scan() -> list[dict]:
@@ -130,6 +155,10 @@ def scan() -> list[dict]:
         size = b.stat().st_size if b else 0
         out.append({"cue": str(cue), "name": cue.stem, "bin": str(b) if b else None, "size": size,
                     "guess": SIZES.get(size)})
+    for e in sorted(INPUT.rglob("*.bin.ecm")):
+        cue = e.with_suffix("").with_suffix(".cue")
+        if not cue.exists():       # unpacked when it is checked
+            out.append({"cue": str(cue), "name": cue.stem + " (ECM)", "bin": str(e), "size": 0, "guess": None})
     return out
 
 
@@ -144,11 +173,14 @@ def run(cmd: list[str], env: dict | None = None, cwd: Path = ROOT) -> None:
         raise RuntimeError(f"step failed: {' '.join(cmd[:4])} ... (exit {p.returncode})")
 
 
-def paths(profile: str) -> dict[str, Path]:
-    """Work files of one disc profile. The USA discs keep the developer layout (generated/, generated/arcade/,
-    build/GT2.PAK, build/GT2A.PAK: scripts/build.sh and the PPSSPP scripts use it)."""
+def paths(r: dict) -> dict[str, Path]:
+    """Work files of one disc (verify result: profile + edition - one profile can serve several editions, e.g. the
+    EU Arcade disc and GT2 Plus Arcade (Europe), with their own game.h and data pack). The USA discs keep the
+    developer layout (generated/, generated/arcade/, build/GT2.PAK, build/GT2A.PAK: scripts/build.sh and the PPSSPP
+    scripts use it)."""
     legacy = {"sim": ("extracted", "generated", "GT2.PAK"), "arc": ("extracted-arcade", "generated/arcade", "GT2A.PAK")}
-    ext, gen, pak = legacy.get(profile, (f"extracted-{profile}", f"generated/{profile}", f"{profile}.PAK"))
+    key = r["profile"] if r["edition"] == "usa" else f"{r['edition']}-{r['profile']}"
+    ext, gen, pak = legacy.get(key, (f"extracted-{key}", f"generated/{key}", f"{key}.PAK"))
     return {"ext": ROOT / ext, "gen": ROOT / gen, "pak": ROOT / "build" / pak}
 
 
@@ -190,14 +222,13 @@ def convert(sim: str | None, arc: str | None) -> None:
         finished(f"verify-{d}")
         i += 1
     for d, cue, r in found:
-        prof, w = r["profile"], paths(r["profile"])
+        prof, w = r["profile"], paths(r)
         step(f"extract-{d}", i); i += 1
         run(py + ["extract", str(cue), "--out", str(w["ext"])], env)
         finished(f"extract-{d}")
         step(f"recomp-{d}", i); i += 1
-        cmd = py + ["recomp", "--disc", prof, "--files", str(w["ext"] / "files"), "--out", str(w["gen"])]
-        if PROFILES[prof].kind == "arc":
-            cmd.append("--no-memprof")   # the memory profiles (data/memprof) are the Simulation disc's
+        cmd = py + ["recomp", "--disc", prof, "--edition", r["edition"], "--files", str(w["ext"] / "files"),
+                    "--out", str(w["gen"])]
         run(cmd, env)
         finished(f"recomp-{d}")
         step(f"pack-{d}", i); i += 1
@@ -221,7 +252,7 @@ def convert(sim: str | None, arc: str | None) -> None:
         build = [sys.executable, str(ROOT / "scripts" / "build_psp.py"), "--pspdev", str(tc), "--launcher",
                  "--title", ed.title, "--out", str(ROOT / "build" / "release" / ed_name)]
         for d, r in members:
-            build += ["--game", f"{d}={paths(r['profile'])['gen']}"]
+            build += ["--game", f"{d}={paths(r)['gen']}"]
         if icon.exists():
             build += ["--icon", str(icon)]
         run(build, env)
@@ -236,7 +267,7 @@ def convert(sim: str | None, arc: str | None) -> None:
         for d, r in members:
             prx = "GT2SIM.PRX" if d == "sim" else "GT2ARC.PRX"
             files.append((rel / prx, prx))
-            files.append((paths(r["profile"])["pak"], "GT2.PAK" if d == "sim" else "GT2A.PAK"))
+            files.append((paths(r)["pak"], "GT2.PAK" if d == "sim" else "GT2A.PAK"))
         for f, name in files:
             JOB.say(f"copy {f.name} -> {ed.folder}/{name}")
             shutil.copyfile(f, dst / name)
@@ -301,7 +332,7 @@ class Handler(BaseHTTPRequestHandler):
             req = {}
         if self.path == "/api/verify":
             cue = Path(req.get("cue", ""))
-            if cue.suffix.lower() != ".cue" or not cue.exists():
+            if cue.suffix.lower() != ".cue" or not (cue.exists() or ecm_for(cue)):
                 return self.js({"ok": False, "message": "no such .cue file"})
             threading.Thread(target=verify, args=(cue,), daemon=True).start()
             self.js({"started": True})

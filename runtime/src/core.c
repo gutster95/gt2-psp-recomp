@@ -334,12 +334,14 @@ void rt_poll(PsxCpu *c)
     }
     PT_(1);
     if (t >= g_next_vblank) {
-        g_next_vblank = (g_next_vblank && t - g_next_vblank < 100000) ? g_next_vblank + 16683 : t + 16683;
+        g_next_vblank = (g_next_vblank && t - g_next_vblank < 100000) ? g_next_vblank + GT2_VBLANK_US
+                                                                       : t + GT2_VBLANK_US;
         g_vblank_sync_us = 0;
         io_vblank();
         extern void menu_poll(void);
         if (!g_in_irq) menu_poll();               /* L+R+SELECT: settings menu (pauses the game here) */
-        if (g_vblank_sync_us) g_next_vblank = g_vblank_sync_us + 16683 - 1200;   /* see ge.c present_scaled */
+        /* see ge.c present_scaled; a PAL game's 50 Hz vblank cannot follow the PSP's 59.94 Hz display */
+        if (g_vblank_sync_us && !GT2_PAL) g_next_vblank = g_vblank_sync_us + GT2_VBLANK_US - 1200;
     }
     PT_(2);
     if (!g_in_irq && g_irq_enabled && (c->cop0[12] & 0x401) == 0x401 && (g_i_stat & g_i_mask))

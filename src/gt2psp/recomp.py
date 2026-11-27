@@ -281,6 +281,7 @@ SWITCH_SYMS: set[str] = set()  # functions that may switch tasks (filled in gene
 RESUME_JALR = False          # all jalr return addresses are in-place resume points (profiles.py)
 RESUME_FULL_RETURN = False   # resume points write back callee-saved registers on return (profiles.py)
 PROFILE = None   # the disc profile in use (profiles.py; set by use_profile)
+EDITION = None   # the edition the build is for (profiles.py EDITIONS; None: the profile's only one)
 PREFIX = ""   # symbol prefix of the current disc (profiles.py: "" Simulation, "a" Arcade)
 
 
@@ -797,7 +798,7 @@ def game_header() -> str:
     disc. One runtime build per disc profile, so they are compile-time constants."""
     from .profiles import edition_of
     p = PROFILE
-    ed = edition_of(p.name)
+    ed = edition_of(p.name, EDITION)
     pre = f"{PREFIX}_" if PREFIX else ""
     loader = sym("resident", p.ovl_loader)
     hi, lo = ((p.card_ctx + 0x8000) >> 16) & 0xFFFF, p.card_ctx & 0xFFFF
@@ -820,6 +821,9 @@ def game_header() -> str:
         f"#define GT2_CARD_TASK_W0 0x{0x3C040000 | hi:08X}u   /* lui a0, hi(context) */",
         f"#define GT2_CARD_TASK_W1 0x{0x24840000 | lo:08X}u   /* addiu a0, a0, lo(context) */",
         f"#define GT2_INTERVAL 0x{p.interval:06X}u",
+        f"#define GT2_PAL {1 if p.pal else 0}",
+        f"#define GT2_VBLANK_US {20000 if p.pal else 16683}   /* {'PAL 50' if p.pal else 'NTSC 59.94'} Hz */",
+        f"#define GT2_HBLANK_US {64 if p.pal else 63}   /* timer 1 hblank clock: {'15625' if p.pal else '15734'} Hz */",
         f'#define GT2_SAVE_GAME "{ed.save_game}"',
         f'#define GT2_TITLE "{ed.title}"',
         "",

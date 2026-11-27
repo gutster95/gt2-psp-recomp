@@ -43,7 +43,7 @@ def cmd_hash(args: argparse.Namespace) -> None:
 def _space(args: argparse.Namespace):
     from .analysis import Space
     from .image import load_overlays, load_psx_exe
-    exe = load_psx_exe(next(Path(args.files).glob("SCUS_944.*")))
+    exe = load_psx_exe(next(p for p in Path(args.files).glob("S??S_*.*") if p.name[4] == "_"))
     if args.ovl is None:
         return exe, None, Space([exe])
     ovl = load_overlays(Path(args.files) / "GT2.OVL")[args.ovl]
@@ -101,11 +101,15 @@ def cmd_recomp(args: argparse.Namespace) -> None:
     from .program import build, to_json
     from .profiles import use
     use(args.disc)
+    from . import recomp
+    from .profiles import edition_of
+    recomp.EDITION = args.edition
+    edition_of(args.disc, args.edition)   # fail early when the edition is ambiguous or wrong
     from .recomp import generate
     mods = build(Path(args.files))
     out = Path(args.out)
     prof = [Path(p) for p in args.memprof] or sorted(Path("data/memprof").glob("*.txt"))
-    if args.no_memprof:
+    if args.no_memprof or not PROFILES[args.disc].memprof:
         prof = []
     st = generate(mods, out, prof)
     (out / "functions.json").write_text(to_json(mods))
@@ -116,6 +120,11 @@ def cmd_recomp(args: argparse.Namespace) -> None:
     print(f"static targets that are not function starts: {len(unk)}")
     for mod, t in unk[:40]:
         print(f"  {mod:9s} {t:08x}")
+
+
+def cmd_unecm(args: argparse.Namespace) -> None:
+    from .ecm import cmd
+    cmd(args)
 
 
 def cmd_derive(args: argparse.Namespace) -> None:
@@ -130,6 +139,10 @@ def main() -> None:
     e.add_argument("cue")
     e.add_argument("--out", default="extracted")
     e.set_defaults(func=cmd_extract)
+    u = sub.add_parser("unecm", help="restore a .bin from a .bin.ecm (and write a .cue for it)")
+    u.add_argument("ecm")
+    u.add_argument("out", nargs="?")
+    u.set_defaults(func=cmd_unecm)
     dv = sub.add_parser("derive", help="derive a disc profile for another build from a known one (profiles.py)")
     dv.add_argument("--ref", required=True, help="known profile (profiles.py), e.g. arc")
     dv.add_argument("--ref-files", required=True, help="extracted files of the known disc")
@@ -157,6 +170,8 @@ def main() -> None:
                         "(default: data/memprof/*.txt)")
     r.add_argument("--no-memprof", action="store_true", help="all memory accesses checked (for profiling builds)")
     r.add_argument("--disc", default="sim", choices=sorted(PROFILES), help="disc profile (profiles.py)")
+    r.add_argument("--edition", help="edition (profiles.py EDITIONS: PSP folder, save data); needed when the "
+                                     "profile belongs to several")
     r.set_defaults(func=cmd_recomp)
     for name, fn, hlp in (("disasm", cmd_disasm, "disassemble main EXE or an overlay"),
                           ("analyze", cmd_analyze, "function discovery, BIOS stubs, I/O accesses")):

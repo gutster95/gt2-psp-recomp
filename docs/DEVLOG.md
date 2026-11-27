@@ -1153,3 +1153,23 @@ Fan mod discs (ISO/, zips from the user). Compared EXE + GT2.OVL code word by wo
 * Tests (PPSSPP): Plus Simulation - title, attract race, GT mode garage; new save data GT2PLUS00 (no vanilla save
   found = separate). Plus Arcade (direct EBOOT, arc_plus) - intro movie, START -> menu, attract replay in 16:9 at
   30 fps (race work 22-26 ms). Release build through build_psp.py with the Windows toolchain: launcher + both PRXs.
+
+## 2026-11-27 - Europe (PAL) and GT2 Plus Arcade Europe
+
+* EU discs: Disc 2 "Gran Turismo Mode" SCES-12380 (zip), Disc 1 Arcade SCES-02380 (.bin.ecm in a 7z - Windows'
+  tar.exe unpacks 7z). New ecm.py decoder (`gt2psp unecm`; Mode 2 sectors: ECM keeps the 16-byte header as raw
+  bytes and codes the 2336 bytes after it), checked against ECM's own EDC; the converter unpacks `.bin.ecm` from
+  input/ by itself (~4 min).
+* Both EU EXEs share one layout (resident 0x8005D640). GT2 Plus Arcade (Europe) = EU Arcade code (bit-identical EXE
+  and overlays) -> same profile, own edition (plus_eur, GT2PLUSEU). derive: boot text end = the embedded gzip image
+  (found on all 6 discs); overrides that read no register only need the identical instruction (the ovl4 GT mode
+  view constants differ in a register of the code before them). 0 problems for eu_sim and eu_arc.
+* Memory profiles keyed by function address: only for profiles with the Simulation Rev 2 code (eu_sim would have
+  had wrong functions marked unchecked).
+* PAL timing, measured with timed snapshots of the attract replay's lap clock: USA 4.94 s per 300 vblanks, EU at
+  60 Hz 6.01 s -> the PAL game counts 20 ms per vblank and ran 20% fast. With 50 Hz vblanks (GT2_VBLANK_US 20000):
+  4.97 s per 5.00 s real time. The user reported broken sound on the EU disc in PPSSPP at 60 Hz; the XA music
+  dumps (audiodump.txt) are clean at 60 and 50 Hz, the SPU sounds are not in the dump - to be checked by ear.
+* gpuvbl.c timed snapshots: due at s0 + n*d (>=) instead of an exact vblank match (the check does not run every
+  vblank in races, only the first snapshot was taken).
+* EU Simulation: language selection, attract race in 16:9 (25 fps); EU Arcade: intro, menu, attract race.

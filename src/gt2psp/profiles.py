@@ -40,6 +40,12 @@ class Profile:
     card_ctx: int = 0
     interval: int = 0
     interval_ref: tuple[str, int] | None = None
+    # data/memprof/*.txt (memory profiles of Simulation runs, keyed by function address) apply: only to discs with
+    # exactly the Simulation Rev 2 code; elsewhere they would mark other functions as safe
+    memprof: bool = False
+    # PAL build: the game counts 20 ms per vblank (measured: the lap clock advances 6.0 s per 300 vblanks on the EU
+    # disc, 5.0 s on the USA discs), so the runtime delivers 50 Hz vblanks (game.h GT2_VBLANK_US)
+    pal: bool = False
 
     def __post_init__(self) -> None:
         self.kind = self.kind or self.name
@@ -53,6 +59,7 @@ SIM = Profile(
     # nine 2-instruction memory card event callbacks (`j 0x8007eaac; li a1, bit`) registered via OpenEvent
     extra_starts={"resident": {0x8007EA68 + 8 * i for i in range(9)}},
     card_task=0x8007EACC, card_ctx=0x801F06E0, interval=0x1D5864, interval_ref=("ovl0", 0x80013844),
+    memprof=True,
 )
 
 ARC = Profile(
@@ -190,7 +197,152 @@ ARC_PLUS = replace(
     },
 )
 
-PROFILES = {p.name: p for p in (SIM, ARC, SIM_PLUS, ARC_PLUS)}
+# Europe (PAL, En/Fr/De/Es/It): Disc 2 "Gran Turismo Mode" SCES-12380 and Disc 1 Arcade SCES-02380. Both EXEs share
+# one layout (resident 0x8005D640). Derived 2026-11-27 with `gt2psp derive` from SIM and ARC (0 problems; the three
+# ovl4 GT mode view constants differ only in a register of the code before them, their overrides read none). The
+# GT2 Plus Arcade (Europe) disc has the same code as the original EU Arcade disc: profile eu_arc.
+EU_SIM = replace(
+    SIM, name="eu_sim", kind="sim", exe="SCES_123.80", memprof=False, pal=True,
+    boot_text=(0x80010000, 0x80011DD8),
+    resident_text=(0x8005D640, 0x8008E074),
+    setjmp=0x8007AD9C,
+    longjmp=0x8007ADD4,
+    ovl_loader=0x8005DB18,
+    overlay_entry_table=0x800911B4,
+    extra_starts={
+        "resident": {0x8007EAB0, 0x8007EAB8, 0x8007EAC0, 0x8007EAC8, 0x8007EAD0, 0x8007EAD8, 0x8007EAE0, 0x8007EAE8, 0x8007EAF0}
+    },
+    extra_resume={},
+    resume_inside={},
+    text_exclude={},
+    patch_map={
+        ("ovl0", 0x800100D0): 0x800100D0,
+        ("ovl0", 0x800100D4): 0x800100D4,
+        ("ovl0", 0x8001435C): 0x8001435C,
+        ("ovl0", 0x800168C8): 0x800168C4,
+        ("ovl0", 0x80018E90): 0x80018E8C,
+        ("ovl0", 0x80018FB8): 0x80018FB4,
+        ("ovl0", 0x80019098): 0x80019094,
+        ("ovl0", 0x800191BC): 0x800191B8,
+        ("ovl0", 0x8001929C): 0x80019298,
+        ("ovl0", 0x800193C8): 0x800193C4,
+        ("ovl0", 0x800194BC): 0x800194B8,
+        ("ovl0", 0x800195EC): 0x800195E8,
+        ("ovl0", 0x80019644): 0x80019640,
+        ("ovl0", 0x80020418): 0x80020414,
+        ("ovl0", 0x80020428): 0x80020424,
+        ("ovl0", 0x80029550): 0x8002954C,
+        ("ovl0", 0x800295EC): 0x800295E8,
+        ("ovl0", 0x800295F0): 0x800295EC,
+        ("ovl0", 0x800497C8): 0x80049820,
+        ("ovl0", 0x80049F48): 0x80049FA0,
+        ("ovl0", 0x80049F50): 0x80049FA8,
+        ("ovl0", 0x8004C194): 0x8004C1EC,
+        ("ovl0", 0x8004C19C): 0x8004C1F4,
+        ("ovl0", 0x8004E064): 0x8004E084,
+        ("ovl0", 0x80050C14): 0x80050C48,
+        ("ovl0", 0x80050C1C): 0x80050C50,
+        ("ovl0", 0x80058070): 0x800580AC,
+        ("ovl0", 0x80058078): 0x800580B4,
+        ("ovl0", 0x80058924): 0x80058960,
+        ("ovl0", 0x8005892C): 0x80058968,
+        ("ovl0", 0x80059A08): 0x80059A50,
+        ("ovl2", 0x8001536C): 0x8001536C,
+        ("ovl2", 0x8001E578): 0x8001E524,
+        ("ovl2", 0x8001E580): 0x8001E52C,
+        ("ovl2", 0x800201C4): 0x80020170,
+        ("ovl2", 0x800201CC): 0x80020178,
+        ("ovl4", 0x8001CDF4): 0x8001CD68,
+        ("ovl4", 0x8001CDFC): 0x8001CD70,
+        ("ovl4", 0x8001CE04): 0x8001CD78,
+        ("resident", 0x8007D23C): 0x8007D284,
+        ("resident", 0x8007D288): 0x8007D2D0,
+        ("resident", 0x80080B88): 0x80080BD0,
+        ("resident", 0x80080B94): 0x80080BDC,
+        ("resident", 0x8008C338): 0x8008C38C,
+        ("resident", 0x8008C4A8): 0x8008C4FC
+    },
+    card_task=0x8007EB14,
+    card_ctx=0x801F0710,
+    interval=0x001D5894,
+    interval_ref=("ovl0", 0x80013844),
+)
+EU_ARC = replace(
+    ARC, name="eu_arc", kind="arc", exe="SCES_023.80", pal=True,
+    boot_text=(0x80010000, 0x80011DD0),
+    resident_text=(0x8005D640, 0x8008E074),
+    setjmp=0x8007AD9C,
+    longjmp=0x8007ADD4,
+    ovl_loader=0x8005DB18,
+    ovl_jump=0x8005DABC,
+    overlay_entry_table=0x800911B4,
+    extra_starts={
+        "resident": {0x8007EAB0, 0x8007EAB8, 0x8007EAC0, 0x8007EAC8, 0x8007EAD0, 0x8007EAD8, 0x8007EAE0, 0x8007EAE8, 0x8007EAF0}
+    },
+    extra_resume={
+        "ovl2": {0x800141F4},
+        "resident": {0x80080AEC, 0x80080B0C}
+    },
+    resume_inside={
+        "resident": {0x80083494, 0x800834AC}
+    },
+    text_exclude={
+        "ovl2": [(0x80050980, 0x80050A30)]
+    },
+    patch_map={
+        ("ovl0", 0x800100D0): 0x800100D0,
+        ("ovl0", 0x800100D4): 0x800100D4,
+        ("ovl0", 0x8001435C): 0x8001435C,
+        ("ovl0", 0x800168C8): 0x800168C4,
+        ("ovl0", 0x80018E90): 0x80018E8C,
+        ("ovl0", 0x80018FB8): 0x80018FB4,
+        ("ovl0", 0x80019098): 0x80019094,
+        ("ovl0", 0x800191BC): 0x800191B8,
+        ("ovl0", 0x8001929C): 0x80019298,
+        ("ovl0", 0x800193C8): 0x800193C4,
+        ("ovl0", 0x800194BC): 0x800194B8,
+        ("ovl0", 0x800195EC): 0x800195E8,
+        ("ovl0", 0x80019644): 0x80019640,
+        ("ovl0", 0x80020418): 0x80020414,
+        ("ovl0", 0x80020428): 0x80020424,
+        ("ovl0", 0x80029550): 0x8002954C,
+        ("ovl0", 0x800295EC): 0x800295E8,
+        ("ovl0", 0x800295F0): 0x800295EC,
+        ("ovl0", 0x800497C8): 0x80049820,
+        ("ovl0", 0x80049F48): 0x80049FA0,
+        ("ovl0", 0x80049F50): 0x80049FA8,
+        ("ovl0", 0x8004C194): 0x8004C1EC,
+        ("ovl0", 0x8004C19C): 0x8004C1F4,
+        ("ovl0", 0x8004E064): 0x8004E084,
+        ("ovl0", 0x80050C14): 0x80050C48,
+        ("ovl0", 0x80050C1C): 0x80050C50,
+        ("ovl0", 0x80058070): 0x800580AC,
+        ("ovl0", 0x80058078): 0x800580B4,
+        ("ovl0", 0x80058924): 0x80058960,
+        ("ovl0", 0x8005892C): 0x80058968,
+        ("ovl0", 0x80059A08): 0x80059A50,
+        ("ovl2", 0x8001536C): 0x8001536C,
+        ("ovl2", 0x8001E578): 0x8001E524,
+        ("ovl2", 0x8001E580): 0x8001E52C,
+        ("ovl2", 0x800201C4): 0x80020170,
+        ("ovl2", 0x800201CC): 0x80020178,
+        ("ovl4", 0x8001CDF4): 0x8001CD68,
+        ("ovl4", 0x8001CDFC): 0x8001CD70,
+        ("ovl4", 0x8001CE04): 0x8001CD78,
+        ("resident", 0x8007D23C): 0x8007D284,
+        ("resident", 0x8007D288): 0x8007D2D0,
+        ("resident", 0x80080B88): 0x80080BD0,
+        ("resident", 0x80080B94): 0x80080BDC,
+        ("resident", 0x8008C338): 0x8008C38C,
+        ("resident", 0x8008C4A8): 0x8008C4FC
+    },
+    card_task=0x8007EB14,
+    card_ctx=0x801F0710,
+    interval=0x001D5894,
+    interval_ref=("ovl0", 0x80013844),
+)
+
+PROFILES = {p.name: p for p in (SIM, ARC, SIM_PLUS, ARC_PLUS, EU_SIM, EU_ARC)}
 
 
 @dataclass
@@ -205,6 +357,8 @@ class Edition:
 EDITIONS = {e.name: e for e in (
     Edition("usa", "GT2PSP", "Gran Turismo 2", "GT2PSP000"),
     Edition("plus_usa", "GT2PLUS", "Gran Turismo 2 Plus", "GT2PLUS00"),
+    Edition("eur", "GT2PSPEU", "Gran Turismo 2 (Europe)", "GT2PSPEU0"),
+    Edition("plus_eur", "GT2PLUSEU", "Gran Turismo 2 Plus (Europe)", "GT2PLUSE0"),
 )}
 
 
@@ -223,6 +377,11 @@ DISCS = {d.sha1: d for d in (
          "Gran Turismo 2 Plus Beta v6.1 (USA) Simulation Mode"),
     Disc("75d36eebc5b3fb5e767b860173a43e9682d96b21", "arc_plus", "plus_usa",
          "Gran Turismo 2 Plus Beta v6.1 (USA) Arcade Mode"),
+    Disc("c63a53bcf5ac6e49547a0c95b05174deff172021", "eu_sim", "eur",
+         "Gran Turismo 2 (Europe) Disc 2 Gran Turismo Mode"),
+    Disc("a04cec5a45c4b3e4667e08df895f0018b83cb2d2", "eu_arc", "eur", "Gran Turismo 2 (Europe) Disc 1 Arcade Mode"),
+    Disc("c43b1daf666dfd5ee7a0a9cc5cb0b30ed0d1de41", "eu_arc", "plus_eur",
+         "Gran Turismo 2 Plus Beta v6.1 (Europe) Arcade Mode"),
 )}
 CURRENT = SIM
 
@@ -238,8 +397,13 @@ def use(name: str) -> Profile:
     return p
 
 
-def edition_of(profile: str) -> Edition:
+def edition_of(profile: str, edition: str | None = None) -> Edition:
+    """The edition a build of this profile is for: given, or the only one the profile has (DISCS)."""
     eds = {d.edition for d in DISCS.values() if d.profile == profile}
+    if edition:
+        if edition not in eds:
+            raise KeyError(f"profile {profile} is not part of edition {edition} ({', '.join(sorted(eds))})")
+        return EDITIONS[edition]
     if len(eds) != 1:
-        raise KeyError(f"profile {profile} belongs to {len(eds)} editions")
+        raise KeyError(f"profile {profile} belongs to {len(eds)} editions: pass --edition ({', '.join(sorted(eds))})")
     return EDITIONS[eds.pop()]

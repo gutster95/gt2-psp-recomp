@@ -112,9 +112,11 @@ void gpu_present(void)
          * clock and replay comparisons against PCSX-Redux) */
         extern int g_snap_at[2];
         extern uint32_t g_vblank_count;
+        static uint32_t taken;   /* snapshots so far: the next one is due at s0 + taken * d (this check does not
+                                  * run on every vblank in races, an exact vblank match missed most of them) */
         uint32_t s0 = (uint32_t)g_snap_at[0], d = g_snap_at[1] > 0 ? (uint32_t)g_snap_at[1] : 600;
-        if (s0 && g_vblank_count >= s0 && (g_vblank_count - s0) % d == 0 && (g_vblank_count - s0) / d < 16 &&
-            !g_me_active) {
+        if (s0 && taken < 16 && g_vblank_count >= s0 + taken * d && !g_me_active) {
+            taken++;
             logf_("timed snapshot at vblank %u, real time %u ms\n", (unsigned)g_vblank_count, (unsigned)(now_us() / 1000));
             gpu_snapshot();
         }
