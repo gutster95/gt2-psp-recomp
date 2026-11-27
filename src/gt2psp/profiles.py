@@ -7,7 +7,7 @@ code signatures (sigmap.py, 2026-11-21). ``use(name)`` switches program.py and r
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 
 @dataclass
@@ -32,6 +32,17 @@ class Profile:
     hooks: dict[tuple[str, int], str] = field(default_factory=dict)   # disc-specific runtime hooks
     patch_map: dict[tuple[str, int], int] = field(default_factory=dict)   # Simulation patch site -> this disc
     text_exclude: dict[str, list[tuple[int, int]]] = field(default_factory=dict)   # data the text detection took
+    kind: str = ""            # "sim" / "arc": which runtime (GT2SIM.PRX / GT2ARC.PRX, GT2.PAK / GT2A.PAK); "" = name
+    # runtime constants (generated game.h): the memory card task and its context (bios.c card fast path), the race
+    # frame interval byte (io.c, RAM offset) and one instruction that builds the race display struct's address
+    # (derive.py follows the interval through it)
+    card_task: int = 0
+    card_ctx: int = 0
+    interval: int = 0
+    interval_ref: tuple[str, int] | None = None
+
+    def __post_init__(self) -> None:
+        self.kind = self.kind or self.name
 
 
 SIM = Profile(
@@ -41,6 +52,7 @@ SIM = Profile(
     ovl_jump=None,            # 0x8005DA7C: the fix would merge 6 functions; the tested Simulation code stays as it is
     # nine 2-instruction memory card event callbacks (`j 0x8007eaac; li a1, bit`) registered via OpenEvent
     extra_starts={"resident": {0x8007EA68 + 8 * i for i in range(9)}},
+    card_task=0x8007EACC, card_ctx=0x801F06E0, interval=0x1D5864, interval_ref=("ovl0", 0x80013844),
 )
 
 ARC = Profile(
@@ -49,6 +61,7 @@ ARC = Profile(
     overlay_entry_table=0x80090EB8, setjmp=0x8007AC68, longjmp=0x8007ACA0, ovl_loader=0x8005DA48,
     ovl_jump=0x8005D9EC,
     extra_starts={"resident": {0x8007E978 + 8 * i for i in range(9)}},
+    card_task=0x8007E9DC, card_ctx=0x801F00D0, interval=0x1D52C4, interval_ref=("ovl0", 0x80013844),
     # jalr calls that can end in a task switch (setjmp/longjmp): ovl2 0x80014228 (menu task callback), resident
     # 0x800809ac/0x800809cc (virtual calls in the frame flip)
     extra_resume={"ovl2": {0x80014230}, "resident": {0x800809B4, 0x800809D4}},
@@ -112,7 +125,105 @@ ARC = Profile(
     },
 )
 
-PROFILES = {"sim": SIM, "arc": ARC}
+# GT2 Plus (Beta v6.1) fan mod, USA discs. Simulation: the EXE and overlays 0-3, 5 are bit-identical to Rev 2 (ovl4
+# changes one constant and a string table), so the Simulation profile applies unchanged - recompiled from the Plus
+# disc's own files. Arcade: another build of the EXE (resident code +0x50, overlays relinked); everything below was
+# derived from ARC with `python -m gt2psp derive` (2026-11-27, 0 problems: every site found once, every patch site's
+# instruction and the code around it identical).
+SIM_PLUS = replace(SIM, name="sim_plus", kind="sim")
+ARC_PLUS = replace(
+    ARC, name="arc_plus", kind="arc",
+    boot_text=(0x80010000, 0x80011DF0), resident_text=(0x8005D5C0, 0x8008DF80),
+    overlay_entry_table=0x80090F58, setjmp=0x8007ACB8, longjmp=0x8007ACF0, ovl_loader=0x8005DA98,
+    ovl_jump=0x8005DA3C,
+    extra_starts={"resident": {0x8007E9C8 + 8 * i for i in range(9)}},
+    extra_resume={"ovl2": {0x80014230}, "resident": {0x80080A04, 0x80080A24}},
+    resume_inside={"resident": {0x800833A0, 0x800833B8}},
+    text_exclude={"ovl2": [(0x80050A5C, 0x80050B0C)]},
+    card_task=0x8007EA2C, card_ctx=0x801F04A0, interval=0x1D5634, interval_ref=("ovl0", 0x80013844),
+    patch_map={
+        ("ovl0", 0x800100D0): 0x800100D0,
+        ("ovl0", 0x800100D4): 0x800100D4,
+        ("ovl0", 0x8001435C): 0x8001435C,
+        ("ovl0", 0x800168C8): 0x800168C8,
+        ("ovl0", 0x80018E90): 0x80018E90,
+        ("ovl0", 0x80018FB8): 0x80018FB8,
+        ("ovl0", 0x80019098): 0x80019098,
+        ("ovl0", 0x800191BC): 0x800191BC,
+        ("ovl0", 0x8001929C): 0x8001929C,
+        ("ovl0", 0x800193C8): 0x800193C8,
+        ("ovl0", 0x800194BC): 0x800194BC,
+        ("ovl0", 0x800195EC): 0x800195EC,
+        ("ovl0", 0x80019644): 0x80019644,
+        ("ovl0", 0x80020418): 0x80020418,
+        ("ovl0", 0x80020428): 0x80020428,
+        ("ovl0", 0x80029550): 0x80029548,
+        ("ovl0", 0x800295EC): 0x800295E4,
+        ("ovl0", 0x800295F0): 0x800295E8,
+        ("ovl0", 0x800497C8): 0x80049734,
+        ("ovl0", 0x80049F48): 0x80049EB4,
+        ("ovl0", 0x80049F50): 0x80049EBC,
+        ("ovl0", 0x8004C194): 0x8004C100,
+        ("ovl0", 0x8004C19C): 0x8004C108,
+        ("ovl0", 0x8004E064): 0x8004DFD0,
+        ("ovl0", 0x80050C14): 0x80050B80,
+        ("ovl0", 0x80050C1C): 0x80050B88,
+        ("ovl0", 0x80058070): 0x8005802C,
+        ("ovl0", 0x80058078): 0x80058034,
+        ("ovl0", 0x80058924): 0x800588E0,
+        ("ovl0", 0x8005892C): 0x800588E8,
+        ("ovl0", 0x80059A08): 0x800599C4,
+        ("ovl2", 0x8001536C): 0x80015350,
+        ("ovl2", 0x8001E578): 0x8001E55C,
+        ("ovl2", 0x8001E580): 0x8001E564,
+        ("ovl2", 0x800201C4): 0x800201A8,
+        ("ovl2", 0x800201CC): 0x800201B0,
+        ("ovl4", 0x8001CDF4): 0x8001CDF4,
+        ("ovl4", 0x8001CDFC): 0x8001CDFC,
+        ("ovl4", 0x8001CE04): 0x8001CE04,
+        ("resident", 0x8007D23C): 0x8007D19C,
+        ("resident", 0x8007D288): 0x8007D1E8,
+        ("resident", 0x80080B88): 0x80080AE8,
+        ("resident", 0x80080B94): 0x80080AF4,
+        ("resident", 0x8008C338): 0x8008C298,
+        ("resident", 0x8008C4A8): 0x8008C408
+    },
+)
+
+PROFILES = {p.name: p for p in (SIM, ARC, SIM_PLUS, ARC_PLUS)}
+
+
+@dataclass
+class Edition:
+    """A set of discs that belong together on the PSP: one PSP/GAME folder with its own launcher and save data."""
+    name: str
+    folder: str               # ms0:/PSP/GAME/<folder>
+    title: str                # XMB title and save data title
+    save_game: str            # save data game name, 9 characters (folder ms0:/PSP/SAVEDATA/<save_game>00CARD1)
+
+
+EDITIONS = {e.name: e for e in (
+    Edition("usa", "GT2PSP", "Gran Turismo 2", "GT2PSP000"),
+    Edition("plus_usa", "GT2PLUS", "Gran Turismo 2 Plus", "GT2PLUS00"),
+)}
+
+
+@dataclass
+class Disc:
+    sha1: str                 # of the whole .bin (single track, MODE2/2352)
+    profile: str              # PROFILES key
+    edition: str              # EDITIONS key
+    title: str                # shown in the converter
+
+
+DISCS = {d.sha1: d for d in (
+    Disc("c4813703d2ad440ed36670c1ac2c1a66c9dc673d", "sim", "usa", "Gran Turismo 2 (USA) Simulation Mode, Rev 2"),
+    Disc("a617b948e23c198a4d0eb521b874d0f563987d98", "arc", "usa", "Gran Turismo 2 (USA) Arcade Mode"),
+    Disc("6b36e3569e16547efd8d6cc65ca41774e2d21dd4", "sim_plus", "plus_usa",
+         "Gran Turismo 2 Plus Beta v6.1 (USA) Simulation Mode"),
+    Disc("75d36eebc5b3fb5e767b860173a43e9682d96b21", "arc_plus", "plus_usa",
+         "Gran Turismo 2 Plus Beta v6.1 (USA) Arcade Mode"),
+)}
 CURRENT = SIM
 
 
@@ -125,3 +236,10 @@ def use(name: str) -> Profile:
     program.use_profile(p)
     recomp.use_profile(p)
     return p
+
+
+def edition_of(profile: str) -> Edition:
+    eds = {d.edition for d in DISCS.values() if d.profile == profile}
+    if len(eds) != 1:
+        raise KeyError(f"profile {profile} belongs to {len(eds)} editions")
+    return EDITIONS[eds.pop()]

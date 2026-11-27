@@ -149,8 +149,9 @@
 
   <div class="sec"><span class="num"><b>1</b></span>Your discs</div>
   <p class="note">Put the <code>.cue</code> and <code>.bin</code> files into <span class="path" id="inputDir">input/</span>
-    and press <b>Search again</b>. Supported: the USA discs - Simulation Mode (Rev 2) and Arcade Mode. One disc is enough;
-    with both you get a start menu to pick the mode.</p>
+    and press <b>Search again</b>. Supported: the USA discs - Simulation Mode (Rev 2) and Arcade Mode - and the fan mod
+    GT2 Plus (Beta v6.1, USA). One disc is enough; with both discs of a version you get a start menu to pick the mode.
+    Each version gets its own PSP folder and save data (GT2 Plus: <code>PSP/GAME/GT2PLUS</code>).</p>
   <div class="cards">
     <div class="card" id="card-sim">
       <h3>Simulation Mode</h3><div class="tag">GT mode, licenses, career - the main disc</div>
@@ -183,8 +184,8 @@
   <div class="error" id="error"></div>
   <div class="done" id="done">
     <h3>Finished</h3>
-    <p class="note">Copy the folder <span class="path" id="outDir"></span> to your memory stick so that it ends up as
-      <code>PSP/GAME/GT2PSP</code>, then start it from the XMB (custom firmware needed).</p>
+    <p class="note">Copy <span class="path" id="outDir"></span> to your memory stick so that it ends up as
+      <code id="outPsp">PSP/GAME/GT2PSP</code>, then start it from the XMB (custom firmware needed).</p>
     <button class="btn small" id="open">Open folder</button>
   </div>
 
@@ -237,7 +238,7 @@ function card(which) {
   }
   if (cue && v) {
     if (v.progress < 1 && v.ok === undefined) { c.classList.add("busy"); txt = "Checking... " + Math.round(v.progress * 100) + "%"; pct = v.progress; }
-    else if (v.ok && v.disc === which) { c.classList.add("ok"); txt = "Verified: " + v.name; pct = 1; }
+    else if (v.ok && v.disc === which) { c.classList.add("ok"); txt = "Verified: " + v.name + "  \u2192 PSP/GAME/" + v.folder; pct = 1; }
     else if (v.ok) { c.classList.add("bad"); txt = "That is the " + (v.disc === "sim" ? "Simulation" : "Arcade") + " disc"; pct = 1; }
     else { c.classList.add("bad"); txt = v.message || "Unknown dump"; pct = 1; }
   }
@@ -287,6 +288,7 @@ function render(s) {
   $("error").textContent = s.error ? "Conversion stopped: " + s.error : "";
   $("done").style.display = s.done ? "block" : "none";
   $("outDir").textContent = s.output;
+  $("outPsp").textContent = (s.folders || []).map((f) => "PSP/GAME/" + f).join(" and ") || "PSP/GAME/GT2PSP";
   $("go").textContent = s.running ? "Converting..." : "Start conversion";
   if (s.running) $("go").disabled = true;
 }

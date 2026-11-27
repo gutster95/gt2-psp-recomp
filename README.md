@@ -15,6 +15,8 @@ converter turns your discs into a PSP folder on your own computer.
   - Arcade Mode (Disc 1), **SCUS-94455**
 
   One disc is enough. With both, the PSP shows a small menu where you pick the mode.
+- Or the fan mod **GT2 Plus (Beta v6.1, USA)**, Simulation and/or Arcade disc. It gets its own PSP folder
+  (`PSP/GAME/GT2PLUS`) and its own save data, so it can sit next to the original.
 - Python 3 on your computer (Windows: from python.org, tick "Add python.exe to PATH"; Linux and macOS usually
   have it)
 - About 3 GB of free disk space while converting
@@ -28,14 +30,14 @@ converter turns your discs into a PSP folder on your own computer.
    - macOS: double-click `convert.command`
    - Linux: run `./convert.sh`
 4. Your browser opens. Click **Check discs**, then **Start conversion**.
-5. When it's done, copy `output/PSP/GAME/GT2PSP` to your memory stick as `PSP/GAME/GT2PSP` and start it from the
-   XMB.
+5. When it's done, copy `output/PSP/GAME/GT2PSP` (GT2 Plus: `GT2PLUS`) to your memory stick as `PSP/GAME/GT2PSP`
+   and start it from the XMB.
 
 The first run downloads a PSP compiler (about 150 MB, checked against a fixed checksum). After that a conversion
 takes a few minutes. Everything happens locally; nothing is uploaded anywhere.
 
 The converter checks the .bin against the checksums of the known good dumps. Other versions (PAL, Japanese, Rev 0/1)
-won't work - the recompiler is built around the exact code of these two discs.
+don't work yet: every build of the game has its code at other addresses and needs its own conversion profile.
 
 ## Features
 

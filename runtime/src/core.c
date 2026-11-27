@@ -7,6 +7,7 @@
 #include <pspthreadman.h>
 #include "rt.h"
 #include "funcs.h"
+#include "game.h"
 #include "cdrom.h"
 #include "prof.h"
 #include "me.h"
@@ -25,8 +26,9 @@ int g_cur_overlay = -1;
 
 #define OVL_LO 0x80010000u
 
-/* One build per disc (CMake GT2_GAME, src/gt2psp/profiles.py): Simulation Mode (generated/) or Arcade Mode
- * (generated/arcade/, symbols with the prefix "a"). The launcher (runtime/launcher) starts one of the two PRXs. */
+/* One build per disc profile (src/gt2psp/profiles.py): Simulation Mode (generated/), Arcade Mode (generated/arcade/,
+ * symbols with the prefix "a"), other builds of the discs (GT2 Plus, ...). The disc's constants come from the
+ * generated game.h. The launcher (runtime/launcher) starts one of the two PRXs (Simulation / Arcade). */
 typedef struct {
     const ModuleTable *mods;               /* resident, boot, ovl0..ovl5 (see program.py) */
     uint32_t ovl_hi;                       /* end of the overlay window = start of the resident code */
@@ -35,17 +37,16 @@ typedef struct {
     const FuncEntry *resume_inside;        /* return addresses inside functions that a longjmp resumes */
     const int *num_resume_inside;
 } Game;
-#ifdef GT2_ARC_BUILD
-extern const ModuleTable a_g_modules[];
-extern const FuncEntry a_g_resume_inside[];
-extern const int a_g_num_resume_inside;
-int g_game = GAME_ARC;
-static const Game G_[1] = {{a_g_modules, 0x8005D570u, 0x80090EB8u, af_8005d570, a_g_resume_inside,
-                            &a_g_num_resume_inside}};
+extern const ModuleTable GT2_MODULES[];
+#if GT2_HAS_RESUME_INSIDE
+extern const FuncEntry GT2_RESUME_INSIDE[];
+extern const int GT2_NUM_RESUME_INSIDE;
+static const Game G_[1] = {{GT2_MODULES, GT2_OVL_HI, GT2_OVL_TABLE, GT2_ENTRY, GT2_RESUME_INSIDE,
+                            &GT2_NUM_RESUME_INSIDE}};
 #else
-int g_game = GAME_SIM;
-static const Game G_[1] = {{g_modules, 0x8005D600u, 0x80091174u, f_8005d600, 0, 0}};
+static const Game G_[1] = {{GT2_MODULES, GT2_OVL_HI, GT2_OVL_TABLE, GT2_ENTRY, 0, 0}};
 #endif
+int g_game = GT2_KIND_ARC ? GAME_ARC : GAME_SIM;
 
 static RecompFunc find_in(int mod, uint32_t addr)
 {
@@ -166,11 +167,7 @@ static void overlay_load(PsxCpu *c, void (*impl)(PsxCpu *c))
     g_cur_overlay = n;
     g_overlay_loads++;
 }
-#ifdef GT2_ARC_BUILD
-void af_8005da48(PsxCpu *c) { overlay_load(c, af_8005da48_impl); }
-#else
-void f_8005dad8(PsxCpu *c) { overlay_load(c, f_8005dad8_impl); }
-#endif
+void GT2_OVL_LOADER(PsxCpu *c) { overlay_load(c, GT2_OVL_LOADER_IMPL); }
 
 /* ---- time & interrupts ---------------------------------------------------------------------------------- */
 

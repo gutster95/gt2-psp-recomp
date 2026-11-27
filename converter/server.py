@@ -5,7 +5,9 @@ discs into a ready-to-copy PSP folder.
 
 Steps: verify the .bin images (SHA-1 of the known good dumps) -> extract the file system -> recompile the game code
 (python -m gt2psp recomp) -> convert the data (python -m gt2psp pack) -> compile for the PSP with the pspdev toolchain
-(scripts/build_psp.py) -> output/PSP/GAME/GT2PSP. Nothing of the game is contained in this project: every
+(scripts/build_psp.py) -> output/PSP/GAME/<folder of the edition>. Each supported dump has a disc profile and belongs to an
+edition (src/gt2psp/profiles.py DISCS / EDITIONS): GT2 (USA) -> GT2PSP, GT2 Plus (USA) -> GT2PLUS, each folder with its
+own launcher and save data. Discs of two editions give two folders. Nothing of the game is contained in this project: every
 game-derived file is produced here, on the user's machine, from the user's discs.
 """
 
@@ -27,17 +29,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import toolchain  # noqa: E402  (converter/toolchain.py)
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT / "src"))
+from gt2psp.profiles import DISCS, EDITIONS, PROFILES  # noqa: E402  (supported dumps, editions, disc profiles)
+
 WEB = Path(__file__).resolve().parent / "web"
 INPUT = ROOT / "input"
 OUTPUT = ROOT / "output"
 PORT = int(os.environ.get("GT2PSP_PORT", "8642"))
 
-# SHA-1 of the whole .bin (single track, MODE2/2352) of the supported USA discs
-KNOWN = {
-    "c4813703d2ad440ed36670c1ac2c1a66c9dc673d": ("sim", "Gran Turismo 2 (USA) Simulation Mode, Rev 2"),
-    "a617b948e23c198a4d0eb521b874d0f563987d98": ("arc", "Gran Turismo 2 (USA) Arcade Mode"),
-}
-SIZES = {691850208: "sim", 729423408: "arc"}   # quick hint before hashing
+# .bin sizes of the supported dumps: which card a disc goes to before it is hashed
+SIZES = {691850208: "sim", 729423408: "arc", 639694608: "sim", 739809840: "arc"}
 
 
 def bin_of(cue: Path) -> Path | None:
@@ -71,6 +72,7 @@ class Job:
         self.error = ""
         self.progress = 0.0
         self.hashes: dict[str, dict] = {}
+        self.folders: list[str] = []     # PSP/GAME folders written by the last conversion
 
     def say(self, line: str) -> None:
         with self.lock:
@@ -81,7 +83,8 @@ class Job:
         with self.lock:
             return {"running": self.running, "step": self.step, "steps": self.steps, "log": self.log[-120:],
                     "done": self.done, "error": self.error, "progress": self.progress, "hashes": self.hashes,
-                    "output": str(OUTPUT / "PSP" / "GAME" / "GT2PSP")}
+                    "output": ", ".join(str(OUTPUT / "PSP" / "GAME" / f) for f in self.folders),
+                    "folders": self.folders}
 
 
 JOB = Job()
@@ -105,13 +108,15 @@ def verify(cue: Path) -> dict:
     if not b:
         return {"ok": False, "message": "The .bin file named in this .cue was not found next to it."}
     digest = sha1_with_progress(b, str(cue))
-    if digest in KNOWN:
-        disc, name = KNOWN[digest]
-        r = {"ok": True, "disc": disc, "name": name, "sha1": digest}
+    d = DISCS.get(digest)
+    if d:
+        ed = EDITIONS[d.edition]
+        r = {"ok": True, "disc": PROFILES[d.profile].kind, "profile": d.profile, "edition": d.edition,
+             "folder": ed.folder, "name": d.title, "sha1": digest}
     else:
         r = {"ok": False, "sha1": digest,
-             "message": "Unknown dump. Supported are the USA discs: Simulation Mode Rev 2 and Arcade Mode "
-                        "(single .bin per disc, Redump-style)."}
+             "message": "Unknown dump. Supported: GT2 (USA) Simulation Mode Rev 2 and Arcade Mode, GT2 Plus Beta v6.1 "
+                        "(USA) - single .bin per disc, Redump-style."}
     with JOB.lock:
         JOB.hashes[str(cue)] = {"progress": 1.0, **r}
     return r
@@ -139,18 +144,25 @@ def run(cmd: list[str], env: dict | None = None, cwd: Path = ROOT) -> None:
         raise RuntimeError(f"step failed: {' '.join(cmd[:4])} ... (exit {p.returncode})")
 
 
+def paths(profile: str) -> dict[str, Path]:
+    """Work files of one disc profile. The USA discs keep the developer layout (generated/, generated/arcade/,
+    build/GT2.PAK, build/GT2A.PAK: scripts/build.sh and the PPSSPP scripts use it)."""
+    legacy = {"sim": ("extracted", "generated", "GT2.PAK"), "arc": ("extracted-arcade", "generated/arcade", "GT2A.PAK")}
+    ext, gen, pak = legacy.get(profile, (f"extracted-{profile}", f"generated/{profile}", f"{profile}.PAK"))
+    return {"ext": ROOT / ext, "gen": ROOT / gen, "pak": ROOT / "build" / pak}
+
+
 def convert(sim: str | None, arc: str | None) -> None:
     py = [sys.executable, "-m", "gt2psp"]
     env = dict(os.environ, PYTHONPATH=str(ROOT / "src"))
-    plan = []
     discs = [(d, Path(c)) for d, c in (("sim", sim), ("arc", arc)) if c]
-    for d, _ in discs:
-        plan += [f"verify-{d}"]
+    plan = [f"verify-{d}" for d, _ in discs]
     for d, _ in discs:
         plan += [f"extract-{d}", f"recomp-{d}", f"pack-{d}"]
     plan += ["toolchain", "compile", "folder"]
     with JOB.lock:
         JOB.steps = [{"id": s, "state": "wait"} for s in plan]
+        JOB.folders = []
 
     def step(sid: str, i: int):
         with JOB.lock:
@@ -167,28 +179,29 @@ def convert(sim: str | None, arc: str | None) -> None:
                     s["state"] = "done"
 
     i = 0
+    found: list[tuple[str, Path, dict]] = []     # (sim/arc, cue, verify result)
     for d, cue in discs:
         step(f"verify-{d}", i)
         r = verify(cue)
         if not r["ok"] or r["disc"] != d:
             raise RuntimeError(r.get("message") or f"{cue.name} is the other disc")
-        JOB.say(f"{cue.name}: {r['name']} (sha1 {r['sha1']})")
+        JOB.say(f"{cue.name}: {r['name']} (sha1 {r['sha1']}, profile {r['profile']})")
+        found.append((d, cue, r))
         finished(f"verify-{d}")
         i += 1
-    for d, cue in discs:
-        ext = ROOT / ("extracted" if d == "sim" else "extracted-arcade")
+    for d, cue, r in found:
+        prof, w = r["profile"], paths(r["profile"])
         step(f"extract-{d}", i); i += 1
-        run(py + ["extract", str(cue), "--out", str(ext)], env)
+        run(py + ["extract", str(cue), "--out", str(w["ext"])], env)
         finished(f"extract-{d}")
         step(f"recomp-{d}", i); i += 1
-        if d == "sim":
-            run(py + ["recomp"], env)
-        else:
-            run(py + ["recomp", "--disc", "arc", "--files", str(ext / "files"), "--out", str(ROOT / "generated" / "arcade"),
-                      "--no-memprof"], env)
+        cmd = py + ["recomp", "--disc", prof, "--files", str(w["ext"] / "files"), "--out", str(w["gen"])]
+        if PROFILES[prof].kind == "arc":
+            cmd.append("--no-memprof")   # the memory profiles (data/memprof) are the Simulation disc's
+        run(cmd, env)
         finished(f"recomp-{d}")
         step(f"pack-{d}", i); i += 1
-        run(py + ["pack", str(cue), "--out", str(ROOT / "build" / ("GT2.PAK" if d == "sim" else "GT2A.PAK"))], env)
+        run(py + ["pack", str(cue), "--out", str(w["pak"])], env)
         finished(f"pack-{d}")
     step("toolchain", i); i += 1
     def dl(f: float) -> None:
@@ -197,27 +210,38 @@ def convert(sim: str | None, arc: str | None) -> None:
     tc = toolchain.ensure(JOB.say, dl)
     JOB.say(f"PSP toolchain: {tc}")
     finished("toolchain")
+    editions: dict[str, list[tuple[str, dict]]] = {}     # discs of one edition share a PSP folder
+    for d, _cue, r in found:
+        editions.setdefault(r["edition"], []).append((d, r))
     step("compile", i); i += 1
-    build = [sys.executable, str(ROOT / "scripts" / "build_psp.py"), "--pspdev", str(tc), "--launcher",
-             "--out", str(ROOT / "build" / "release")]
-    for d, _ in discs:
-        build += ["--game", d]
     icon = ROOT / "converter" / "ICON0.PNG"
-    if icon.exists():
-        build += ["--icon", str(icon)]
-    run(build, env)
+    for ed_name, members in editions.items():
+        ed = EDITIONS[ed_name]
+        JOB.say(f"== {ed.title} -> PSP/GAME/{ed.folder}")
+        build = [sys.executable, str(ROOT / "scripts" / "build_psp.py"), "--pspdev", str(tc), "--launcher",
+                 "--title", ed.title, "--out", str(ROOT / "build" / "release" / ed_name)]
+        for d, r in members:
+            build += ["--game", f"{d}={paths(r['profile'])['gen']}"]
+        if icon.exists():
+            build += ["--icon", str(icon)]
+        run(build, env)
     finished("compile")
     step("folder", i); i += 1
-    dst = OUTPUT / "PSP" / "GAME" / "GT2PSP"
-    dst.mkdir(parents=True, exist_ok=True)
-    rel = ROOT / "build" / "release"
-    files = [rel / "EBOOT.PBP"]
-    for d, _ in discs:
-        files.append(rel / ("GT2SIM.PRX" if d == "sim" else "GT2ARC.PRX"))
-        files.append(ROOT / "build" / ("GT2.PAK" if d == "sim" else "GT2A.PAK"))
-    for f in files:
-        JOB.say(f"copy {f.name}")
-        shutil.copyfile(f, dst / f.name)
+    for ed_name, members in editions.items():
+        ed = EDITIONS[ed_name]
+        dst = OUTPUT / "PSP" / "GAME" / ed.folder
+        dst.mkdir(parents=True, exist_ok=True)
+        rel = ROOT / "build" / "release" / ed_name
+        files = [(rel / "EBOOT.PBP", "EBOOT.PBP")]
+        for d, r in members:
+            prx = "GT2SIM.PRX" if d == "sim" else "GT2ARC.PRX"
+            files.append((rel / prx, prx))
+            files.append((paths(r["profile"])["pak"], "GT2.PAK" if d == "sim" else "GT2A.PAK"))
+        for f, name in files:
+            JOB.say(f"copy {f.name} -> {ed.folder}/{name}")
+            shutil.copyfile(f, dst / name)
+        with JOB.lock:
+            JOB.folders.append(ed.folder)
     finished("folder")
     with JOB.lock:
         JOB.progress = 1.0
@@ -285,7 +309,7 @@ class Handler(BaseHTTPRequestHandler):
             start(req.get("sim"), req.get("arc"))
             self.js({"started": True})
         elif self.path == "/api/open-output":
-            p = OUTPUT / "PSP" / "GAME" / "GT2PSP"
+            p = OUTPUT / "PSP" / "GAME" / JOB.folders[0] if len(JOB.folders) == 1 else OUTPUT / "PSP" / "GAME"
             try:
                 if sys.platform.startswith("win"):
                     os.startfile(p)          # noqa: S606 (local folder)

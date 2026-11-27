@@ -13,7 +13,7 @@ WORK="${GT2_WORK:-/root}"
 B=${GT2_BUILD_DIR:-$WORK/gt2build}
 mkdir -p "$B"
 cd "$B"
-psp-cmake -DGT2_GAME="${GT2_GAME-sim}" -DGEN_EXTRA="${GEN_EXTRA--Os -DGT2_NO_TRACE -DGT2_GTE_OUTLINE}" -DRT_EXTRA="${RT_EXTRA-}" -DALL_EXTRA="${ALL_EXTRA-}"     -DME_LIB_DIR="$WORK/mepoc/build/mecorelib" -DME_INC_DIR="$WORK/meinc" "$PROJ/runtime" >/dev/null   # re-run: picks up new source files
+psp-cmake -DGT2_GAME="${GT2_GAME-sim}" -DGT2_GEN_DIR="${GT2_GEN_DIR-}" -DGEN_EXTRA="${GEN_EXTRA--Os -DGT2_NO_TRACE -DGT2_GTE_OUTLINE}" -DRT_EXTRA="${RT_EXTRA-}" -DALL_EXTRA="${ALL_EXTRA-}"     -DME_LIB_DIR="$WORK/mepoc/build/mecorelib" -DME_INC_DIR="$WORK/meinc" "$PROJ/runtime" >/dev/null   # re-run: picks up new source files
 make -j"$(nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)" > make.log 2>&1 || { grep -E "error|Error" make.log | head -30; exit 1; }
 grep -E "warning" make.log | head -20 || true
 test -f EBOOT.PBP

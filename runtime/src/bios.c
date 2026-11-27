@@ -4,6 +4,7 @@
 #include <string.h>
 #include "rt.h"
 #include "card.h"
+#include "game.h"
 
 uint32_t g_hook_entry_int;
 uint32_t g_irq_chain[4];
@@ -35,13 +36,12 @@ void bios_event_later(uint32_t cls, uint32_t spec)
  * 254 sectors in 105 ms, same save state. */
 int g_card_fast = 1;   /* 1: reads only (verified), 2: writes too (saving not verified yet) */
 extern int g_card_last_write;
-/* the card task of each disc (Arcade: same code 0xF0 lower, context 0x801F00D0); 0 when the code does not match */
+/* the card task of this disc (game.h, profiles.py card_task/card_ctx); 0 when the code does not match */
 static uint32_t card_task(void)
 {
     static int ok = -1;
-    static const uint32_t addr[2] = {0x8007EACCu, 0x8007E9DCu}, ctx_lo[2] = {0x248406E0u, 0x248400D0u};
-    uint32_t a = addr[g_game];
-    if (ok < 0) ok = mem_r32(a) == 0x3C04801Fu && mem_r32(a + 4) == ctx_lo[g_game];
+    uint32_t a = GT2_CARD_TASK;
+    if (ok < 0) ok = mem_r32(a) == GT2_CARD_TASK_W0 && mem_r32(a + 4) == GT2_CARD_TASK_W1;
     return ok ? a : 0;
 }
 

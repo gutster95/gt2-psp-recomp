@@ -9,6 +9,7 @@
 #include <pspiofilemgr.h>
 #include <psppower.h>
 #include "rt.h"
+#include "game.h"
 #include "gpu.h"
 #include "cdrom.h"
 #include "sio.h"
@@ -36,7 +37,7 @@ static int load_exe(void)
     uint32_t pc0 = *(uint32_t *)(hdr + 0x10), taddr = *(uint32_t *)(hdr + 0x18), tsize = *(uint32_t *)(hdr + 0x1C);
     if (tsize > 0x1F0000 || (tsize & 2047)) return 0;
     if (!cdrom_read_data(EXE_LBA + 1, tsize / 2048, g_ram + (taddr & 0x1FFFFF))) return 0;
-    logf_("%s: pc0=%08x text=%08x size=%08x\n", g_game == GAME_ARC ? "SCUS_944.55" : "SCUS_944.88", (unsigned)pc0,
+    logf_("%s: pc0=%08x text=%08x size=%08x\n", GT2_EXE_NAME, (unsigned)pc0,
           (unsigned)taddr, (unsigned)tsize);
     return 1;
 }
@@ -147,7 +148,8 @@ int main(int argc, char **argv)
         logf_("suspects: cd_legacy %d card_fast %d me_snapshot %d log_prio 0x%x\n", g_cd_legacy, g_card_fast,
               g_me_snapshot, g_log_prio ? g_log_prio : 0x48);
     }
-    logf_("game: %s\n", g_game == GAME_ARC ? "Arcade Mode (SCUS_944.55)" : "Simulation Mode (SCUS_944.88)");
+    logf_("game: %s, %s Mode (%s, profile %s)\n", GT2_TITLE, g_game == GAME_ARC ? "Arcade" : "Simulation",
+          GT2_EXE_NAME, GT2_PROFILE);
     {   /* performance mode: 60 fps with the game's own trade-offs (no mirror/tire smoke) and low-detail opponents */
         extern int g_fps60, g_fx60, g_lowlod, g_performance;
         /* performance mode: 60 fps; mirror/smoke and opponent detail default by mode, the menu's saved choice wins */

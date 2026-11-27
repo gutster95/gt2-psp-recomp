@@ -1,12 +1,15 @@
 cmake_minimum_required(VERSION 3.10)
 project(gt2psp C)
 
-# One runtime build per disc (the launcher in launcher/ starts one of them): GT2_GAME=sim (generated/, SCUS_944.88)
-# or arc (generated/arcade/ from `python -m gt2psp recomp --disc arc`, SCUS_944.55)
+# One runtime build per disc profile (the launcher in launcher/ starts one of them): GT2_GAME=sim (generated/,
+# SCUS_944.88) or arc (generated/arcade/ from `python -m gt2psp recomp --disc arc`, SCUS_944.55); GT2_GEN_DIR picks
+# another recompiled disc (profiles sim_plus, arc_plus, ...). The disc's constants are in the generated game.h.
 set(GT2_GAME "sim" CACHE STRING "disc of this build: sim or arc")
-if(GT2_GAME STREQUAL "arc")
+set(GT2_GEN_DIR "" CACHE PATH "generated code of the disc (default: generated/ or generated/arcade/)")
+if(GT2_GEN_DIR)
+  set(GEN_DIR "${GT2_GEN_DIR}")
+elseif(GT2_GAME STREQUAL "arc")
   set(GEN_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../generated/arcade")
-  add_compile_definitions(GT2_ARC_BUILD)
 else()
   set(GEN_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../generated")
 endif()

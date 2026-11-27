@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 
 from .disc import Disc, sha1_file
+from .profiles import PROFILES
 
 
 def cmd_extract(args: argparse.Namespace) -> None:
@@ -117,6 +118,11 @@ def cmd_recomp(args: argparse.Namespace) -> None:
         print(f"  {mod:9s} {t:08x}")
 
 
+def cmd_derive(args: argparse.Namespace) -> None:
+    from .derive import cmd
+    cmd(args)
+
+
 def main() -> None:
     p = argparse.ArgumentParser(prog="gt2psp")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -124,6 +130,13 @@ def main() -> None:
     e.add_argument("cue")
     e.add_argument("--out", default="extracted")
     e.set_defaults(func=cmd_extract)
+    dv = sub.add_parser("derive", help="derive a disc profile for another build from a known one (profiles.py)")
+    dv.add_argument("--ref", required=True, help="known profile (profiles.py), e.g. arc")
+    dv.add_argument("--ref-files", required=True, help="extracted files of the known disc")
+    dv.add_argument("--files", required=True, help="extracted files of the new disc")
+    dv.add_argument("--name", default="new")
+    dv.add_argument("--prefix", default="a")
+    dv.set_defaults(func=cmd_derive)
     k = sub.add_parser("pack", help="convert the disc image into the PSP data pack GT2.PAK")
     k.add_argument("cue")
     k.add_argument("--out", default="build/GT2.PAK")
@@ -134,7 +147,7 @@ def main() -> None:
     f = sub.add_parser("functions", help="partition all code (resident, boot, overlays) into functions")
     f.add_argument("--files", default="extracted/files")
     f.add_argument("--out", default="generated/functions.json")
-    f.add_argument("--disc", default="sim", choices=["sim", "arc"], help="disc profile (profiles.py)")
+    f.add_argument("--disc", default="sim", choices=sorted(PROFILES), help="disc profile (profiles.py)")
     f.set_defaults(func=cmd_functions)
     r = sub.add_parser("recomp", help="translate all modules to C")
     r.add_argument("--files", default="extracted/files")
@@ -143,7 +156,7 @@ def main() -> None:
                    help="memory profile (memprof.txt of a GT2_MEMPROF run); may be given several times "
                         "(default: data/memprof/*.txt)")
     r.add_argument("--no-memprof", action="store_true", help="all memory accesses checked (for profiling builds)")
-    r.add_argument("--disc", default="sim", choices=["sim", "arc"], help="disc profile (profiles.py)")
+    r.add_argument("--disc", default="sim", choices=sorted(PROFILES), help="disc profile (profiles.py)")
     r.set_defaults(func=cmd_recomp)
     for name, fn, hlp in (("disasm", cmd_disasm, "disassemble main EXE or an overlay"),
                           ("analyze", cmd_analyze, "function discovery, BIOS stubs, I/O accesses")):

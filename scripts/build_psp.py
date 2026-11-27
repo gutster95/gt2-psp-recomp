@@ -2,7 +2,8 @@
 runtime/CMakeLists.txt, runtime/launcher/CMakeLists.txt and third_party/me-custom-core (with pspdev.cmake), driven
 from Python so the converter works the same on Windows, macOS and Linux.
 
-    python scripts/build_psp.py --pspdev <toolchain dir> [--game sim|arc ...] [--launcher] [--out build/release]
+    python scripts/build_psp.py --pspdev <toolchain dir> [--game sim|arc[=<generated dir>] ...] [--launcher]
+                                [--title "Gran Turismo 2"] [--out build/release]
 
 Outputs: <out>/GT2SIM.PRX, <out>/GT2ARC.PRX, <out>/EBOOT.PBP (launcher). Work files: <work> (default build/psp-work).
 """
@@ -48,9 +49,10 @@ def run(cmd: list[str], cwd: Path | None = None, out: Path | None = None) -> Non
         out.write_text(r.stdout, encoding="utf-8", newline="\n")
 
 
-def compile_all(tc: Toolchain, jobs: list[tuple[Path, Path, list[str]]], threads: int) -> None:
-    """jobs: (source, object, flags). Skips objects newer than their source (simple incremental build)."""
-    todo = [(s, o, f) for s, o, f in jobs if not (o.exists() and o.stat().st_mtime > s.stat().st_mtime
+def compile_all(tc: Toolchain, jobs: list[tuple[Path, Path, list[str]]], threads: int, deps: float = 0.0) -> None:
+    """jobs: (source, object, flags). Skips objects newer than their source and than deps (the newest header they may
+    include; simple incremental build)."""
+    todo = [(s, o, f) for s, o, f in jobs if not (o.exists() and o.stat().st_mtime > max(s.stat().st_mtime, deps)
                                                     and Path(str(o) + ".flags").exists()
                                                     and Path(str(o) + ".flags").read_text() == " ".join(f))]
     for _, o, _ in todo:
@@ -112,18 +114,16 @@ def me_library(tc: Toolchain, work: Path, threads: int) -> Path:
     return w
 
 
-def runtime(tc: Toolchain, game: str, work: Path, me: Path, gen_flags: str, rt_flags: str, threads: int) -> Path:
-    """runtime/CMakeLists.txt: runtime + generated code of one disc -> PRX."""
-    gen = PROJ / "generated" / ("arcade" if game == "arc" else "")
-    if not (gen / "tables.c").exists():
+def runtime(tc: Toolchain, game: str, gen: Path, work: Path, me: Path, gen_flags: str, rt_flags: str,
+            threads: int) -> Path:
+    """runtime/CMakeLists.txt: runtime + generated code of one disc (gen: its recompiled code with game.h) -> PRX."""
+    if not (gen / "tables.c").exists() or not (gen / "game.h").exists():
         raise SystemExit(f"no recompiled code in {gen} (run: python -m gt2psp recomp ...)")
-    w = (work / game).resolve()
-    print(f"== runtime ({'Arcade' if game == 'arc' else 'Simulation'} Mode)")
+    w = (work / f"{game}-{gen.name}").resolve()   # one object dir per disc: objects of another disc never mix in
+    print(f"== runtime ({'Arcade' if game == 'arc' else 'Simulation'} Mode, {gen.name})")
     base = [*tc.defs, f"-I{PROJ / 'runtime' / 'include'}", f"-I{PROJ / 'runtime' / 'src'}", f"-I{gen}",
             f"-I{me / 'include'}", *tc.inc, "-DPSP", "-O2", "-G0", "-ffunction-sections", "-fno-strict-aliasing",
             "-Wall", "-Wno-unused-label", "-Wno-unused-variable"]
-    if game == "arc":
-        base.insert(3, "-DGT2_ARC_BUILD")
     rt_extra = shlex.split(rt_flags)
     jobs = []
     for s in sorted((PROJ / "runtime" / "src").glob("*.c")):
@@ -134,7 +134,8 @@ def runtime(tc: Toolchain, game: str, work: Path, me: Path, gen_flags: str, rt_f
         jobs.append((s, w / "generated" / (s.name + ".obj"), base + ["-w", *shlex.split(gen_flags)]))
     # the generated files are large: start them first so the pool stays busy
     jobs.sort(key=lambda j: -j[0].stat().st_size)
-    compile_all(tc, jobs, threads)
+    headers = [*(PROJ / "runtime").glob("include/*.h"), *(PROJ / "runtime").glob("src/*.h"), *gen.glob("*.h")]
+    compile_all(tc, jobs, threads, max(h.stat().st_mtime for h in headers))
     # linker script with the hot functions first (scripts/make_linkfile.py)
     run([sys.executable, str(PROJ / "scripts" / "make_linkfile.py")])
     # same input order as CMake (runtime sources, then generated), relative with "/" so the patterns match on Windows
@@ -150,12 +151,12 @@ def runtime(tc: Toolchain, game: str, work: Path, me: Path, gen_flags: str, rt_f
     return w / "gt2psp.prx"
 
 
-def launcher(tc: Toolchain, work: Path, out: Path, icon: Path | None, pic: Path | None) -> Path:
+def launcher(tc: Toolchain, work: Path, out: Path, icon: Path | None, pic: Path | None, title: str) -> Path:
     """runtime/launcher/CMakeLists.txt -> EBOOT.PBP (start menu)."""
     print("== launcher")
     w = work / "launcher"
     w.mkdir(parents=True, exist_ok=True)
-    flags = [*tc.defs, *tc.inc, "-DPSP", "-O2", "-Wall"]
+    flags = [*tc.defs, *tc.inc, "-DPSP", "-O2", "-Wall", f'-DGT2_LAUNCHER_TITLE="{title.upper()}"']
     compile_all(tc, [(PROJ / "runtime" / "launcher" / "main.c", w / "main.o", flags)], 1)
     elf = w / "gt2launcher"
     run([tc.tool("psp-gcc"), *tc.inc, "-DPSP", *tc.libdirs, "-Wl,-zmax-page-size=128",
@@ -163,7 +164,7 @@ def launcher(tc: Toolchain, work: Path, out: Path, icon: Path | None, pic: Path 
          str(w / "main.o"), "-o", str(elf), "-lpspdebug", "-lpspdisplay", "-lpspge", "-lpspctrl"])
     run([tc.tool("psp-fixup-imports"), str(elf)])
     run([tc.tool("psp-prxgen"), str(elf), str(w / "gt2launcher.prx")])
-    run([tc.tool("mksfoex"), "-d", "MEMSIZE=2", "-s", "APP_VER=", "Gran Turismo 2", str(w / "PARAM.SFO")])
+    run([tc.tool("mksfoex"), "-d", "MEMSIZE=2", "-s", "APP_VER=", title, str(w / "PARAM.SFO")])
     eboot = out / "EBOOT.PBP"
     run([tc.tool("pack-pbp"), str(eboot), str(w / "PARAM.SFO"), str(icon) if icon else "NULL", "NULL", "NULL",
          str(pic) if pic else "NULL", "NULL", str(w / "gt2launcher.prx"), "NULL"])
@@ -173,7 +174,10 @@ def launcher(tc: Toolchain, work: Path, out: Path, icon: Path | None, pic: Path 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--pspdev", default=os.environ.get("PSPDEV", ""), help="toolchain root (contains bin/psp-gcc)")
-    ap.add_argument("--game", action="append", choices=["sim", "arc"], help="runtime(s) to build (default: none)")
+    ap.add_argument("--game", action="append",
+                    help="runtime(s) to build: sim or arc, optionally =<generated dir> (default: generated/, "
+                         "generated/arcade/)")
+    ap.add_argument("--title", default="Gran Turismo 2", help="XMB title of the launcher")
     ap.add_argument("--launcher", action="store_true", help="also build the launcher EBOOT.PBP")
     ap.add_argument("--out", default=str(PROJ / "build" / "release"))
     ap.add_argument("--work", default=str(PROJ / "build" / "psp-work"))
@@ -191,13 +195,17 @@ def main() -> None:
     t0 = time.time()
     if a.game:
         me = me_library(tc, work, a.jobs)
-        for g in a.game:
-            prx = runtime(tc, g, work, me, a.gen_flags, a.rt_flags, a.jobs)
+        for spec in a.game:
+            g, _, gdir = spec.partition("=")
+            if g not in ("sim", "arc"):
+                raise SystemExit(f"--game {spec}: sim or arc")
+            gen = Path(gdir).resolve() if gdir else PROJ / "generated" / ("arcade" if g == "arc" else "")
+            prx = runtime(tc, g, gen, work, me, a.gen_flags, a.rt_flags, a.jobs)
             dst = out / ("GT2ARC.PRX" if g == "arc" else "GT2SIM.PRX")
             dst.write_bytes(prx.read_bytes())
             print(f"  -> {dst} ({dst.stat().st_size} bytes)")
     if a.launcher:
-        e = launcher(tc, work, out, Path(a.icon) if a.icon else None, Path(a.pic) if a.pic else None)
+        e = launcher(tc, work, out, Path(a.icon) if a.icon else None, Path(a.pic) if a.pic else None, a.title)
         print(f"  -> {e} ({e.stat().st_size} bytes)")
     print(f"== done in {time.time() - t0:.0f} s")
 

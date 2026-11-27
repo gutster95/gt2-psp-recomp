@@ -1134,3 +1134,22 @@ Fan mod discs (ISO/, zips from the user). Compared EXE + GT2.OVL code word by wo
   (core.c module table/overlay loader, race frame interval byte).
 * **Plus Arcade Europe** (SCES_023.80, sha1 c43b1daf...): PAL build, code moved by ~0x130 and much more changed data;
   same work as above plus PAL (50 Hz, 256 lines, language selection) - untested ground.
+
+## 2026-11-27 - Conversion profiles per game version; GT2 Plus (USA) supported
+
+* profiles.py: disc profiles `sim`, `arc`, `sim_plus`, `arc_plus`; `DISCS` (SHA-1 -> profile + edition + title) and
+  `EDITIONS` (`usa` -> PSP/GAME/GT2PSP, save GT2PSP000; `plus_usa` -> GT2PLUS, save GT2PLUS00, title "Gran Turismo 2
+  Plus"). The converter takes the dump table from there (server.py KNOWN removed).
+* `recomp` writes `game.h` (runtime constants of the profile); core.c, io.c, bios.c, main.c, savedata.c use it
+  instead of `#ifdef GT2_ARC_BUILD` / tables indexed by g_game. Vanilla sim + arc regenerated: all C files
+  bit-identical, game.h values equal to the old hard-coded ones.
+* New `python -m gt2psp derive` (derive.py): profile of another build from a known one by code signatures. Check:
+  derive sim -> Arcade disc reproduces the hand-made ARC profile (all 45 patch sites, card task, interval byte,
+  overlay table), 0 problems. arc -> GT2 Plus Arcade: 0 problems (resident +0x50, ovl0 sites partly at the
+  Simulation addresses, ovl2 text_exclude +0x25C, interval byte 0x1D5634, card context 0x801F04A0).
+* build_psp.py: `--game sim|arc[=<generated dir>]`, `--title` (XMB + launcher heading), one object dir per disc,
+  objects rebuilt when a header (game.h) is newer. CMake: `GT2_GEN_DIR` (build.sh env). Launcher heading from
+  `-DGT2_LAUNCHER_TITLE`.
+* Tests (PPSSPP): Plus Simulation - title, attract race, GT mode garage; new save data GT2PLUS00 (no vanilla save
+  found = separate). Plus Arcade (direct EBOOT, arc_plus) - intro movie, START -> menu, attract replay in 16:9 at
+  30 fps (race work 22-26 ms). Release build through build_psp.py with the Windows toolchain: launcher + both PRXs.

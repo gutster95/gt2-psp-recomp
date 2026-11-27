@@ -14,6 +14,7 @@
 #include "raster.h"
 #include <pspkernel.h>
 #include "me.h"
+#include "game.h"
 
 uint32_t g_i_stat, g_i_mask;
 /* indexed by address - 0x1F800000, so offsets below read like the hardware addresses */
@@ -50,11 +51,7 @@ int g_performance;   /* performance=1: fps60, fps60_effects=0, lowlod=1 (main.c)
 
 /* the race frame interval byte (0x801D5864 on the Simulation disc; Arcade: 0x5A0 lower, all references to the race
  * display struct 0x801D585C/0x801D52BC moved alike, src/gt2psp/profiles.py) */
-#ifdef GT2_ARC_BUILD
-static const uint32_t g_interval = 0x1D52C4u;
-#else
-static const uint32_t g_interval = 0x1D5864u;
-#endif
+static const uint32_t g_interval = GT2_INTERVAL;   /* game.h (profiles.py interval) */
 int g_fstep_log;   /* settings.txt fstep_log=1 (rt_frame_step diagnostics) */
 static int g_fps60_patched;   /* the frame interval currently 1 is ours (was 2) */
 int g_fps60_dyn = 1;          /* settings.txt fps60_dynamic: game time step = vblanks that really passed */

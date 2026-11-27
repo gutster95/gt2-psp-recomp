@@ -14,8 +14,9 @@
 #include "rt.h"
 #include "savedata.h"
 #include "save_icon.h"
+#include "game.h"
 
-#define GAME_NAME "GT2PSP000"     /* 9 characters like a product code */
+#define GAME_NAME GT2_SAVE_GAME   /* 9 characters like a product code; one per edition (game.h, profiles.py) */
 #define SAVE_NAME "00CARD1"
 #define FILE_NAME "MEMCARD.BIN"
 
@@ -52,7 +53,7 @@ static void setup(int mode, void *buf)
     g_sp.dataBuf = buf;
     g_sp.dataBufSize = SAVEDATA_CARD_SIZE;
     g_sp.dataSize = SAVEDATA_CARD_SIZE;
-    strcpy(g_sp.sfoParam.title, "Gran Turismo 2 (PSP)");
+    strcpy(g_sp.sfoParam.title, GT2_TITLE " (PSP)");
     strcpy(g_sp.sfoParam.savedataTitle, "Memory Card 1");
     strcpy(g_sp.sfoParam.detail, "PlayStation memory card (slot 1) of the GT2 PSP port: GT mode progress, garage, "
                                   "licenses and settings.");

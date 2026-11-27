@@ -11,6 +11,10 @@
 #include <stdio.h>
 #include <string.h>
 
+#ifndef GT2_LAUNCHER_TITLE
+#define GT2_LAUNCHER_TITLE "GRAN TURISMO 2"   /* scripts/build_psp.py --title: the edition (profiles.py) */
+#endif
+
 PSP_MODULE_INFO("GT2Launcher", 0, 1, 0);
 PSP_MAIN_THREAD_ATTR(THREAD_ATTR_USER);
 PSP_HEAP_SIZE_KB(256);
@@ -123,7 +127,7 @@ static int menu(const int have[2])
             pspDebugScreenClear();
             pspDebugScreenSetXY(19, 8);
             pspDebugScreenSetTextColor(0xFFFFFFFF);
-            pspDebugScreenPrintf("GRAN TURISMO 2");
+            pspDebugScreenPrintf("%s", GT2_LAUNCHER_TITLE);
             for (int i = 0; i < 2; i++) {
                 pspDebugScreenSetXY(19, 12 + 2 * i);
                 pspDebugScreenSetTextColor(!have[i] ? 0xFF404040 : i == sel ? 0xFF40FFFF : 0xFFA0A0A0);

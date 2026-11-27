@@ -21,7 +21,9 @@ src/gt2psp/          Python tooling (run: python -m gt2psp ... with src on PYTHO
   image.py           PS-X EXE and GT2.OVL (gzip members) loaders
   analysis.py        text ranges, jump tables, partitioning, BIOS/IO detection
   program.py         whole program: modules resident/boot/ovl0-5, functions, resume points
-  recomp.py          MIPS -> C translator
+  recomp.py          MIPS -> C translator (+ generated game.h: the disc profile's runtime constants)
+  profiles.py        disc profiles (sim, arc, sim_plus, arc_plus), DISCS (sha1 -> profile/edition), EDITIONS (PSP folder, save)
+  derive.py          derive a profile for another game build by code signatures (python -m gt2psp derive)
   __main__.py        CLI: extract, hash, disasm, analyze, functions, recomp
 runtime/             PSP runtime (C): include/gt2rt.h (interface for generated code), src/*.c
   src/widescreen.c   game patch: near-plane clipping for the overlay 0 scenery renderer

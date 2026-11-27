@@ -27,6 +27,30 @@ tools/             (ignored) local toolchain (pspdev inside a project-local WSL 
   address *and* the currently loaded overlay.
 * BIOS calls (`A0`/`B0`/`C0` tables, `syscall`) are replaced by high-level implementations.
 
+## Disc profiles and editions (2026-11-27)
+
+Every build of the game (USA Simulation Rev 2, USA Arcade, the GT2 Plus fan mod, later PAL / Japanese) is its own
+**disc profile** in `src/gt2psp/profiles.py`: text ranges, setjmp/longjmp, overlay loader, extra function starts and
+resume points, the game patch sites (16:9, 60 fps, LOD: `patch_map` from the Simulation addresses) and the runtime's
+constants (memory card task, race frame interval byte). The supported dumps are listed by SHA-1 in `DISCS`, each
+with its profile and its **edition**: the discs that share one PSP folder (`EDITIONS`: folder, XMB title, save data
+name). Discs of different editions never share a folder or a save - a GT2 Plus save holds cars the original game
+does not know.
+
+* `python -m gt2psp recomp --disc <profile>` writes, next to the C code, `game.h` with the profile's runtime
+  constants (entry, overlay window and table, overlay loader symbol, card task, interval byte, save name, title).
+  The runtime has no per-disc `#ifdef`s any more; `GT2_KIND_ARC` (Simulation / Arcade runtime: PRX and pack names,
+  task-switch resume table, 24-bit movie buffer) is the only distinction left. One runtime build per profile.
+* New profiles are derived, never guessed: `python -m gt2psp derive --ref <known profile> --ref-files <its files>
+  --files <new disc's files>` looks up every address by masked instruction signatures (sigmap.py), reads data
+  addresses from the instructions that build them, and requires every patch site's instruction and the code around
+  it (the clipper loops from 0x74 before) to be identical. It reproduces the hand-made Arcade profile from the
+  Simulation one exactly (validation); GT2 Plus Arcade came out with 0 problems.
+* Mods that leave the EXE alone (GT2 Plus Simulation) reuse a profile under a new name: the code is recompiled from
+  their own files anyway, only the edition differs.
+* Converter: per edition one `build_psp.py --title ... --game sim=<generated dir> --game arc=<generated dir>` and one
+  `output/PSP/GAME/<folder>`. The USA discs keep the developer paths (generated/, generated/arcade/, build/GT2.PAK).
+
 ## Code model (decided)
 
 * The program consists of modules: `resident` (SCUS_944.88 `0x8005d600+`), `boot` (low part of SCUS_944.88,
