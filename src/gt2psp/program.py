@@ -274,7 +274,9 @@ def _build(files: Path, extra: dict[str, set[int]]) -> list[Module]:
     res = Module("resident", exe, text_ranges(exe, start=RESIDENT_TEXT[0], end=RESIDENT_TEXT[1]), entry=exe.entry)
     mods = [res, boot]
     for i, o in enumerate(ovls):
-        m = Module(o.name, o, [r for r in text_ranges(o) if tuple(r) not in TEXT_EXCLUDE.get(o.name, [])])
+        # text ranges that lie inside a data block of the profile (text_exclude) are data the detection took
+        excl = TEXT_EXCLUDE.get(o.name, [])
+        m = Module(o.name, o, [r for r in text_ranges(o) if not any(lo <= r[0] and r[1] <= hi for lo, hi in excl)])
         m.entry = exe.word(OVERLAY_ENTRY_TABLE + 4 * i)
         mods.append(m)
 

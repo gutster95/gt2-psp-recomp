@@ -342,7 +342,151 @@ EU_ARC = replace(
     interval_ref=("ovl0", 0x80013844),
 )
 
-PROFILES = {p.name: p for p in (SIM, ARC, SIM_PLUS, ARC_PLUS, EU_SIM, EU_ARC)}
+# Japan (NTSC): Disc 2 "Gran Turismo" SCPS-10117 Rev 1 and Disc 1 Arcade SCPS-10116. Derived 2026-11-27 with
+# `gt2psp derive` from SIM and ARC, 0 problems (Arcade: resident text end and the ovl2 data table found by the raw
+# fallback - pointers moved by the table's own distance).
+JP_SIM = replace(
+    SIM, name="jp_sim", kind="sim", exe="SCPS_101.17", memprof=False,
+    boot_text=(0x80010000, 0x80011DF4),
+    resident_text=(0x8005D4D0, 0x8008DF18),
+    setjmp=0x8007AC48,
+    longjmp=0x8007AC80,
+    ovl_loader=0x8005D9A8,
+    overlay_entry_table=0x80090FDC,
+    extra_starts={
+        "resident": {0x8007E958, 0x8007E960, 0x8007E968, 0x8007E970, 0x8007E978, 0x8007E980, 0x8007E988, 0x8007E990, 0x8007E998}
+    },
+    extra_resume={},
+    resume_inside={},
+    text_exclude={},
+    patch_map={
+        ("ovl0", 0x800100D0): 0x800100D0,
+        ("ovl0", 0x800100D4): 0x800100D4,
+        ("ovl0", 0x8001435C): 0x80014354,
+        ("ovl0", 0x800168C8): 0x800168C0,
+        ("ovl0", 0x80018E90): 0x80018E88,
+        ("ovl0", 0x80018FB8): 0x80018FB0,
+        ("ovl0", 0x80019098): 0x80019090,
+        ("ovl0", 0x800191BC): 0x800191B4,
+        ("ovl0", 0x8001929C): 0x80019294,
+        ("ovl0", 0x800193C8): 0x800193C0,
+        ("ovl0", 0x800194BC): 0x800194B4,
+        ("ovl0", 0x800195EC): 0x800195E4,
+        ("ovl0", 0x80019644): 0x8001963C,
+        ("ovl0", 0x80020418): 0x80020410,
+        ("ovl0", 0x80020428): 0x80020420,
+        ("ovl0", 0x80029550): 0x80029570,
+        ("ovl0", 0x800295EC): 0x8002960C,
+        ("ovl0", 0x800295F0): 0x80029610,
+        ("ovl0", 0x800497C8): 0x80049724,
+        ("ovl0", 0x80049F48): 0x80049EA4,
+        ("ovl0", 0x80049F50): 0x80049EAC,
+        ("ovl0", 0x8004C194): 0x8004C0F0,
+        ("ovl0", 0x8004C19C): 0x8004C0F8,
+        ("ovl0", 0x8004E064): 0x8004DF64,
+        ("ovl0", 0x80050C14): 0x80050B14,
+        ("ovl0", 0x80050C1C): 0x80050B1C,
+        ("ovl0", 0x80058070): 0x80057F40,
+        ("ovl0", 0x80058078): 0x80057F48,
+        ("ovl0", 0x80058924): 0x800587F4,
+        ("ovl0", 0x8005892C): 0x800587FC,
+        ("ovl0", 0x80059A08): 0x800598D8,
+        ("ovl2", 0x8001536C): 0x8001536C,
+        ("ovl2", 0x8001E578): 0x8001E3A0,
+        ("ovl2", 0x8001E580): 0x8001E3A8,
+        ("ovl2", 0x800201C4): 0x8001FFBC,
+        ("ovl2", 0x800201CC): 0x8001FFC4,
+        ("ovl4", 0x8001CDF4): 0x8001C9D4,
+        ("ovl4", 0x8001CDFC): 0x8001C9DC,
+        ("ovl4", 0x8001CE04): 0x8001C9E4,
+        ("resident", 0x8007D23C): 0x8007D12C,
+        ("resident", 0x8007D288): 0x8007D178,
+        ("resident", 0x80080B88): 0x80080A78,
+        ("resident", 0x80080B94): 0x80080A84,
+        ("resident", 0x8008C338): 0x8008C230,
+        ("resident", 0x8008C4A8): 0x8008C3A0
+    },
+    card_task=0x8007E9BC,
+    card_ctx=0x801F0540,
+    interval=0x001D56C4,
+    interval_ref=("ovl0", 0x8001383C),
+)
+JP_ARC = replace(
+    ARC, name="jp_arc", kind="arc", exe="SCPS_101.16",
+    boot_text=(0x80010000, 0x80011DD0),
+    resident_text=(0x8005D210, 0x8008DB30),
+    setjmp=0x8007A878,
+    longjmp=0x8007A8B0,
+    ovl_loader=0x8005D6E8,
+    ovl_jump=0x8005D68C,
+    overlay_entry_table=0x800900DC,
+    extra_starts={
+        "resident": {0x8007E584, 0x8007E58C, 0x8007E594, 0x8007E59C, 0x8007E5A4, 0x8007E5AC, 0x8007E5B4, 0x8007E5BC, 0x8007E5C4}
+    },
+    extra_resume={
+        "ovl2": {0x80014234},
+        "resident": {0x800805AC, 0x800805CC}
+    },
+    resume_inside={
+        "resident": {0x80082F50, 0x80082F68}
+    },
+    text_exclude={
+        "ovl2": [(0x8004E480, 0x8004EB98)]
+    },
+    patch_map={
+        ("ovl0", 0x800100D0): 0x800100D0,
+        ("ovl0", 0x800100D4): 0x800100D4,
+        ("ovl0", 0x8001435C): 0x80014324,
+        ("ovl0", 0x800168C8): 0x800167EC,
+        ("ovl0", 0x80018E90): 0x80018D9C,
+        ("ovl0", 0x80018FB8): 0x80018EC4,
+        ("ovl0", 0x80019098): 0x80018FA4,
+        ("ovl0", 0x800191BC): 0x800190C8,
+        ("ovl0", 0x8001929C): 0x800191A8,
+        ("ovl0", 0x800193C8): 0x800192D4,
+        ("ovl0", 0x800194BC): 0x800193C8,
+        ("ovl0", 0x800195EC): 0x800194F8,
+        ("ovl0", 0x80019644): 0x80019550,
+        ("ovl0", 0x80020418): 0x80020324,
+        ("ovl0", 0x80020428): 0x80020334,
+        ("ovl0", 0x80029550): 0x800294A0,
+        ("ovl0", 0x800295EC): 0x8002953C,
+        ("ovl0", 0x800295F0): 0x80029540,
+        ("ovl0", 0x800497C8): 0x80049718,
+        ("ovl0", 0x80049F48): 0x80049E54,
+        ("ovl0", 0x80049F50): 0x80049E5C,
+        ("ovl0", 0x8004C194): 0x8004C0A0,
+        ("ovl0", 0x8004C19C): 0x8004C0A8,
+        ("ovl0", 0x8004E064): 0x8004DC90,
+        ("ovl0", 0x80050C14): 0x80050804,
+        ("ovl0", 0x80050C1C): 0x8005080C,
+        ("ovl0", 0x80058070): 0x80057C80,
+        ("ovl0", 0x80058078): 0x80057C88,
+        ("ovl0", 0x80058924): 0x80058534,
+        ("ovl0", 0x8005892C): 0x8005853C,
+        ("ovl0", 0x80059A08): 0x80059618,
+        ("ovl2", 0x8001536C): 0x80015340,
+        ("ovl2", 0x8001E578): 0x8001E374,
+        ("ovl2", 0x8001E580): 0x8001E37C,
+        ("ovl2", 0x800201C4): 0x8001FF90,
+        ("ovl2", 0x800201CC): 0x8001FF98,
+        ("ovl4", 0x8001CDF4): 0x8001C9D4,
+        ("ovl4", 0x8001CDFC): 0x8001C9DC,
+        ("ovl4", 0x8001CE04): 0x8001C9E4,
+        ("resident", 0x8007D23C): 0x8007CD58,
+        ("resident", 0x8007D288): 0x8007CDA4,
+        ("resident", 0x80080B88): 0x80080690,
+        ("resident", 0x80080B94): 0x8008069C,
+        ("resident", 0x8008C338): 0x8008BE48,
+        ("resident", 0x8008C4A8): 0x8008BFB8
+    },
+    card_task=0x8007E5E8,
+    card_ctx=0x801EEA20,
+    interval=0x001D5CB4,
+    interval_ref=("ovl0", 0x8001380C),
+)
+
+PROFILES = {p.name: p for p in (SIM, ARC, SIM_PLUS, ARC_PLUS, EU_SIM, EU_ARC, JP_SIM, JP_ARC)}
 
 
 @dataclass
@@ -359,6 +503,7 @@ EDITIONS = {e.name: e for e in (
     Edition("plus_usa", "GT2PLUS", "Gran Turismo 2 Plus", "GT2PLUS00"),
     Edition("eur", "GT2PSPEU", "Gran Turismo 2 (Europe)", "GT2PSPEU0"),
     Edition("plus_eur", "GT2PLUSEU", "Gran Turismo 2 Plus (Europe)", "GT2PLUSE0"),
+    Edition("jpn", "GT2PSPJP", "Gran Turismo 2 (Japan)", "GT2PSPJP0"),
 )}
 
 
@@ -382,6 +527,8 @@ DISCS = {d.sha1: d for d in (
     Disc("a04cec5a45c4b3e4667e08df895f0018b83cb2d2", "eu_arc", "eur", "Gran Turismo 2 (Europe) Disc 1 Arcade Mode"),
     Disc("c43b1daf666dfd5ee7a0a9cc5cb0b30ed0d1de41", "eu_arc", "plus_eur",
          "Gran Turismo 2 Plus Beta v6.1 (Europe) Arcade Mode"),
+    Disc("1e362a9edc6aea22fc628390fefeefacf793cc4e", "jp_sim", "jpn", "Gran Turismo 2 (Japan) Disc 2 Gran Turismo, Rev 1"),
+    Disc("d98c0143c902768eeea85765cefc74063e75c972", "jp_arc", "jpn", "Gran Turismo 2 (Japan) Disc 1 Arcade Mode"),
 )}
 CURRENT = SIM
 

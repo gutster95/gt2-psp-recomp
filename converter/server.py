@@ -39,7 +39,7 @@ PORT = int(os.environ.get("GT2PSP_PORT", "8642"))
 
 # .bin sizes of the supported dumps: which card a disc goes to before it is hashed
 SIZES = {691850208: "sim", 729423408: "arc", 639694608: "sim", 739809840: "arc", 710226384: "sim", 667965648: "arc",
-         669522672: "arc"}
+         669522672: "arc", 698057136: "sim", 725234496: "arc"}
 
 
 def bin_of(cue: Path) -> Path | None:
@@ -122,7 +122,8 @@ def verify(cue: Path) -> dict:
             with JOB.lock:
                 JOB.hashes[str(cue)] = {"progress": 1.0, **r}
             return r
-        cue.write_text(f'FILE "{dst.name}" BINARY\n  TRACK 01 MODE2/2352\n    INDEX 01 00:00:00\n')
+        if not cue.exists():
+            cue.write_text(f'FILE "{dst.name}" BINARY\n  TRACK 01 MODE2/2352\n    INDEX 01 00:00:00\n')
         b = bin_of(cue)
     if not b:
         return {"ok": False, "message": "The .bin file named in this .cue was not found next to it."}
@@ -134,8 +135,8 @@ def verify(cue: Path) -> dict:
              "folder": ed.folder, "name": d.title, "sha1": digest}
     else:
         r = {"ok": False, "sha1": digest,
-             "message": "Unknown dump. Supported: GT2 USA (Simulation Mode Rev 2, Arcade Mode), GT2 Europe (both "
-                        "discs), GT2 Plus Beta v6.1 (USA, Arcade Europe) - one .bin per disc."}
+             "message": "Unknown dump. Supported: GT2 USA (Simulation Mode Rev 2, Arcade Mode), GT2 Europe and Japan "
+                        "(both discs), GT2 Plus Beta v6.1 (USA, Arcade Europe) - one .bin per disc."}
     with JOB.lock:
         JOB.hashes[str(cue)] = {"progress": 1.0, **r}
     return r
@@ -153,8 +154,9 @@ def scan() -> list[dict]:
     for cue in sorted(INPUT.rglob("*.cue")):
         b = bin_of(cue)
         size = b.stat().st_size if b else 0
-        out.append({"cue": str(cue), "name": cue.stem, "bin": str(b) if b else None, "size": size,
-                    "guess": SIZES.get(size)})
+        e = None if b else ecm_for(cue)          # .cue next to a .bin.ecm: unpacked when it is checked
+        out.append({"cue": str(cue), "name": cue.stem + (" (ECM)" if e else ""), "bin": str(b or e) if b or e else None,
+                    "size": size, "guess": SIZES.get(size)})
     for e in sorted(INPUT.rglob("*.bin.ecm")):
         cue = e.with_suffix("").with_suffix(".cue")
         if not cue.exists():       # unpacked when it is checked

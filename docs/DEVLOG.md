@@ -1177,3 +1177,16 @@ Fan mod discs (ISO/, zips from the user). Compared EXE + GT2.OVL code word by wo
   (15.5 ms NTSC, 18.8 ms PAL); launcher (`build_psp.py --pal`, set by the converter for PAL editions) and the in-game
   menu say 25 / 50 fps. EU Simulation in performance mode (PPSSPP): 50 fps (120 of 120 frames step 1), lap clock
   4.99 s per 5.00 s, 16:9.
+
+## 2026-11-27 - Japan
+
+* JP discs: Disc 2 "Gran Turismo" SCPS-10117 Rev 1 (7z), Disc 1 Arcade SCPS-10116 (rar > 7z > .cue + .bin.ecm;
+  the converter now also takes a .cue whose .bin is only there as .bin.ecm). NTSC (60 Hz).
+* derive: jp_sim 0 problems. jp_arc needed two generic fallbacks: raw word match with RAM pointers as wildcards
+  (resident text end among repeated BIOS stubs; data tables), and among look-alike tables the one whose pointers
+  moved by its own distance. ovl2's data array (0x718 bytes, 8-word records with 3 pointers) is taken for code in a
+  different piece on each build: text_exclude now covers the whole contiguous data block (derive) and program.py
+  drops every detected text range inside an exclusion (was: exact match; Arcade generated C unchanged).
+* PPSSPP: JP Simulation title + attract race, JP Arcade intro + menu + attract race (16:9).
+* Sound: the user hears broken sound on EU and JP runs. XA filter is applied (one channel per disc: USA 2, EU 4,
+  JP 5/6), XA dumps are clean - so it is the SPU voices (open).

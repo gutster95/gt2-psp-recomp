@@ -90,7 +90,43 @@ class Mapper:
                         return r
                     if len(hits) > 1 and near is not None:
                         break     # ambiguous even close by: a longer signature
+        # fallback for data (pointer tables) and repetitive code (BIOS call stubs): the raw words around the
+        # address, RAM pointers (0x80xxxxxx) as wildcards, unique within +-64 KB of the expected place
+        r = self._raw(s, d, a, hint)
+        if r is not None:
+            self.delta[mod] = r - a
+            return r
         self.problems.append(f"{what or mod} {a:08x}: no unique match")
+        return None
+
+    @staticmethod
+    def _raw(s: Image, d: Image, a: int, hint: int) -> int | None:
+        def key(w: int) -> int | None:
+            return None if w >> 24 == 0x80 else w
+        for before, after in ((8, 8), (16, 16), (32, 16), (0, 16), (0, 32), (0, 44), (8, 1), (16, 1)):
+            lo = max(s.base, a - 4 * before)
+            hi = min(s.end, a + 4 * after)
+            pat = [key(s.word(x)) for x in range(lo, hi, 4)]
+            if sum(p is not None and p != 0 for p in pat) < 6:
+                continue                       # too little to go on (zeros, pointers)
+            hits = []
+            start = max(d.base, hint - (a - lo) - 0x10000)
+            end = min(d.end - (hi - lo), hint - (a - lo) + 0x10000)
+            ptrs = [(i, s.word(lo + 4 * i)) for i, p in enumerate(pat) if p is None]
+            for x in range(start & ~3, end, 4):
+                if not all(p is None or d.word(x + 4 * i) == p for i, p in enumerate(pat)):
+                    continue
+                # pointers moved with the code: all by the same amount, still pointing into RAM
+                shifts = {d.word(x + 4 * i) - w for i, w in ptrs}
+                if len(shifts) > 1 or any(d.word(x + 4 * i) >> 24 != 0x80 for i, _ in ptrs):
+                    continue
+                hits.append((x + (a - lo), shifts.pop() if shifts else None, x - lo))
+            if len(hits) == 1:
+                return hits[0][0]
+            # several look-alikes (arrays of similar tables): the one whose pointers moved exactly as far as itself
+            local = [h for h in hits if h[1] is not None and h[1] == h[2]]
+            if len(local) == 1:
+                return local[0][0]
         return None
 
 
@@ -148,8 +184,32 @@ def derive(ref: Profile, src_files: Path, files: Path, name: str, prefix: str) -
     out["extra_starts"] = map_set(ref.extra_starts, "extra start")
     out["extra_resume"] = map_set(ref.extra_resume, "extra resume")
     out["resume_inside"] = map_set(ref.resume_inside, "resume inside")
-    out["text_exclude"] = {mod: [(m.map(mod, lo, "text exclude"), m.map(mod, hi - 4, "text exclude end") + 4)
-                                 for lo, hi in rs] for mod, rs in ref.text_exclude.items()}
+    def excl(mod: str, lo: int, hi: int) -> tuple[int | None, int | None]:
+        a = m.map(mod, lo, "text exclude")
+        if a is None:
+            return None, None
+        # a data table: its end is the start plus the same length when the bytes match (they often do not
+        # survive the masked signature search at their end, which runs into the next function)
+        s, d = src.image(mod), dst.image(mod)
+        # the whole data block around it (small numbers, pointers into the module): the text detection takes a
+        # different piece of the same array on another build (JP Arcade ovl2), so exclude all of it
+        def block(im: Image, x: int) -> tuple[int, int]:
+            isdata = lambda w: w < 0x10000 or im.base <= w < im.end   # noqa: E731
+            b0, b1 = x, x
+            while b0 > im.base and isdata(im.word(b0 - 4)):
+                b0 -= 4
+            while b1 < im.end and isdata(im.word(b1)):
+                b1 += 4
+            return b0, b1
+        s0, s1 = block(s, lo)
+        d0, d1 = block(d, a)
+        if s0 <= lo and hi <= s1 and s1 - s0 == d1 - d0 and a - d0 == lo - s0:
+            return d0, d1
+        if s.data[lo - s.base:hi - s.base] == d.data[a - d.base:a - d.base + hi - lo]:
+            return a, a + hi - lo
+        b = m.map(mod, hi - 4, "text exclude end")
+        return a, b + 4 if b is not None else None
+    out["text_exclude"] = {mod: [excl(mod, lo, hi) for lo, hi in rs] for mod, rs in ref.text_exclude.items()}
 
     # game patch sites: Simulation address -> this disc (through the reference's own map when it has one)
     if ref.patch_map:
