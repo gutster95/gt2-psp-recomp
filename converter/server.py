@@ -247,7 +247,12 @@ def convert(sim: str | None, arc: str | None) -> None:
     for d, _cue, r in found:
         editions.setdefault(r["edition"], []).append((d, r))
     step("compile", i); i += 1
-    icon = ROOT / "converter" / "ICON0.PNG"
+    # XMB artwork: own pictures made by scripts/make_eboot_images.py from Images/ (local, never in git or the release)
+    # win over the neutral release icon
+    icon = ROOT / "build" / "ICON0.PNG"
+    if not icon.exists():
+        icon = ROOT / "converter" / "ICON0.PNG"
+    pic = ROOT / "build" / "PIC1.PNG"
     for ed_name, members in editions.items():
         ed = EDITIONS[ed_name]
         JOB.say(f"== {ed.title} -> PSP/GAME/{ed.folder}")
@@ -257,6 +262,8 @@ def convert(sim: str | None, arc: str | None) -> None:
             build += ["--game", f"{d}={paths(r)['gen']}"]
         if icon.exists():
             build += ["--icon", str(icon)]
+        if pic.exists():
+            build += ["--pic", str(pic)]
         if any(PROFILES[r["profile"]].pal for _d, r in members):
             build.append("--pal")
         run(build, env)
