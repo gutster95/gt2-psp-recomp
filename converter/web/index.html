@@ -269,7 +269,7 @@ function card(which) {
     c.classList.add("busy"); pct = v.progress || 0;
     txt = (v.step || "Checking") + "... " + Math.round(pct * 100) + "%";
   } else if (v && v.ok && v.disc === which) {
-    c.classList.add("ok"); pct = 1; txt = "Verified: " + v.name + "  \u2192 PSP/GAME/" + v.folder;
+    c.classList.add("ok"); pct = 1; txt = "Verified: " + v.name;
   } else if (v && v.ok) {
     c.classList.add("bad"); pct = 1; txt = "That is the " + KIND[v.disc] + " disc - choose it in the " + KIND[v.disc] + " slot";
   } else if (v) {
