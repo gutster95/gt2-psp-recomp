@@ -32,7 +32,7 @@ tools/             (ignored) local toolchain (pspdev inside a project-local WSL 
 Every build of the game (USA Simulation Rev 2, USA Arcade, the GT2 Plus fan mod, later PAL / Japanese) is its own
 **disc profile** in `src/gt2psp/profiles.py`: text ranges, setjmp/longjmp, overlay loader, extra function starts and
 resume points, the game patch sites (16:9, 60 fps, LOD: `patch_map` from the Simulation addresses) and the runtime's
-constants (memory card task, race frame interval byte). The supported dumps are listed by SHA-1 in `DISCS`, each
+constants (memory card task, race frame interval byte). The supported dumps are listed in `DISCS`, each
 with its profile and its **edition**: the discs that share one PSP folder (`EDITIONS`: folder, XMB title, save data
 name). Discs of different editions never share a folder or a save - a GT2 Plus save holds cars the original game
 does not know.
@@ -55,6 +55,13 @@ does not know.
 * A profile can serve several editions (EU Arcade and GT2 Plus Arcade Europe have the same code): `recomp
   --edition`, and the converter keeps work files per edition + profile.
 * `.bin.ecm` images (ecm.py, `gt2psp unecm`) are restored bit-exactly (ECM's own checksum) before hashing.
+* **Identification by game code** (`profiles.identify`, the converter's verify): the code id is the SHA-1 over the
+  main EXE + GT2.OVL - exactly what the profile depends on. Data mods, other dumps of the same version, re-patched
+  images with other EDC/ECC or padding are recognised (a whole-image SHA-1 rejected them). GT2 Plus vs original:
+  the volume id (`GRANTURISMO2PLUS`); a Plus disc on an original disc's code gets that profile with the Plus edition
+  (`PLUS_EDITION`: usa -> plus_usa, eur -> plus_eur), e.g. a Plus Simulation Europe made from the EU disc. Unknown
+  code: rejected (a `derive` fallback in the converter is possible). Identification reads ~5 MB instead of hashing
+  700 MB.
 * Memory profiles (data/memprof) only for profiles with the Simulation Rev 2 code (`memprof=True`); other builds
   check every memory access (bigger, somewhat slower code until they get their own profile).
 * Converter: per edition one `build_psp.py --title ... --game sim=<generated dir> --game arc=<generated dir>` and one

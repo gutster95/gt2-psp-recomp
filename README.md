@@ -40,9 +40,9 @@ converter turns your discs into a PSP folder on your own computer.
 The first run downloads a PSP compiler (about 150 MB, checked against a fixed checksum). After that a conversion
 takes a few minutes. Everything happens locally; nothing is uploaded anywhere.
 
-The converter checks the .bin against the checksums of the known good dumps. Other versions (PAL, Japanese, Rev 0/1)
-(Japanese, Rev 0/1, other mods) don't work yet: every build of the game has its code at other addresses and needs
-its own conversion profile.
+The converter recognises a disc by its game code (the executable and GT2.OVL), not by the whole image: a GT2 Plus
+disc you patched yourself, or another dump of a supported version, works as long as its game code is one the
+converter knows. Builds with other code (Rev 0/1, other mods) need their own conversion profile.
 
 ## Features
 

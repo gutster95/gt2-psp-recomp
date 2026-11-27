@@ -509,26 +509,32 @@ EDITIONS = {e.name: e for e in (
 
 @dataclass
 class Disc:
-    sha1: str                 # of the whole .bin (single track, MODE2/2352)
+    sha1: str                 # of the whole .bin (single track, MODE2/2352) of the dump the profile was made from
     profile: str              # PROFILES key
     edition: str              # EDITIONS key
     title: str                # shown in the converter
+    code: str = ""            # code id (code_id): SHA-1 over the main EXE + GT2.OVL - what the profile depends on
 
 
 DISCS = {d.sha1: d for d in (
-    Disc("c4813703d2ad440ed36670c1ac2c1a66c9dc673d", "sim", "usa", "Gran Turismo 2 (USA) Simulation Mode, Rev 2"),
-    Disc("a617b948e23c198a4d0eb521b874d0f563987d98", "arc", "usa", "Gran Turismo 2 (USA) Arcade Mode"),
+    Disc("c4813703d2ad440ed36670c1ac2c1a66c9dc673d", "sim", "usa", "Gran Turismo 2 (USA) Simulation Mode, Rev 2",
+         code="bdb49477ff865301a6a50efd9032241917f8c909"),
+    Disc("a617b948e23c198a4d0eb521b874d0f563987d98", "arc", "usa", "Gran Turismo 2 (USA) Arcade Mode",
+         code="cf2314fc372deb732a9d9557007ab61d53b4efa9"),
     Disc("6b36e3569e16547efd8d6cc65ca41774e2d21dd4", "sim_plus", "plus_usa",
-         "Gran Turismo 2 Plus Beta v6.1 (USA) Simulation Mode"),
+         "Gran Turismo 2 Plus Beta v6.1 (USA) Simulation Mode", code="b77d78fe46e98832515514df6b848f28ac36fc48"),
     Disc("75d36eebc5b3fb5e767b860173a43e9682d96b21", "arc_plus", "plus_usa",
-         "Gran Turismo 2 Plus Beta v6.1 (USA) Arcade Mode"),
+         "Gran Turismo 2 Plus Beta v6.1 (USA) Arcade Mode", code="69b7c99456c0da00d88291f2f158b13b234b1960"),
     Disc("c63a53bcf5ac6e49547a0c95b05174deff172021", "eu_sim", "eur",
-         "Gran Turismo 2 (Europe) Disc 2 Gran Turismo Mode"),
-    Disc("a04cec5a45c4b3e4667e08df895f0018b83cb2d2", "eu_arc", "eur", "Gran Turismo 2 (Europe) Disc 1 Arcade Mode"),
+         "Gran Turismo 2 (Europe) Disc 2 Gran Turismo Mode", code="c93222b0d559d9e8da09a373b5c3bb646189878f"),
+    Disc("a04cec5a45c4b3e4667e08df895f0018b83cb2d2", "eu_arc", "eur", "Gran Turismo 2 (Europe) Disc 1 Arcade Mode",
+         code="9fc6ec55c03004a77b59c88917c058247889694d"),
     Disc("c43b1daf666dfd5ee7a0a9cc5cb0b30ed0d1de41", "eu_arc", "plus_eur",
-         "Gran Turismo 2 Plus Beta v6.1 (Europe) Arcade Mode"),
-    Disc("1e362a9edc6aea22fc628390fefeefacf793cc4e", "jp_sim", "jpn", "Gran Turismo 2 (Japan) Disc 2 Gran Turismo, Rev 1"),
-    Disc("d98c0143c902768eeea85765cefc74063e75c972", "jp_arc", "jpn", "Gran Turismo 2 (Japan) Disc 1 Arcade Mode"),
+         "Gran Turismo 2 Plus Beta v6.1 (Europe) Arcade Mode", code="9fc6ec55c03004a77b59c88917c058247889694d"),
+    Disc("1e362a9edc6aea22fc628390fefeefacf793cc4e", "jp_sim", "jpn", "Gran Turismo 2 (Japan) Disc 2 Gran Turismo, Rev 1",
+         code="258fe65175cdf6b465c22f3ec70760992bc279a2"),
+    Disc("d98c0143c902768eeea85765cefc74063e75c972", "jp_arc", "jpn", "Gran Turismo 2 (Japan) Disc 1 Arcade Mode",
+         code="d2e79d7bc8cf2b4043e3645c7b1ceba790db2441"),
 )}
 CURRENT = SIM
 
@@ -544,9 +550,49 @@ def use(name: str) -> Profile:
     return p
 
 
+# GT2 Plus is a data mod: a Plus disc whose code matches an original disc uses that disc's profile with the Plus edition
+PLUS_EDITION = {"usa": "plus_usa", "eur": "plus_eur"}
+BASE_EDITION = {v: k for k, v in PLUS_EDITION.items()}
+
+
+def code_id(disc) -> tuple[str, bool]:
+    """(code id, is GT2 Plus) of a disc image (disc.Disc). The code id hashes only what the recompiled code and the
+    profile depend on - the main executable and GT2.OVL - so self-patched or differently dumped images (other EDC/ECC,
+    padding, data mods) are recognised by their game code. GT2 Plus discs carry the volume id GRANTURISMO2PLUS."""
+    import hashlib
+    import re
+    files = {e.path.upper(): e for e in disc.walk() if not e.is_dir}
+    exe = sorted(p for p in files if re.fullmatch(r"S[A-Z]{3}_\d{3}\.\d{2}", p))
+    h = hashlib.sha1()
+    for p in exe + ["GT2.OVL"]:
+        if p in files:
+            h.update(disc.read(files[p].lba, files[p].size))
+    return h.hexdigest(), "PLUS" in disc.volume_id().upper()
+
+
+def identify(disc) -> Disc | None:
+    """The profile and edition of a disc image by its game code (code_id); None when the code is unknown."""
+    code, plus = code_id(disc)
+    same = [d for d in DISCS.values() if d.code == code]
+    if not same:
+        return None
+    for d in same:
+        if d.edition.startswith("plus") == plus:
+            return d
+    d = same[0]
+    ed = (PLUS_EDITION if plus else BASE_EDITION).get(d.edition)
+    if not ed:
+        return None
+    kind = "Simulation Mode" if PROFILES[d.profile].kind == "sim" else "Arcade Mode"
+    return Disc("", d.profile, ed, f"{EDITIONS[ed].title} {kind} (game code of: {d.title})", code)
+
+
 def edition_of(profile: str, edition: str | None = None) -> Edition:
     """The edition a build of this profile is for: given, or the only one the profile has (DISCS)."""
     eds = {d.edition for d in DISCS.values() if d.profile == profile}
+    if edition and edition not in eds:
+        # identify(): a Plus disc with an original disc's code (or the other way round)
+        eds |= {PLUS_EDITION[e] for e in eds if e in PLUS_EDITION} | {BASE_EDITION[e] for e in eds if e in BASE_EDITION}
     if edition:
         if edition not in eds:
             raise KeyError(f"profile {profile} is not part of edition {edition} ({', '.join(sorted(eds))})")

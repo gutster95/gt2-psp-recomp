@@ -1202,3 +1202,15 @@ Fan mod discs (ISO/, zips from the user). Compared EXE + GT2.OVL code word by wo
   and due audio sectors are delivered at once in the same poll (they need nothing from the game). Result: 151
   sectors/s, 19 audio/s, gap-free audio, the movie now plays its full length (before: cut off after 16 s).
   Applies to every disc with movies (Arcade discs of all versions).
+
+## 2026-11-27 - Discs identified by their game code
+
+* Question: does a GT2 Plus disc that users patched from their own EU disc convert? Only if it was bit-identical to
+  our dump - the converter compared the SHA-1 of the whole .bin. Plus is (nearly) a data mod: Plus Arcade Europe has
+  the EU Arcade code bit for bit; Plus USA differs by one constant (Simulation) or a few bytes of shift (Arcade).
+* Now `profiles.identify`: SHA-1 over the main EXE + GT2.OVL (code id, `Disc.code`) selects the profile; the volume id
+  (`GRANTURISMO2PLUS`) selects Plus vs original edition. All 9 discs identified as before (< 0.1 s each instead of
+  ~10 s hashing); a USA Arcade image with changed system-area bytes and a broken EDC is still recognised; original EU
+  Simulation code + Plus volume id -> eu_sim / plus_eur ("GT2 Plus (Europe) Simulation Mode"); JP code + Plus ->
+  rejected (no Plus Japan edition).
+* Converter shows "Unknown game code" for anything else.

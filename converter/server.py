@@ -3,7 +3,7 @@ discs into a ready-to-copy PSP folder.
 
     python converter/server.py          (or the start scripts convert.sh / convert.command / convert.bat)
 
-Steps: verify the .bin images (SHA-1 of the known good dumps) -> extract the file system -> recompile the game code
+Steps: identify the .bin images by their game code (SHA-1 of EXE + GT2.OVL, profiles.identify) -> extract the file system -> recompile the game code
 (python -m gt2psp recomp) -> convert the data (python -m gt2psp pack) -> compile for the PSP with the pspdev toolchain
 (scripts/build_psp.py) -> output/PSP/GAME/<folder of the edition>. Each supported dump has a disc profile and belongs to an
 edition (src/gt2psp/profiles.py DISCS / EDITIONS): GT2 (USA) -> GT2PSP, GT2 Plus (USA) -> GT2PLUS, each folder with its
@@ -13,7 +13,6 @@ game-derived file is produced here, on the user's machine, from the user's discs
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import shutil
@@ -30,7 +29,8 @@ import toolchain  # noqa: E402  (converter/toolchain.py)
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
-from gt2psp.profiles import DISCS, EDITIONS, PROFILES  # noqa: E402  (supported dumps, editions, disc profiles)
+from gt2psp.disc import Disc  # noqa: E402
+from gt2psp.profiles import EDITIONS, PROFILES, code_id, identify  # noqa: E402  (editions, disc profiles)
 
 WEB = Path(__file__).resolve().parent / "web"
 INPUT = ROOT / "input"
@@ -91,19 +91,6 @@ class Job:
 JOB = Job()
 
 
-def sha1_with_progress(path: Path, key: str) -> str:
-    h = hashlib.sha1()
-    total = path.stat().st_size or 1
-    done = 0
-    with open(path, "rb") as f:
-        while chunk := f.read(4 << 20):
-            h.update(chunk)
-            done += len(chunk)
-            with JOB.lock:
-                JOB.hashes[key] = {"progress": done / total}
-    return h.hexdigest()
-
-
 def verify(cue: Path) -> dict:
     b = bin_of(cue)
     if not b and ecm_for(cue):
@@ -127,16 +114,26 @@ def verify(cue: Path) -> dict:
         b = bin_of(cue)
     if not b:
         return {"ok": False, "message": "The .bin file named in this .cue was not found next to it."}
-    digest = sha1_with_progress(b, str(cue))
-    d = DISCS.get(digest)
+    # by the game code (EXE + GT2.OVL), not the whole image: self-patched GT2 Plus discs and other dumps of a
+    # supported version differ in data, padding or EDC/ECC but run the same code
+    with JOB.lock:
+        JOB.hashes[str(cue)] = {"progress": 0.5}
+    try:
+        disc = Disc(b)
+        d = identify(disc)
+        code = d.code if d else code_id(disc)[0]
+        disc.close()
+    except (ValueError, OSError) as e:
+        d, code = None, f"unreadable ({e})"
     if d:
         ed = EDITIONS[d.edition]
         r = {"ok": True, "disc": PROFILES[d.profile].kind, "profile": d.profile, "edition": d.edition,
-             "folder": ed.folder, "name": d.title, "sha1": digest}
+             "folder": ed.folder, "name": d.title, "code": code}
     else:
-        r = {"ok": False, "sha1": digest,
-             "message": "Unknown dump. Supported: GT2 USA (Simulation Mode Rev 2, Arcade Mode), GT2 Europe and Japan "
-                        "(both discs), GT2 Plus Beta v6.1 (USA, Arcade Europe) - one .bin per disc."}
+        r = {"ok": False, "code": code,
+             "message": "Unknown game code. Supported: GT2 USA (Simulation Mode Rev 2, Arcade Mode), GT2 Europe and "
+                        "Japan (both discs), GT2 Plus Beta v6.1 (USA; Europe on an original European disc's code) - "
+                        "one .bin per disc."}
     with JOB.lock:
         JOB.hashes[str(cue)] = {"progress": 1.0, **r}
     return r
@@ -219,7 +216,7 @@ def convert(sim: str | None, arc: str | None) -> None:
         r = verify(cue)
         if not r["ok"] or r["disc"] != d:
             raise RuntimeError(r.get("message") or f"{cue.name} is the other disc")
-        JOB.say(f"{cue.name}: {r['name']} (sha1 {r['sha1']}, profile {r['profile']})")
+        JOB.say(f"{cue.name}: {r['name']} (code {r['code'][:12]}, profile {r['profile']})")
         found.append((d, cue, r))
         finished(f"verify-{d}")
         i += 1
