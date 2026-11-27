@@ -1116,3 +1116,21 @@ the Media Engine:
   converted). g_widescreen defaulted to 0 and since 9aed1c0 neither the launcher nor the in-game menu sets it - the
   release has no settings.txt, so every fresh install ran 4:3 (the developer PSP still had `widescreen=1` from the
   old menu). Default is now 1; `widescreen=0` in settings.txt gives 4:3 (README).
+
+## 2026-11-27 - GT2 Plus (Beta v6.1) checked
+
+Fan mod discs (ISO/, zips from the user). Compared EXE + GT2.OVL code word by word against our discs
+(extracted with `gt2psp extract` into build/plus-*):
+* **Plus Simulation** (sha1 6b36e356...): SCUS_944.88 and overlays 0-3, 5 bit-identical to Rev 2. ovl4: one immediate
+  (completion percentage fix, `addiu v1, v1, -29` -> `-27` at 0x80019DCC) and a string table. `recomp` on its files
+  gives the same C except that one line; all other Plus content (cars, colours, textures) is in GT2.VOL/GT2.OVL data,
+  which the pack takes from the disc anyway. Test: Rev 2 runtime + pack of the Plus disc in PPSSPP: title, attract
+  race, GT mode garage with the existing save - all fine. Supporting it = converter accepts the hash (recompiles from
+  the disc's files as for Rev 2); open: two Simulation discs at once, separate save data (a Plus save with new cars
+  in the vanilla game).
+* **Plus Arcade USA** (sha1 75d36eeb...): a different build of the Arcade EXE - entry 0x8005D570 -> 0x8005D5C0, nearly
+  all jal targets +0x50 (ovl3/ovl5 differ only in jal targets), data moved too. Probably based on another Arcade
+  revision. Needs its own disc profile (profiles.py constants, 45 patch sites via sigmap.py) and runtime constants
+  (core.c module table/overlay loader, race frame interval byte).
+* **Plus Arcade Europe** (SCES_023.80, sha1 c43b1daf...): PAL build, code moved by ~0x130 and much more changed data;
+  same work as above plus PAL (50 Hz, 256 lines, language selection) - untested ground.
