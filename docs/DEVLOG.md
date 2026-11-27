@@ -1100,3 +1100,15 @@ the Media Engine:
 * psp-run.sh deletes the previous log first (a run that did not start used to look like a fresh result).
 * Clean-up for the release: developer tools moved to scripts/dev/, toolchain smoke test (runtime/hello) and
   build-exp.sh removed.
+
+## 2026-11-27 - first user reports after the release
+
+* Missing `input/` folder: the README says to put the .cue/.bin files there before starting the converter, but git
+  does not keep empty folders, so the download had none (the server only created it on start). Now `input/README.txt`
+  is tracked (`.gitignore`: `input/*` + `!input/README.txt`) and convert.bat/.sh/.command create `input/` first.
+* Windows build stalled on a modal "bad image" dialog (0xc000012f) from psp-ar.exe: binutils loads every file in
+  `lib/bfd-plugins` as a plugin DLL, and our Windows package shipped binutils' static `libdep.a` there. The
+  converter now deletes non-DLL files there on its own install (fixes existing downloads without a new package),
+  scripts/wintc/build.sh leaves them out of future packages, and server.py sets SetErrorMode
+  (FAILCRITICALERRORS | NOOPENFILEERRORBOX), inherited by the toolchain processes, so no Windows dialog can block
+  a conversion. Checked: psp-gcc/psp-ar/psp-nm work without the file.

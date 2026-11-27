@@ -302,6 +302,11 @@ class Handler(BaseHTTPRequestHandler):
 
 def main() -> None:
     INPUT.mkdir(exist_ok=True)
+    if os.name == "nt":
+        # no modal Windows error dialogs (e.g. "bad image") from the toolchain: they would stall the conversion.
+        # Child processes inherit the error mode. SEM_FAILCRITICALERRORS | SEM_NOOPENFILEERRORBOX
+        import ctypes
+        ctypes.windll.kernel32.SetErrorMode(0x0001 | 0x8000)
     srv = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
     url = f"http://127.0.0.1:{PORT}/"
     print(f"GT2 PSP converter running at {url}  (Ctrl+C to stop)")

@@ -46,8 +46,23 @@ def find() -> Path | None:
     """An installed toolchain: our download, or PSPDEV from the environment (developers)."""
     for p in (install_dir() / "pspdev", Path(os.environ["PSPDEV"]) if os.environ.get("PSPDEV") else None):
         if p and valid(p):
+            if p == install_dir() / "pspdev":
+                drop_bad_plugins(p)
             return p
     return None
+
+
+def drop_bad_plugins(p: Path) -> None:
+    """Windows: binutils (ar, nm, ld) try to load every file in lib/bfd-plugins as a DLL. Our first Windows package
+    shipped binutils' static libdep.a there; loading it pops up a modal 'bad image' (0xc000012f) dialog that stalls
+    the build. Only DLLs belong there on Windows."""
+    if os.name != "nt":
+        return
+    d = p / "lib" / "bfd-plugins"
+    if d.is_dir():
+        for f in d.iterdir():
+            if f.is_file() and f.suffix.lower() != ".dll":
+                f.unlink(missing_ok=True)
 
 
 def glibc() -> tuple[int, ...]:

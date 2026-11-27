@@ -129,6 +129,9 @@ package() {
     cd "$W/out-$TC_HOST"
     # no Linux leftovers in the Windows bin dir
     [ "$TC_HOST" = windows ] && find "$OUT/bin" -type f ! -name "*.exe" -delete
+    # binutils loads every file in lib/bfd-plugins as a plugin; the static libdep.a there makes Windows show a
+    # modal "bad image" dialog on every ar/nm/ld run
+    [ "$TC_HOST" = windows ] && [ -d "$OUT/lib/bfd-plugins" ] && find "$OUT/lib/bfd-plugins" -type f ! -name "*.dll" -delete
     cp /opt/pspdev/build.txt "$OUT/build-linux-reference.txt"
     {
         echo "PSP toolchain for $TC_HOST ($HOST), built by scripts/wintc/build.sh (GT2 PSP project)."

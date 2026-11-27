@@ -32,5 +32,6 @@ Thumbs.db
 .DS_Store
 .vscode/
 .idea/
-input/
+input/*
+!input/README.txt
 output/
