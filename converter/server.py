@@ -34,6 +34,7 @@ import toolchain  # noqa: E402  (converter/toolchain.py)
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
+from gt2psp import memcard  # noqa: E402  (optional save game import)
 from gt2psp.disc import Disc  # noqa: E402
 from gt2psp.profiles import EDITIONS, PROFILES, code_id, identify  # noqa: E402  (editions, disc profiles)
 
@@ -219,6 +220,13 @@ class Dialogs:
                 p = filedialog.askdirectory(parent=root, title="Your PSP's memory stick (the drive with the PSP folder)",
                                             initialdir=initial or None, mustexist=True)
                 return [p] if p else []
+            if kind == "save":
+                ps = filedialog.askopenfilenames(
+                    parent=root, title="PS1 memory card or save file(s) with your GT2 save", initialdir=initial or None,
+                    filetypes=[("Memory cards and saves", "*.mcr *.mcd *.mc *.srm *.gme *.vmp *.mem *.vgs *.ddf *.ps "
+                                                          "*.vm1 *.mcs *.ps1 *.psx *.mcb *.pda *.psv"),
+                               ("All files", "*.*")])
+                return list(ps)
             mode = {"sim": "Simulation Mode", "arc": "Arcade Mode"}.get(kind.partition(":")[2], "")
             p = filedialog.askopenfilename(
                 parent=root, title=f"Gran Turismo 2 {mode} disc image".replace("  ", " "), initialdir=initial or None,
@@ -558,6 +566,49 @@ def install_only(psp: str, folders: list[str]) -> None:
         JOB.progress = 1.0
 
 
+# ---- save game import (optional) -----------------------------------------------------------------------------------
+
+def save_check(paths: list[str]) -> dict:
+    """What a picked memory card / save file holds and which PSP folders can use its GT2 saves."""
+    try:
+        img, notes = memcard.load([Path(p) for p in paths])
+    except (OSError, ValueError) as e:
+        return {"ok": False, "message": str(e)}
+    found, eds = memcard.gt2_editions(img)
+    return {"ok": True, "notes": notes,
+            "saves": [{"name": s.name, "title": s.title, "blocks": s.blocks} for s in memcard.saves(img)],
+            "gt2": [s.name for s in found],
+            "folders": [{"folder": EDITIONS[e].folder, "title": EDITIONS[e].title} for e in eds]}
+
+
+def save_import(paths: list[str], folder: str, psp: str) -> dict:
+    """Write the card image as IMPORT.MCD into PSP/GAME/<folder> on the memory stick (or, without a PSP, into
+    output/SAVE/<folder> to copy by hand). The game takes it over at its next start (runtime/src/card.c: the card in
+    use is backed up to BACKUP.MCD first, the import file is renamed to IMPORT.MCD.done). Deliberately not part of
+    output/PSP/GAME: an install would put the file back on the PSP and import the old save again."""
+    if folder not in {e.folder for e in EDITIONS.values()}:
+        return {"ok": False, "message": f"unknown PSP folder {folder}"}
+    try:
+        img, _ = memcard.load([Path(p) for p in paths])
+    except (OSError, ValueError) as e:
+        return {"ok": False, "message": str(e)}
+    if psp:
+        root = psp_root(psp)
+        if not (root / "PSP").is_dir():
+            return {"ok": False, "message": f"No PSP folder on {root} - is the PSP connected in USB mode?"}
+        dst = root / "PSP" / "GAME" / folder
+    else:
+        dst = OUTPUT / "SAVE" / folder
+    try:
+        dst.mkdir(parents=True, exist_ok=True)
+        tmp = dst / "IMPORT.MCD.part"
+        tmp.write_bytes(img)
+        os.replace(tmp, dst / "IMPORT.MCD")
+    except OSError as e:
+        return {"ok": False, "message": f"cannot write {dst / 'IMPORT.MCD'}: {e}"}
+    return {"ok": True, "target": str(dst / "IMPORT.MCD"), "psp": bool(psp)}
+
+
 # ---- web page ------------------------------------------------------------------------------------------------------
 
 class Handler(BaseHTTPRequestHandler):
@@ -594,12 +645,19 @@ class Handler(BaseHTTPRequestHandler):
         except ValueError:
             req = {}
         if self.path == "/api/pick":
-            kind = "folder" if req.get("kind") == "folder" else f"file:{req.get('which', '')}"
-            initial = load_settings().get("psp" if kind == "folder" else "discdir", "")
-            picked = DIALOGS.ask(kind, initial)
+            kind = req.get("kind") if req.get("kind") in ("folder", "save") else f"file:{req.get('which', '')}"
+            setting = {"folder": "psp", "save": "savedir"}.get(kind, "discdir")
+            picked = DIALOGS.ask(kind, load_settings().get(setting, ""))
             if picked and kind != "folder":
-                save_settings(discdir=str(Path(picked[0]).parent))
+                save_settings(**{setting: str(Path(picked[0]).parent)})
             self.js({"paths": picked, "available": DIALOGS.available})
+        elif self.path == "/api/save-check":
+            self.js(save_check([str(p) for p in req.get("paths") or []]))
+        elif self.path == "/api/save-import":
+            psp = str(req.get("psp") or "")
+            if psp:
+                save_settings(psp=psp)
+            self.js(save_import([str(p) for p in req.get("paths") or []], str(req.get("folder", "")), psp))
         elif self.path == "/api/add":
             raw = str(req.get("path", "")).strip().strip('"')
             if not raw:

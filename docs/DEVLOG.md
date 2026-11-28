@@ -1282,3 +1282,19 @@ Fan mod discs (ISO/, zips from the user). Compared EXE + GT2.OVL code word by wo
   SHA-1 + code id, editions plus_usa / plus_eur) were needed; v6.1 and Beta 7 share the Plus folders and saves.
 * Converter steps (identify, recomp, pack, build_psp.py) run for both editions with both discs: EBOOT + GT2SIM.PRX +
   GT2ARC.PRX built. Not run on the PSP yet.
+
+## 2026-11-28 - Converter: optional save game import
+
+* User question: can a save from an emulator / real card be brought over? The runtime already imports a raw 128 KB
+  card image `IMPORT.MCD` next to the EBOOT (card.c), but users had to produce that file themselves.
+* `src/gt2psp/memcard.py` (+ `python -m gt2psp memcard <files> --out IMPORT.MCD`): reads whole cards (raw
+  .mcr/.mcd/.srm/..., DexDrive .gme, Connectix VGS, PSP .vmp) and single saves (.mcs, Action Replay/Xploder
+  .psx/.mcb, PS3 .psv; put on a freshly formatted card), detected by content. Lists the card's files and the
+  editions whose GT2 save names (`GT2_SAVES`, from the EXE strings: BASCUS-94455GAME, BESCES-02380GAME,
+  BESCES-02380GAME7C for Plus Beta 7 EU, BISCPS-10116GAME, + the REPLAY files) are on it.
+* Converter section 5 "Your save (optional)": pick card / save file(s) -> check -> target folder (only editions
+  the save fits) -> IMPORT.MCD written into PSP/GAME/<folder> on the stick, or output/SAVE/<folder> without a PSP.
+* Tested with build/save/gt2-max.mcd wrapped into every supported container (synthetic wrappers, built from the
+  format specs - no real .gme/.vmp/.psv file at hand): all give the same image, the single-save card has the
+  original directory frames. Endpoints tested against a running converter. Not yet run on the PSP via the
+  converter (the import path itself has worked on hardware since b9bea88).

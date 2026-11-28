@@ -132,9 +132,28 @@ def cmd_derive(args: argparse.Namespace) -> None:
     cmd(args)
 
 
+def cmd_memcard(args: argparse.Namespace) -> None:
+    from .memcard import gt2_editions, load, saves
+    img, notes = load([Path(p) for p in args.inputs])
+    for n in notes:
+        print(n)
+    for s in saves(img):
+        print(f"  {s.name:21s} {s.blocks:2d} block(s)  {s.title}")
+    _, eds = gt2_editions(img)
+    print("GT2 saves for: " + (", ".join(eds) if eds else "none"))
+    if args.out:
+        Path(args.out).write_bytes(img)
+        print(f"wrote {args.out} - put it next to the EBOOT.PBP as IMPORT.MCD")
+
+
 def main() -> None:
     p = argparse.ArgumentParser(prog="gt2psp")
     sub = p.add_subparsers(dest="cmd", required=True)
+    mc = sub.add_parser("memcard", help="convert a PS1 memory card / save file to a raw card image (IMPORT.MCD)")
+    mc.add_argument("inputs", nargs="+", help="one whole card (.mcr .mcd .srm .gme .vmp ...) or single saves "
+                                              "(.mcs .psx .psv ...)")
+    mc.add_argument("--out", help="raw 128 KB card image to write")
+    mc.set_defaults(func=cmd_memcard)
     e = sub.add_parser("extract", help="extract the ISO9660 file system of a .cue/.bin image")
     e.add_argument("cue")
     e.add_argument("--out", default="extracted")

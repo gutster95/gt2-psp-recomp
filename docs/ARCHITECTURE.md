@@ -163,6 +163,11 @@ does not know.
 * Memory card fast path: GT2's card task (0x8007EACC, once per vblank, one sector per call) runs again right after
   each card read result is delivered (bios.c), so a save loads in ~0.1 s instead of 4.2 s. Writes stay at one
   sector per frame until saving is verified (`card_fast=2` enables it).
+* Save import (2026-11-28): other saves come in only as a whole raw card image `IMPORT.MCD` next to the EBOOT
+  (card.c backs the card in use up to BACKUP.MCD, renames the file to IMPORT.MCD.done). Format conversion lives on
+  the PC (`gt2psp/memcard.py`, converter section 5), not in the runtime. The converter writes the file straight
+  into the PSP folder (or output/SAVE/), never into output/PSP/GAME - an install would copy it again and
+  re-import an old save over newer progress. No cross-region conversion: the game looks for its own file name.
 
 ## Performance design
 

@@ -45,6 +45,7 @@ converter turns your discs into a PSP folder on your own computer.
    save data and settings stay.
 5. Click **Start conversion**. Without a PSP selected, the result is in `output/PSP/GAME` (e.g. `GT2PSP`): copy it
    to your memory stick under `PSP/GAME`, or press **Install on PSP only** later. Start the game from the XMB.
+6. Optional: bring your save along (see below).
 
 The first run downloads a PSP compiler (about 150 MB, checked against a fixed checksum); the Japanese version
 also downloads a free 1 MB kanji bitmap font (see Features). After that a conversion takes a few minutes per disc.
@@ -54,6 +55,41 @@ The converter recognises a disc by its game code (the executable and GT2.OVL), n
 disc you patched yourself, or another dump of a supported version, works as long as its game code is one the
 converter knows. Builds with other code (USA Simulation Rev 0/1, other mods or versions) need their own conversion
 profile and are rejected with "Unknown game code".
+
+## Bringing your save along
+
+Under **Your save (optional)** the converter takes a GT2 save from an emulator or from a real memory card (via
+DexDrive or similar) and puts it on the PSP:
+
+- whole memory cards: `.mcr`, `.mcd`, `.mc`, `.srm` (RetroArch, DuckStation, ePSXe, PCSX, ...), DexDrive `.gme`,
+  Connectix `.mem`/`.vgs`, PSP `.vmp`
+- single save files: `.mcs`/`.ps1`, Action Replay / Xploder `.psx`/`.mcb`, PS3 `.psv`
+
+The converter shows which GT2 saves are on the card and which PSP folder they fit, and writes the card as
+`IMPORT.MCD` into that folder (without a PSP selected: into `output/SAVE/<folder>`, to copy into `PSP/GAME/<folder>`
+yourself). The next time the game starts it takes the card over. The card it had until then is kept as
+`BACKUP.MCD` in the same folder, the import file is renamed to `IMPORT.MCD.done`. Without the converter:
+`python -m gt2psp memcard <file> --out IMPORT.MCD` (with `src` on `PYTHONPATH`).
+
+A save only works with the version it was made with: a USA save works in the USA versions (GT2 and GT2 Plus USA),
+a European one in the European versions, a Japanese one in the Japanese version.
+
+## Settings menu
+
+Press **L + R + SELECT** at any time - title screen, menus or in a race - to open the settings menu. The game
+pauses while it is open.
+
+| Option              | What it does                                                                     |
+|---------------------|----------------------------------------------------------------------------------|
+| Mirror + smoke      | rear-view mirror and tire smoke (default: on in Quality, off in Performance)    |
+| Opponent car detail | normal or low-detail models for the other cars (default: low in Performance)    |
+| FPS / CPU counter   | frame rate and CPU load on screen                                                |
+| L / R buttons       | PSP L/R act as the PS1's L1/R1 (views) or L2/R2 (shifting)                      |
+| Race buttons        | USA versions only: X gas, square brake, circle handbrake, triangle reverse       |
+
+Up/Down selects, X or Left/Right changes; O, START or L + R + SELECT again closes the menu. Every change takes
+effect at once and is saved to `settings.txt` next to the EBOOT. The picture mode (Quality / Performance) is
+picked in the start menu before the game starts.
 
 ## Features
 
@@ -74,7 +110,8 @@ profile and are rejected with "Unknown game code".
   rate; `reverb=0`/`reverb=1` in settings.txt overrides it).
 - **Analog controls**, L/R shifting, and on the USA versions optional racing buttons (X gas, square brake, circle
   handbrake, triangle reverse). The European and Japanese versions have gas and brake on X and square already.
-- **In-game settings menu** with L + R + SELECT: mirror and tire smoke, opponent detail, FPS counter, button layout.
+- **In-game settings menu** with L + R + SELECT (see [Settings menu](#settings-menu)).
+- **Bring your save along** from an emulator or a real memory card (see [Bringing your save along](#bringing-your-save-along)).
 - **Arcade Mode** including its intro movie (with sound in sync).
 - **Japanese kanji.** The Japanese versions draw some texts with the PS1 BIOS's kanji font, which the PSP does not
   have. The converter fills it in from the free X.Org JIS bitmap font, so those texts look slightly different from

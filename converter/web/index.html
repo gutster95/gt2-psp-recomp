@@ -218,6 +218,26 @@
     <button class="btn small" id="open">Open folder</button>
   </div>
 
+  <div class="sec"><span class="num"><b>5</b></span>Your save (optional)</div>
+  <p class="note">Bring a GT2 save from an emulator or a real memory card: a whole memory card (<code>.mcr</code>,
+    <code>.mcd</code>, <code>.srm</code>, <code>.gme</code>, <code>.vmp</code>, ...) or single save files
+    (<code>.mcs</code>, <code>.psx</code>, <code>.psv</code>, ...). It is put on the PSP as <code>IMPORT.MCD</code> and
+    the game takes it over at its next start. The card it had until then is kept as <code>BACKUP.MCD</code> in the same
+    folder. A save only works with the same version (USA, Europe, Japan) it was made with.</p>
+  <div class="card" id="card-save">
+    <h3>Memory card / save file</h3><div class="tag">Replaces the PSP version's memory card</div>
+    <div class="pathrow">
+      <input type="text" id="path-save" placeholder="Path of the memory card or save file">
+      <button class="btn small" id="pick-save">Choose...</button>
+    </div>
+    <div class="state"><span class="dot"></span><span class="txt">No save chosen</span></div>
+    <div class="row" id="saveRow" style="display:none">
+      <select id="saveFolder"></select>
+      <button class="btn small" id="saveGo">Put on PSP</button>
+    </div>
+    <p class="note" id="saveMsg"></p>
+  </div>
+
   <footer>
     Unofficial fan project, not affiliated with or endorsed by Sony Interactive Entertainment or Polyphony Digital.
     Gran Turismo is a trademark of Sony Interactive Entertainment. You need your own original discs.
@@ -292,6 +312,7 @@ function ready(running) {
   $("go").disabled = running || !chosen.length || !chosen.every(good) || !toolOk;
   const f = folders().length ? folders() : built;
   $("installOnly").disabled = running || !$("psp").value.trim() || !f.length || !f.every((x) => built.includes(x));
+  saveButton();
 }
 
 async function info() {
@@ -390,6 +411,54 @@ $("installOnly").onclick = async () => {
   poll();
 };
 $("open").onclick = () => api("/api/open-output", {});
+
+// optional save import
+let savePaths = [];
+function saveButton() {
+  $("saveGo").textContent = $("psp").value.trim() ? "Put on PSP" : "Save for copying by hand";
+}
+async function setSave(paths) {
+  savePaths = paths.filter((p) => p);
+  $("path-save").value = savePaths.join("; ");
+  const c = $("card-save"), txt = c.querySelector(".txt");
+  c.className = "card"; $("saveRow").style.display = "none"; $("saveMsg").textContent = "";
+  if (!savePaths.length) { txt.textContent = "No save chosen"; return; }
+  c.classList.add("busy"); txt.textContent = "Reading...";
+  const r = await api("/api/save-check", { paths: savePaths });
+  c.className = "card";
+  if (!r.ok) { c.classList.add("bad"); txt.textContent = r.message; return; }
+  const all = r.saves.map((s) => s.name + (s.title ? " (" + s.title + ")" : "")).join(", ");
+  if (!r.folders.length) {
+    c.classList.add("bad");
+    txt.textContent = "No GT2 save found" + (all ? " - the card holds: " + all : " - the card is empty");
+    return;
+  }
+  c.classList.add("ok");
+  txt.textContent = "GT2 save found: " + r.gt2.join(", ") + " (" + r.notes.join("; ") + ")";
+  const sel = $("saveFolder"); sel.innerHTML = "";
+  for (const f of r.folders) {
+    const o = document.createElement("option"); o.value = f.folder; o.textContent = f.title + " - PSP/GAME/" + f.folder;
+    if (built.includes(f.folder)) o.selected = true;
+    sel.appendChild(o);
+  }
+  $("saveRow").style.display = "flex"; saveButton();
+}
+$("pick-save").onclick = async () => {
+  $("pick-save").disabled = true;
+  try { const r = await api("/api/pick", { kind: "save" }); if (r.paths && r.paths.length) await setSave(r.paths); }
+  finally { $("pick-save").disabled = false; }
+};
+$("path-save").onchange = () => setSave($("path-save").value.split(";").map((p) => p.trim().replace(/^"|"$/g, "")));
+$("psp").addEventListener("input", saveButton);
+$("saveGo").onclick = async () => {
+  $("saveGo").disabled = true;
+  try {
+    const r = await api("/api/save-import", { paths: savePaths, folder: $("saveFolder").value, psp: $("psp").value.trim() });
+    $("saveMsg").textContent = !r.ok ? "Not done: " + r.message : r.psp
+      ? "Done: " + r.target + ". Start the game on the PSP - it takes the save over (the old card is kept as BACKUP.MCD)."
+      : "Written to " + r.target + ". Copy it into PSP/GAME/" + $("saveFolder").value + " on your memory stick; the game takes it over at its next start.";
+  } finally { $("saveGo").disabled = false; }
+};
 info().then(() => api("/api/status").then(render));
 </script>
 </body>
