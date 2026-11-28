@@ -531,6 +531,17 @@ DISCS = {d.sha1: d for d in (
          code="9fc6ec55c03004a77b59c88917c058247889694d"),
     Disc("c43b1daf666dfd5ee7a0a9cc5cb0b30ed0d1de41", "eu_arc", "plus_eur",
          "Gran Turismo 2 Plus Beta v6.1 (Europe) Arcade Mode", code="9fc6ec55c03004a77b59c88917c058247889694d"),
+    # GT2 Plus Beta 7, patched onto the original discs: same layout as the known code (derive: identical profiles,
+    # 0 problems - USA Simulation = sim/sim_plus, USA Arcade = arc_plus, Europe = eu_sim/eu_arc); the EXE and
+    # overlays differ in place (a x*1000/1014 scaling nop'ed out, data)
+    Disc("b5728472684ef64131f242ce91bf45abf9d427d0", "sim_plus", "plus_usa",
+         "Gran Turismo 2 Plus Beta 7 (USA) Simulation Mode", code="f2c8eb00ba630b532aa6eaa30fa80eeeac4b3433"),
+    Disc("319fedd941b2e8955ef2fe4b35d816c6798b3206", "arc_plus", "plus_usa",
+         "Gran Turismo 2 Plus Beta 7 (USA) Arcade Mode", code="b366f2c9d58385ffe704a1097e35659ce03f8121"),
+    Disc("b59058dd85d5eda7781dab4b4977397f6ab10a8e", "eu_sim", "plus_eur",
+         "Gran Turismo 2 Plus Beta 7 (Europe) Gran Turismo Mode", code="127ba130916db7fbfcc26ac23d219ef4f56b0ec9"),
+    Disc("260a1f48a43fab43d769c18612b49683c79561ac", "eu_arc", "plus_eur",
+         "Gran Turismo 2 Plus Beta 7 (Europe) Arcade Mode", code="3cc62cd16ed8350845b8d12656d485b50df408da"),
     Disc("1e362a9edc6aea22fc628390fefeefacf793cc4e", "jp_sim", "jpn", "Gran Turismo 2 (Japan) Disc 2 Gran Turismo, Rev 1",
          code="258fe65175cdf6b465c22f3ec70760992bc279a2"),
     Disc("d98c0143c902768eeea85765cefc74063e75c972", "jp_arc", "jpn", "Gran Turismo 2 (Japan) Disc 1 Arcade Mode",

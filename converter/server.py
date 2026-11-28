@@ -167,8 +167,7 @@ def verify(key: str) -> dict:
         else:
             r = {"ok": False, "code": code, "file": src.name,
                  "message": "Unknown game code. Supported: GT2 USA (Simulation Mode Rev 2, Arcade Mode), GT2 Europe "
-                            "and Japan (both discs), GT2 Plus Beta v6.1 (USA; Europe on an original European disc's "
-                            "code) - one .bin per disc."}
+                            "and Japan (both discs), GT2 Plus Beta v6.1 and Beta 7 (USA and Europe) - one .bin per disc."}
     except (ValueError, OSError) as e:
         r = {"ok": False, "file": src.name, "message": str(e)}
     with JOB.lock:

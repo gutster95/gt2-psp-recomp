@@ -1269,3 +1269,16 @@ Fan mod discs (ISO/, zips from the user). Compared EXE + GT2.OVL code word by wo
 * The European and Japanese builds already put gas / brake on X / square; race_buttons (on by default) swapped them
   onto triangle / circle there. game.h GT2_RACE_BUTTONS (recomp.py: 0 for PAL and jp profiles): sio.c never remaps
   and menu.c hides the "Race buttons" item on those builds (also when an old settings.txt says race_buttons=1).
+
+## 2026-11-28 - GT2 Plus Beta 7
+
+* A user reported that Beta 7 (released after v6.1) does not convert. Checked with Beta 7 patched onto the original
+  discs (USA Sim Rev 2, USA Arcade, EU both discs): new code ids for all four -> "Unknown game code".
+* What Beta 7 changes in the code: in place, same layout. The EXE differs in 7 words (a loop at 0x8005F80C, data at
+  0x80091B08), the overlays in a few dozen to ~150 words - mostly a `x * 1000 / 1014` (multiply by 0x2050C9F9,
+  sra 7) nop'ed out at several sites in ovl0/2/4. That scaling is in the USA and EU code, not in the Japanese one.
+* derive: 0 problems and byte-identical profiles to the known ones - USA Simulation = sim / sim_plus, USA Arcade =
+  arc_plus (the v6.1 Plus Arcade code layout, not arc), EU = eu_sim / eu_arc. So only DISCS entries (whole-image
+  SHA-1 + code id, editions plus_usa / plus_eur) were needed; v6.1 and Beta 7 share the Plus folders and saves.
+* Converter steps (identify, recomp, pack, build_psp.py) run for both editions with both discs: EBOOT + GT2SIM.PRX +
+  GT2ARC.PRX built. Not run on the PSP yet.

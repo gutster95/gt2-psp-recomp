@@ -24,6 +24,8 @@ converter turns your discs into a PSP folder on your own computer.
   - GT2 Plus Beta v6.1 (fan mod), Europe Arcade Mode (**SCES-02380**)
   - GT2 Plus Beta v6.1 (fan mod), Europe Gran Turismo Mode (**SCES-12380**) - recognised by its game code
     (the Plus mod keeps the original European program), not tested on a real dump yet
+  - GT2 Plus Beta 7 (fan mod), all four discs (USA and Europe, Simulation / Gran Turismo Mode and Arcade Mode),
+    patched onto the original discs
 
   One disc is enough. With both discs of a version, the PSP shows a small menu where you pick the mode. European
   `.bin.ecm` images are unpacked automatically; the European discs run at 50 Hz like on a PAL PlayStation (races at
